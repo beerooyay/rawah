@@ -5,9 +5,9 @@ import * as THREE from 'three';
 // hide the cracks between neighbours at different steps. Colour comes from a
 // full-resolution colour map sampled per pixel, so near and far chunks match.
 
-const CHUNK = 128;
-const STEPS = [[420, 1], [1000, 2], [2300, 4], [5200, 8], [Infinity, 16]];
-const BUILDS_PER_FRAME = 3;
+const CHUNKS = 16;          // chunks per side
+const STEPS = [[320, 1], [800, 2], [1900, 4], [4200, 8], [Infinity, 16]];
+const BUILD_BUDGET_MS = 5;
 
 export function makeNoiseTexture(size = 256) {
   const data = new Uint8Array(size * size * 4);
@@ -41,8 +41,10 @@ export function makeNoiseTexture(size = 256) {
   return tex;
 }
 
+/** Albedo texture from an image (satellite colour) or raw RGBA bytes. */
 export function colorTexture(data, size) {
-  const tex = new THREE.DataTexture(data, size, size);
+  const tex = data instanceof Uint8Array ? new THREE.DataTexture(data, size, size) : new THREE.Texture(data);
+  tex.flipY = false; // row 0 is north, at uv.y = 0
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -53,25 +55,36 @@ export function colorTexture(data, size) {
 }
 
 /** Lambert terrain that takes its albedo from a world-space colour map plus fine grain. */
-export function terrainMaterial(colorMap, extent, noise) {
+export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
   const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uColorMap = { value: colorMap };
+    shader.uniforms.uCover = { value: coverMap || colorMap };
+    shader.uniforms.uHasCover = { value: coverMap ? 1 : 0 };
     shader.uniforms.uNoise = { value: noise };
     shader.uniforms.uExtent = { value: extent };
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNrm = mat3(modelMatrix) * objectNormal;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\nuniform sampler2D uColorMap;\nuniform sampler2D uNoise;\nuniform float uExtent;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\nuniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;')
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 albedo = texture2D(uColorMap, vWPos.xz / uExtent + 0.5).rgb;
         float camD = length(vWPos - cameraPosition);
         float grain = texture2D(uNoise, vWPos.xz / 31.0).r * 0.55 + texture2D(uNoise, vWPos.xz / 6.7).r * 0.45;
         float fine = texture2D(uNoise, vWPos.xz / 1.3).r;
-        float k = mix(0.42, 0.12, smoothstep(40.0, 900.0, camD));
+        float k = mix(0.3, 0.06, smoothstep(40.0, 700.0, camD));
         albedo *= 1.0 - k * 0.5 + grain * k;
         albedo *= 1.0 + (fine - 0.5) * 0.22 * (1.0 - smoothstep(10.0, 60.0, camD));
+        // from orbit you only see canopy; up close, under the modelled trees, show the floor
+        if (uHasCover > 0.5) {
+          vec4 cov = texture2D(uCover, vWPos.xz / uExtent + 0.5);
+          float nearK = 1.0 - smoothstep(120.0, 420.0, camD);
+          vec3 duff = vec3(0.16, 0.12, 0.075) * (0.75 + grain * 0.5);
+          vec3 ash = mix(vec3(0.2, 0.17, 0.12), vec3(0.15, 0.2, 0.09), fine) * (0.8 + grain * 0.4);
+          albedo = mix(albedo, duff, clamp(cov.r * 1.3, 0.0, 1.0) * nearK * 0.85);
+          albedo = mix(albedo, ash, clamp(cov.g * 1.2, 0.0, 1.0) * nearK * 0.6);
+        }
         // steep faces: granite strata and cracks projected sideways
         vec3 wn = normalize(vWNrm);
         float faceK = smoothstep(0.8, 0.55, wn.y) * (1.0 - smoothstep(150.0, 900.0, camD));
@@ -92,12 +105,22 @@ export function terrainMaterial(colorMap, extent, noise) {
   return mat;
 }
 
+/** Land-cover bytes (RGBA: live, burned, aspen, rock) as a linear texture. */
+export function coverTexture(data, size) {
+  const tex = new THREE.DataTexture(data, size, size);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export class Terrain {
   constructor(world, material) {
     this.world = world;
     this.material = material;
     this.group = new THREE.Group();
-    this.nc = world.N / CHUNK;
+    const CHUNK = this.chunk = world.N / CHUNKS;
+    this.nc = CHUNKS;
     this.chunks = [];
     for (let j = 0; j < this.nc; j++) {
       for (let i = 0; i < this.nc; i++) {
@@ -125,8 +148,9 @@ export class Terrain {
       if (ch.want !== ch.step) queue.push([d, ch]);
     }
     queue.sort((a, b) => a[0] - b[0]);
-    const n = force ? queue.length : Math.min(queue.length, BUILDS_PER_FRAME);
-    for (let k = 0; k < n; k++) this.#build(queue[k][1]);
+    const t0 = performance.now();
+    let n = 0;
+    while (n < queue.length && (force || n === 0 || performance.now() - t0 < BUILD_BUDGET_MS)) this.#build(queue[n++][1]);
     return queue.length - n;
   }
 
@@ -146,6 +170,7 @@ export class Terrain {
 
   #geometry(ci, cj, step) {
     const w = this.world, cell = w.cell, half = w.N / 2;
+    const CHUNK = this.chunk;
     const n = CHUNK / step;           // quads per side
     const m = n + 3;                  // vertices per side incl. skirt ring
     const skirt = 6 + step * 5;

@@ -1,113 +1,292 @@
 #!/usr/bin/env python3
-"""Bake the Rawah world from real elevation data.
+"""Bake the Rawah world from real public data.
 
-Downloads Terrarium elevation tiles (Mapzen terrain tiles on AWS Open Data,
-which for this region come from USGS 3DEP), stitches a 2048x2048 window at
-zoom 14 (~7.25 m per sample) over the Rawah Wilderness crest, and writes:
+Everything is resampled onto one Web Mercator grid (the zoom-14 tile window
+3368..3375 x 6160..6167, ~14.8 km a side over the Rawah crest) at GRID x GRID:
 
-  data/dem.bin     uint16 heights, (metres - H_OFFSET) * H_SCALE, row-major, north row first
-  data/far.bin     uint16 heights for a ~60 km horizon ring at zoom 11, same encoding
-  data/world.json  grid metadata, lakes (water level + row runs), trails, places
+  elevation   USGS 3DEP 1 m lidar (Arapaho-Roosevelt NF 2023, Northwest Colorado
+              2020 and neighbouring projects, prd-tnm on AWS), filled where lidar
+              is missing with Terrarium terrain tiles (Mapzen / AWS Open Data)
+  imagery     Sentinel-2 L2A true colour, 2023-09-28 (sentinel-cogs on AWS),
+              with a partial topographic correction so the game's own sun does
+              the shading
+  land cover  from the same scene: NDVI separates live conifer, aspen, meadow
+              and rock; the burn is the change in NBR since a 2019-09-29
+              pre-fire scene (dNBR), as burn-severity maps are made
+  vectors     trails, roads, lakes, streams, peaks and names from Overture Maps
+              (OpenStreetMap contributors), release OVERTURE_RELEASE
 
-Lakes are found as exactly-flat water surfaces (3DEP is hydro-flattened) and
-get a carved bed so water renders above the terrain. Trails are not taken from
-a map: they are least-cost paths with a grade penalty, which is roughly how
-trail crews lay out switchbacks, so they land in believable places.
+Outputs in data/:
+  dem.bin.gz    uint16 heights, (metres - H_OFFSET) * H_SCALE, row-major, north first
+  far.bin       uint16 heights for a ~60 km horizon ring at zoom 11
+  color.jpg     terrain albedo, COLOR x COLOR
+  far.jpg       horizon albedo
+  cover.bin.gz  COVER x COVER x 4 bytes: live conifer, burned snags, aspen, rock
+  world.json    grid metadata, lakes, streams, trails, places
 
 Usage (from rawah/tools):  python3 bake_world.py
-Needs numpy, pillow and scipy. Downloaded tiles are cached in tools/.cache/.
+Needs numpy pillow scipy pyproj rasterio shapely pyarrow. Downloads cache in .cache/.
 """
-import heapq
+import gzip
 import json
 import math
 import os
 import urllib.request
 
 import numpy as np
+import pyarrow.compute as pc
+import pyarrow.dataset as pds
+import pyarrow.fs as pfs
+import pyarrow.parquet as pq
+import rasterio
+import shapely
 from PIL import Image
+from pyproj import Transformer
+from rasterio.enums import Resampling
+from rasterio.features import rasterize
+from rasterio.transform import Affine
+from rasterio.vrt import WarpedVRT
 from scipy import ndimage
+from shapely import wkb
+from shapely.geometry import LineString, mapping
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, '.cache')
 OUT = os.path.join(HERE, '..', 'data')
-TILE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
+os.makedirs(CACHE, exist_ok=True)
 
-Z, X0, Y0, NT = 14, 3368, 6160, 8          # 8x8 tiles -> 2048 px
-N = NT * 256
-H_OFFSET, H_SCALE = 1000.0, 16.0           # 1/16 m precision, covers 1000..5095 m
+Z, X0, Y0, NT = 14, 3368, 6160, 8
+GRID = 4096                 # ~3.6 m cells
+COLOR = 2048                # imagery texture
+COVER = 1024                # land-cover raster
+H_OFFSET, H_SCALE = 1000.0, 16.0
+FAR_Z, FAR_N = 11, 512
 
-FAR_Z, FAR_N = 11, 512                     # far ring: 512 px crop, resampled from zoom 11
+TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
+LIDAR = 'https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/{p}/TIFF/USGS_1M_13_{t}_{p}.tif'
+LIDAR_PROJECTS = ['CO_ArapahoRooseveltPikeNF_D23', 'CO_CameronPeakWildfire_2021_D21', 'CO_NorthwestCO_2020_D20', 'CO_DRCOG_2020_B20']
+S2 = 'https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/13/T/{tile}/{y}/{m}/S2A_13T{tile}_{date}_0_L2A'
+S2_DATE, S2_PREFIRE = '20230928', '20190929'   # same orbit, a year before the 2020 fire
+S2_TILES = ['DF', 'DE', 'CF', 'CE']
+OVERTURE_RELEASE = '2026-10-21.0'
+
+R_EARTH = 6378137.0
+MERC_WORLD = 2 * math.pi * R_EARTH
+GDAL_ENV = dict(GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', AWS_NO_SIGN_REQUEST='YES', GDAL_HTTP_MAX_RETRY='4',
+                GDAL_HTTP_RETRY_DELAY='2', CPL_VSIL_CURL_ALLOWED_EXTENSIONS='.tif')
 
 
-def tile(z, x, y):
-    os.makedirs(CACHE, exist_ok=True)
-    path = os.path.join(CACHE, f'{z}_{x}_{y}.png')
+def merc_transform(px0, py0, zoom, size_px, out):
+    """Affine for an `out`-wide raster covering `size_px` tile pixels at `zoom` from global px (px0, py0)."""
+    m_per_px = MERC_WORLD / (2 ** zoom * 256)
+    x0 = px0 * m_per_px - MERC_WORLD / 2
+    y0 = MERC_WORLD / 2 - py0 * m_per_px
+    k = m_per_px * size_px / out
+    return Affine(k, 0, x0, 0, -k, y0)
+
+
+def lat_of(py_global, zoom):
+    return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * py_global / (2 ** zoom * 256)))))
+
+
+def lon_of(px_global, zoom):
+    return px_global / (2 ** zoom * 256) * 360 - 180
+
+
+N_PX = NT * 256
+lat_c = lat_of(Y0 * 256 + N_PX / 2, Z)
+CELL = MERC_WORLD / (2 ** Z * 256) * math.cos(math.radians(lat_c)) * N_PX / GRID
+EXTENT = CELL * GRID
+DST = merc_transform(X0 * 256, Y0 * 256, Z, N_PX, GRID)
+print(f'grid {GRID}^2 at {CELL:.3f} m, {EXTENT / 1000:.2f} km')
+
+
+# World coordinates put grid sample (r, c) at x = c * CELL - EXTENT / 2, z = r * CELL - EXTENT / 2,
+# matching the game's terrain vertices. Raster pixel centres sit half a cell in from the edge.
+def to_world_rc(r, c):
+    return c * CELL - EXTENT / 2, r * CELL - EXTENT / 2
+
+
+to_merc = Transformer.from_crs(4326, 3857, always_xy=True)
+
+
+def merc_to_world(mx, my):
+    c, r = (~DST) * (mx, my)
+    return (c - 0.5) * CELL - EXTENT / 2, (r - 0.5) * CELL - EXTENT / 2
+
+
+def lonlat_to_world(lon, lat):
+    return merc_to_world(*to_merc.transform(lon, lat))
+
+
+# ---------------------------------------------------------------- elevation
+def terrarium(z, x, y):
+    path = os.path.join(CACHE, f'terrarium_{z}_{x}_{y}.png')
     if not os.path.exists(path):
-        urllib.request.urlretrieve(TILE_URL.format(z=z, x=x, y=y), path)
+        urllib.request.urlretrieve(TERRARIUM.format(z=z, x=x, y=y), path)
     a = np.asarray(Image.open(path).convert('RGB')).astype(np.float64)
     return a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
 
 
 def mosaic(z, x0, y0, nx, ny):
-    return np.vstack([np.hstack([tile(z, x, y) for x in range(x0, x0 + nx)]) for y in range(y0, y0 + ny)])
+    return np.vstack([np.hstack([terrarium(z, x, y) for x in range(x0, x0 + nx)]) for y in range(y0, y0 + ny)])
 
 
-def lat_of(py_global, z):
-    return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * py_global / (2 ** z * 256)))))
+base = mosaic(Z, X0, Y0, NT, NT).astype(np.float32)
+H = ndimage.zoom(base, GRID / N_PX, order=1).astype(np.float32)
+
+def cached(name, build):
+    path = os.path.join(CACHE, f'{name}.npy')
+    if os.path.exists(path):
+        return np.load(path)
+    a = build()
+    np.save(path, a)
+    return a
 
 
-def lon_of(px_global, z):
-    return px_global / (2 ** z * 256) * 360 - 180
+to_utm = Transformer.from_crs(4326, 26913, always_xy=True)
+lon_w, lon_e = lon_of(X0 * 256, Z), lon_of((X0 + NT) * 256, Z)
+lat_n, lat_s = lat_of(Y0 * 256, Z), lat_of((Y0 + NT) * 256, Z)
+ex = [to_utm.transform(lo, la) for lo in (lon_w, lon_e) for la in (lat_n, lat_s)]
+tiles = [f'x{tx}y{ty}' for tx in range(int(min(e[0] for e in ex) // 1e4), int(max(e[0] for e in ex) // 1e4) + 1)
+         for ty in range(int(min(e[1] for e in ex) // 1e4) + 1, int(max(e[1] for e in ex) // 1e4) + 2)]
 
 
-# ---------------------------------------------------------------- base grid
-H = mosaic(Z, X0, Y0, NT, NT)
-lat_c = lat_of(Y0 * 256 + N / 2, Z)
-CELL = 40075016.686 / (2 ** Z * 256) * math.cos(math.radians(lat_c))
-print(f'grid {N}x{N}, {CELL:.3f} m/cell, {N * CELL / 1000:.2f} km, {H.min():.0f}..{H.max():.0f} m')
+def read_lidar():
+    out = np.full((GRID, GRID), np.nan, np.float32)
+    with rasterio.Env(**GDAL_ENV):
+        for proj in LIDAR_PROJECTS:   # earlier projects win where they overlap
+            for t in tiles:
+                url = '/vsicurl/' + LIDAR.format(p=proj, t=t)
+                try:
+                    src = rasterio.open(url)
+                except rasterio.errors.RasterioIOError:
+                    continue
+                with src, WarpedVRT(src, crs='EPSG:3857', transform=DST, width=GRID, height=GRID,
+                                    resampling=Resampling.bilinear, src_nodata=src.nodata, nodata=np.nan) as vrt:
+                    a = vrt.read(1).astype(np.float32)
+                ok = np.isfinite(a) & (a > 1000) & np.isnan(out)
+                out[ok] = a[ok]
+                print(f'lidar {proj} {t}: +{ok.mean() * 100:.1f}% of grid')
+    return out
 
 
-def to_world(r, c):
-    return (c - N / 2) * CELL, (r - N / 2) * CELL
+lidar = cached(f'lidar_{GRID}_{len(LIDAR_PROJECTS)}', read_lidar)
+have = np.isfinite(lidar)
+print(f'lidar coverage {have.mean() * 100:.1f}%')
+# feather lidar into the terrain-tile fill over ~150 m
+w = np.clip(ndimage.distance_transform_edt(have) / (150 / CELL), 0, 1).astype(np.float32)
+lid = np.where(have, lidar, H)
+H = H + (lid - H) * w
+
+# ---------------------------------------------------------------- vectors (Overture)
+def overture(theme, typ, cols):
+    path = os.path.join(CACHE, f'overture_{OVERTURE_RELEASE}_{theme}_{typ}.parquet')
+    if not os.path.exists(path):
+        s3 = pfs.S3FileSystem(anonymous=True, region='us-west-2')
+        d = pds.dataset(f'overturemaps-us-west-2/release/{OVERTURE_RELEASE}/theme={theme}/type={typ}/',
+                        filesystem=s3, format='parquet')
+        f = ((pc.field('bbox', 'xmax') >= lon_w) & (pc.field('bbox', 'xmin') <= lon_e) &
+             (pc.field('bbox', 'ymax') >= lat_s) & (pc.field('bbox', 'ymin') <= lat_n))
+        pq.write_table(d.to_table(columns=cols, filter=f), path)
+    rows = pq.read_table(path).to_pylist()
+    for r in rows:
+        r['geom'] = wkb.loads(r['geometry'])
+        r['name'] = (r.get('names') or {}).get('primary')
+    return rows
+
+
+segments = overture('transportation', 'segment', ['id', 'names', 'class', 'subtype', 'geometry'])
+water = overture('base', 'water', ['id', 'names', 'class', 'subtype', 'geometry'])
+land = overture('base', 'land', ['id', 'names', 'class', 'subtype', 'geometry', 'elevation'])
+geo_merc = lambda g: shapely.transform(g, lambda xy: np.column_stack(to_merc.transform(xy[:, 0], xy[:, 1])))
+
+
+def world_line(g, step):
+    """Shapely lon/lat line -> list of [x, z] world points resampled every `step` m."""
+    m = geo_merc(g)
+    pts = []
+    n = max(2, int(m.length / (step / CELL * DST.a)) + 1)
+    for i in range(n):
+        p = m.interpolate(i / (n - 1), normalized=True)
+        pts.append(list(merc_to_world(p.x, p.y)))
+    return pts
+
+
+def inside(x, z, m=0):
+    return -EXTENT / 2 + m < x < EXTENT / 2 - m and -EXTENT / 2 + m < z < EXTENT / 2 - m
+
+
+def clip_runs(pts, m=30):
+    """Split a polyline into the runs that stay inside the world."""
+    runs, cur = [], []
+    for p in pts:
+        if inside(p[0], p[1], m):
+            cur.append(p)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return [r for r in runs if len(r) > 3]
+
+
+def sample(A, x, z):
+    scalar = np.ndim(x) == 0
+    c = np.clip((np.atleast_1d(x) + EXTENT / 2) / CELL, 0, GRID - 1.001)
+    r = np.clip((np.atleast_1d(z) + EXTENT / 2) / CELL, 0, GRID - 1.001)
+    v = ndimage.map_coordinates(A, [r, c], order=1)
+    return float(v[0]) if scalar else v
+
+
+def cells_near(pts, radius):
+    """Grid cells within `radius` m of a polyline, with the index of the nearest vertex."""
+    out = {}
+    rc = int(math.ceil(radius / CELL)) + 1
+    for i, (x, z) in enumerate(pts):
+        c0 = int(round((x + EXTENT / 2) / CELL))
+        r0 = int(round((z + EXTENT / 2) / CELL))
+        for r in range(max(0, r0 - rc), min(GRID, r0 + rc + 1)):
+            for c in range(max(0, c0 - rc), min(GRID, c0 + rc + 1)):
+                cx, cz = to_world_rc(r, c)
+                d = math.hypot(cx - x, cz - z)
+                if d <= radius and d < out.get((r, c), (1e9, 0))[0]:
+                    out[(r, c)] = (d, i)
+    return out
 
 
 # ---------------------------------------------------------------- lakes
-eq = np.ones_like(H, bool)
-for dy in (-1, 0, 1):
-    for dx in (-1, 0, 1):
-        eq &= np.roll(np.roll(H, dy, 0), dx, 1) == H
-eq[[0, -1], :] = False
-eq[:, [0, -1]] = False
-lab, k = ndimage.label(eq)
-sizes = ndimage.sum(eq, lab, range(1, k + 1))
-
-NAMED_LAKES = {  # only names we are sure of; the rest stay unnamed for now
-    'Chambers Lake': (40.604, -105.854),
-}
+lake_polys = [w_ for w_ in water if w_['geom'].geom_type in ('Polygon', 'MultiPolygon')
+              and w_['subtype'] in ('lake', 'pond', 'reservoir', 'water')]
+shapes = [(mapping(geo_merc(w_['geom'])), i + 1) for i, w_ in enumerate(lake_polys)]
+poly_id = rasterize(shapes, out_shape=(GRID, GRID), transform=DST, fill=0, dtype='int32', all_touched=False)
 
 lakes = []
-lake_mask = np.zeros_like(H, bool)
-for i, s in enumerate(sizes, 1):
-    if s < 20:
-        continue
+lake_mask = np.zeros((GRID, GRID), bool)
+lab, k = ndimage.label(poly_id > 0)
+for i in range(1, k + 1):
     m = lab == i
-    # grow over the 1-px rim the 3x3 test shaved off
-    m = ndimage.binary_dilation(m) & (np.abs(H - H[m][0]) < 0.01)
-    level = float(H[m][0])
-    rows, cols = np.nonzero(m)
-    r, c = rows.mean(), cols.mean()
-    lat, lon = lat_of(Y0 * 256 + r, Z), lon_of(X0 * 256 + c, Z)
-    # carve a bed: deeper away from shore, capped
+    area = float(m.sum()) * CELL * CELL
+    if area < 400:
+        continue
+    ids = poly_id[m]
+    src = lake_polys[int(np.bincount(ids).argmax()) - 1]
+    core = ndimage.binary_erosion(m, iterations=2)
+    level = float(np.percentile(H[core if core.sum() > 8 else m], 30))
+    # lidar water is flattened: grow the outline over the real flat surface it misses
+    flat = (np.abs(H - level) < 0.08) & ndimage.binary_dilation(m, iterations=6)
+    m = ndimage.binary_propagation(m, mask=m | flat)
+    area = float(m.sum()) * CELL * CELL
     dist = ndimage.distance_transform_edt(m)
-    depth = np.minimum(1.2 + dist * 1.6, 9.0 + math.sqrt(s) * 0.15)
-    H[m] = level - depth[m]
-    ring = ndimage.binary_dilation(m, iterations=1) & ~m
-    H[ring] = np.maximum(H[ring], level + 0.25)
+    depth = np.minimum(0.8 + dist * CELL * 0.22, 3 + math.sqrt(area) * 0.04)
+    H[m] = np.minimum(H[m], level - depth[m])
+    ring = ndimage.binary_dilation(m, iterations=2) & ~m
+    H[ring] = np.maximum(H[ring], level + 0.15)
     lake_mask |= m
-    water = ndimage.binary_dilation(m, iterations=2)
+    sheet = ndimage.binary_dilation(m, iterations=3)
     runs = []
-    for rr in np.unique(np.nonzero(water)[0]):
-        cs = np.nonzero(water[rr])[0]
+    for rr in np.unique(np.nonzero(sheet)[0]):
+        cs = np.nonzero(sheet[rr])[0]
         start = prev = cs[0]
         for cc in cs[1:]:
             if cc != prev + 1:
@@ -115,186 +294,259 @@ for i, s in enumerate(sizes, 1):
                 start = cc
             prev = cc
         runs.append([int(rr), int(start), int(prev)])
-    x, z = to_world(r, c)
-    lakes.append({'level': round(level, 2), 'x': round(x, 1), 'z': round(z, 1),
-                  'area': round(float(m.sum()) * CELL * CELL), 'runs': runs,
-                  'lat': round(lat, 5), 'lon': round(lon, 5)})
+    rows, cols = np.nonzero(m)
+    x, z = to_world_rc(rows.mean(), cols.mean())
+    lakes.append({'name': src['name'], 'kind': src['subtype'], 'level': round(level, 2), 'x': round(x, 1),
+                  'z': round(z, 1), 'area': round(area), 'runs': runs})
 lakes.sort(key=lambda l: -l['area'])
-for nm, (la, lo) in NAMED_LAKES.items():
-    near = min(lakes, key=lambda l: (l['lat'] - la) ** 2 + (l['lon'] - lo) ** 2)
-    if abs(near['lat'] - la) < 0.01 and abs(near['lon'] - lo) < 0.01:
-        near['name'] = nm
-for lake in lakes:
-    lake.setdefault('name', None)
-print(f'{len(lakes)} lakes')
+print(f'{len(lakes)} lakes, {sum(1 for l in lakes if l["name"])} named')
 
-# ---------------------------------------------------------------- trails
-# least-cost routing on a half-res grid with a grade penalty that rewards switchbacks
-S = 2
-Hh = H[::S, ::S]
-M = Hh.shape[0]
-blocked = lake_mask[::S, ::S] | ndimage.binary_erosion(lake_mask, iterations=1)[::S, ::S]
-cs = CELL * S
-NB = [(dr, dc) for dr in range(-2, 3) for dc in range(-2, 3)
-      if (dr, dc) != (0, 0) and math.gcd(abs(dr), abs(dc)) == 1]
+# ---------------------------------------------------------------- streams
+streams = []
+for s in water:
+    if s['subtype'] not in ('stream', 'river') or s['geom'].geom_type not in ('LineString', 'MultiLineString'):
+        continue
+    for g in getattr(s['geom'], 'geoms', [s['geom']]):
+        for run in clip_runs(world_line(g, 3.0), 5):
+            xs, zs = np.array(run).T
+            # snap each vertex to the lowest ground within ~6 m across the line
+            snapped = []
+            for i in range(len(run)):
+                a, b = run[max(0, i - 1)], run[min(len(run) - 1, i + 1)]
+                dx, dz = b[0] - a[0], b[1] - a[1]
+                L = math.hypot(dx, dz) or 1
+                nx, nz = -dz / L, dx / L
+                offs = np.linspace(-6, 6, 13)
+                hs = sample(H, xs[i] + nx * offs, zs[i] + nz * offs)
+                o = offs[int(hs.argmin())]
+                snapped.append([xs[i] + nx * o, zs[i] + nz * o])
+            sm = np.array(snapped)
+            for _ in range(3):  # relax the zig-zag from snapping
+                sm[1:-1] = 0.25 * sm[:-2] + 0.5 * sm[1:-1] + 0.25 * sm[2:]
+            hs = sample(H, sm[:, 0], sm[:, 1])
+            if hs[0] < hs[-1]:
+                sm, hs = sm[::-1], hs[::-1]
+            surf = np.minimum.accumulate(hs)   # water only flows downhill
+            width = 7.0 if s['subtype'] == 'river' else 2.4 if s['name'] else 1.6
+            for (r, c), (d, i) in cells_near(sm.tolist(), width / 2 + CELL).items():
+                H[r, c] = min(H[r, c], surf[i] - 0.35 - 0.4 * (1 - d / (width / 2 + CELL)))
+            streams.append({'name': s['name'], 'width': width,
+                            'pts': [[round(float(x), 1), round(float(z), 1), round(float(y) - 0.12, 2)]
+                                    for (x, z), y in zip(sm, surf)]})
+print(f'{len(streams)} stream runs')
 
+# ---------------------------------------------------------------- trails and roads
+ROAD = {'primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'service'}
+trails = []
+for s in segments:
+    if s['subtype'] != 'road':
+        continue
+    cls = s['class']
+    kind = 'road' if cls in ROAD else 'track' if cls == 'track' and not (s['name'] or '').endswith('Trail') \
+        else 'trail' if cls in ('path', 'footway', 'bridleway', 'track', 'cycleway', 'steps') else None
+    if not kind:
+        continue
+    for g in getattr(s['geom'], 'geoms', [s['geom']]):
+        for run in clip_runs(world_line(g, 3.0 if kind != 'road' else 4.0)):
+            trails.append({'name': s['name'] or ('Forest road' if kind != 'trail' else 'Unnamed trail'),
+                           'kind': kind, 'cls': cls, 'pts': [[round(x, 1), round(z, 1)] for x, z in run]})
 
-def route(sources, target, grade_ref):
-    """A* from any source cell to target. Cost per metre grows with (grade/grade_ref)^2."""
-    tr, tc = target
-    flat_h = Hh.ravel()
-    best = {}
-    prev = {}
-    pq = []
-    for s in sources:
-        best[s] = 0.0
-        heapq.heappush(pq, (math.hypot(s[0] - tr, s[1] - tc) * cs, 0.0, s))
-    while pq:
-        _, g, cur = heapq.heappop(pq)
-        if cur == target:
-            break
-        if g > best.get(cur, 1e18):
+# grade roads and tracks: flatten across and smooth along
+for t in trails:
+    if t['kind'] == 'trail':
+        continue
+    pts = np.array(t['pts'])
+    prof = sample(H, pts[:, 0], pts[:, 1])
+    prof = ndimage.gaussian_filter1d(prof, 6 if t['kind'] == 'road' else 3, mode='nearest')
+    half = 3.4 if t['kind'] == 'road' else 2.0
+    for (r, c), (d, i) in cells_near(pts.tolist(), half + CELL * 1.5).items():
+        wgt = 1.0 if d <= half else 1 - (d - half) / (CELL * 1.5)
+        H[r, c] += (prof[i] - H[r, c]) * wgt
+print(f'{len(trails)} trail/road runs')
+
+# ---------------------------------------------------------------- places
+places = []
+for s in land:
+    if s['class'] == 'peak' and s['name']:
+        x, z = lonlat_to_world(*s['geom'].coords[0])
+        if not inside(x, z, 50):
             continue
-        r, c = cur
-        h0 = flat_h[r * M + c]
-        for dr, dc in NB:
-            nr, nc = r + dr, c + dc
-            if nr < 1 or nc < 1 or nr >= M - 1 or nc >= M - 1 or blocked[nr, nc]:
+        # settle the marker on the true high point within 40 m
+        best = (sample(H, x, z), x, z)
+        for dx in range(-40, 41, 4):
+            for dz in range(-40, 41, 4):
+                hh = float(sample(H, x + dx, z + dz))
+                if hh > best[0] and math.hypot(dx, dz) <= 40:
+                    best = (hh, x + dx, z + dz)
+        places.append({'name': s['name'], 'kind': 'peak', 'x': round(best[1], 1), 'z': round(best[2], 1),
+                       'elev': round(float(best[0]), 1)})
+for l in lakes:
+    if l['name']:
+        places.append({'name': l['name'], 'kind': 'lake', 'x': l['x'], 'z': l['z'], 'elev': l['level']})
+
+# trailheads: where a named trail meets a road or a track
+road_pts = np.array([p for t in trails if t['kind'] != 'trail' for p in t['pts']])
+seen = set()
+for t in trails:
+    if t['kind'] != 'trail' or not t['name'].endswith('Trail'):
+        continue
+    for end in (t['pts'][0], t['pts'][-1]):
+        d = np.hypot(road_pts[:, 0] - end[0], road_pts[:, 1] - end[1])
+        if d.min() < 25 and t['name'] not in seen:
+            seen.add(t['name'])
+            places.append({'name': f"{t['name'].replace(' Trail', '')} Trailhead", 'kind': 'trailhead',
+                           'x': round(end[0], 1), 'z': round(end[1], 1), 'trail': t['name']})
+print('places:', ', '.join(p['name'] for p in places if p['kind'] != 'lake'))
+
+# ---------------------------------------------------------------- imagery + land cover
+def s2_url(tile, date=S2_DATE):
+    return S2.format(tile=tile, y=date[:4], m=int(date[4:6]), date=date)
+
+
+def s2_band(band, transform, size, resampling=Resampling.bilinear, date=S2_DATE, tiles=S2_TILES):
+    key = f's2_{date}_{band}_{size}_{int(transform.c)}_{int(transform.f)}'
+    return cached(key, lambda: _s2_band(band, transform, size, resampling, date, tiles))
+
+
+def _s2_band(band, transform, size, resampling, date, tiles):
+    out = np.zeros((size, size), np.float32)
+    with rasterio.Env(**GDAL_ENV):
+        for tile in tiles:
+            try:
+                src = rasterio.open(f'/vsicurl/{s2_url(tile, date)}/{band}.tif')
+            except rasterio.errors.RasterioIOError:
                 continue
-            d = math.hypot(dr, dc) * cs
-            grade = abs(flat_h[nr * M + nc] - h0) / d
-            ng = g + d * (1 + (grade / grade_ref) ** 2)
-            if ng < best.get((nr, nc), 1e18):
-                best[(nr, nc)] = ng
-                prev[(nr, nc)] = cur
-                heapq.heappush(pq, (ng + math.hypot(nr - tr, nc - tc) * cs, ng, (nr, nc)))
-    path = [target]
-    while path[-1] in prev:
-        path.append(prev[path[-1]])
-    return path[::-1]
+            with src, WarpedVRT(src, crs='EPSG:3857', transform=transform, width=size, height=size,
+                                resampling=resampling, src_nodata=0, nodata=0) as vrt:
+                a = vrt.read().astype(np.float32)
+            a = a if a.shape[0] > 1 else a[0]
+            if a.ndim == 3:
+                if out.ndim == 2:
+                    out = np.zeros((a.shape[0], size, size), np.float32)
+                fill = (out.sum(0) == 0) & (a.sum(0) > 0)
+                out[:, fill] = a[:, fill]
+            else:
+                fill = (out == 0) & (a > 0)
+                out[fill] = a[fill]
+    return out
 
 
-def shore_cell(lake):
-    """Nearest open half-res cell to a lake's centre."""
-    r0 = int(round(lake['z'] / CELL + N / 2)) // S
-    c0 = int(round(lake['x'] / CELL + N / 2)) // S
-    best, bd = None, 1e18
-    for r in range(max(1, r0 - 40), min(M - 1, r0 + 40)):
-        for c in range(max(1, c0 - 40), min(M - 1, c0 + 40)):
-            if not blocked[r, c]:
-                d = (r - r0) ** 2 + (c - c0) ** 2
-                if d < bd:
-                    best, bd = (r, c), d
-    return best
+def sun_of_scene():
+    meta = json.load(urllib.request.urlopen(f"{s2_url('DF')}/S2A_13TDF_{S2_DATE}_0_L2A.json"))
+    p = meta['properties']
+    return p.get('view:sun_azimuth', 155.0), p.get('view:sun_elevation', 44.0)
 
 
-def smooth(pts, iters=2):
-    for _ in range(iters):
-        out = [pts[0]]
-        for a, b in zip(pts, pts[1:]):
-            out.append((0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]))
-            out.append((0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]))
-        out.append(pts[-1])
-        pts = out
-    return pts
+def topo_correct(rgb, heights, cell, sun_az, sun_el, k=0.5):
+    """Divide out most of the terrain shading baked into the scene."""
+    gy, gx = np.gradient(heights, cell)
+    nx, ny, nz = -gx, np.ones_like(gx), gy  # x east, y up, z north (row index runs south)
+    nl = np.sqrt(nx ** 2 + ny ** 2 + nz ** 2)
+    az, el = math.radians(sun_az), math.radians(sun_el)
+    sx, sy, sz = math.sin(az) * math.cos(el), math.sin(el), math.cos(az) * math.cos(el)
+    cosi = np.clip((nx * sx + ny * sy + nz * sz) / nl, 0.12, 1)
+    f = (math.sin(el) / cosi) ** k
+    return rgb * np.clip(f, 0.75, 1.7)[None]
 
 
-def to_polyline(cells):
-    pts = [to_world(r * S, c * S) for r, c in cells]
-    return [[round(x, 1), round(z, 1)] for x, z in smooth(pts)]
+sun_az, sun_el = sun_of_scene()
+print(f'scene sun azimuth {sun_az:.1f}, elevation {sun_el:.1f}')
+CT = merc_transform(X0 * 256, Y0 * 256, Z, N_PX, COLOR)
+tci = s2_band('TCI', CT, COLOR)
+Hc = ndimage.zoom(H, COLOR / GRID, order=1)
+tci = topo_correct(tci, Hc, EXTENT / COLOR, sun_az, sun_el)
+# grade: lift the dark L2A visual product toward what the eye sees on the ground
+g = np.clip(tci / 255.0, 0, 1)
+g = np.power(g, 0.85) * 1.04
+lum = g.mean(0, keepdims=True)
+g = np.clip(lum + (g - lum) * 1.1, 0, 1)
+# roll off highlights so sunlit tundra and snow keep their texture
+g = np.where(g > 0.7, 0.7 + (g - 0.7) * 0.55, g)
+Image.fromarray((g.transpose(1, 2, 0) * 255).astype(np.uint8)).save(os.path.join(OUT, 'color.jpg'), quality=90)
 
-
-def lake_near(r, c):
-    x, z = to_world(r, c)
-    return min(lakes, key=lambda l: (l['x'] - x) ** 2 + (l['z'] - z) ** 2)
-
-
-trails, places = [], []
-
-# Laramie River Road: valley floor, north edge down to above Chambers Lake
-road = route([(1, 1537 // S)], (1450 // S, 1620 // S), 0.05)
-trails.append({'name': 'Laramie River Road', 'kind': 'road', 'pts': to_polyline(road)})
-road_set = set(road)
-network = set(road)
-
-summit = np.unravel_index(int(H.argmax()), H.shape)
-sx, sz = to_world(*summit)
-places.append({'name': 'Clark Peak', 'kind': 'peak', 'x': round(sx, 1), 'z': round(sz, 1),
-               'elev': round(float(H[summit]), 1)})
-
-targets = []
-for lake in lakes:
-    if lake['name'] == 'Chambers Lake' or lake['area'] < 6000:
-        continue
-    targets.append(('lake', lake))
-# the biggest crest lake first, so the first trailhead is the main way in
-crest = [t for t in targets if t[1]['level'] > 3100]
-first = max(crest, key=lambda t: t[1]['area'])
-targets.remove(first)
-targets.sort(key=lambda t: (t[1]['x'] - first[1]['x']) ** 2 + (t[1]['z'] - first[1]['z']) ** 2)
-targets.insert(0, first)
-targets.append(('peak', places[0]))
-
-trailheads = []
-for kind, obj in targets:
-    if kind == 'lake':
-        tgt = shore_cell(obj)
-        label = obj['name'] or f"Lake {round(obj['level'] * 3.28084):,} ft"
-        grade_ref = 0.13
-    else:
-        tgt = (summit[0] // S, summit[1] // S)
-        label = 'Clark Peak'
-        grade_ref = 0.3   # a scramble route, not a built trail
-    path = route(sorted(network), tgt, grade_ref)
-    if len(path) < 3:
-        continue
-    if path[0] in road_set:
-        x, z = to_world(path[0][0] * S, path[0][1] * S)
-        trailheads.append((x, z))
-    network.update(path)
-    trails.append({'name': label, 'kind': 'route' if kind == 'peak' else 'trail',
-                   'to': label, 'pts': to_polyline(path)})
-    print(f'trail to {label}: {len(path)} cells')
-
-for i, (x, z) in enumerate(trailheads):
-    places.append({'name': 'Rawah Trailhead' if i == 0 else f'Trailhead {i + 1}', 'kind': 'trailhead',
-                   'x': round(x, 1), 'z': round(z, 1)})
-for lake in lakes:
-    places.append({'name': lake['name'] or f"Lake {round(lake['level'] * 3.28084):,} ft", 'kind': 'lake',
-                   'x': lake['x'], 'z': lake['z'], 'elev': lake['level']})
+KT = merc_transform(X0 * 256, Y0 * 256, Z, N_PX, COVER)
+red = s2_band('B04', KT, COVER)
+nir = s2_band('B08', KT, COVER)
+swir = s2_band('B12', KT, COVER)
+grn = s2_band('B03', KT, COVER)
+ndvi = (nir - red) / np.maximum(nir + red, 1)
+nbr = (nir - swir) / np.maximum(nir + swir, 1)
+Hk = ndimage.zoom(H, COVER / GRID, order=1)
+gy, gx = np.gradient(Hk, EXTENT / COVER)
+slope = np.hypot(gx, gy)
+bright = (red + grn) / 2
+treeline = 3440
+low = Hk < treeline + 60
+live = np.clip((ndvi - 0.32) / 0.25, 0, 1) * np.clip((nbr - 0.05) / 0.25, 0, 1) * low
+red0 = s2_band('B04', KT, COVER, date=S2_PREFIRE, tiles=['DF'])
+nir0 = s2_band('B08', KT, COVER, date=S2_PREFIRE, tiles=['DF'])
+swir0 = s2_band('B12', KT, COVER, date=S2_PREFIRE, tiles=['DF'])
+scl0 = s2_band('SCL', KT, COVER, Resampling.nearest, date=S2_PREFIRE, tiles=['DF'])
+clear0 = ~np.isin(scl0, (0, 3, 8, 9, 10))
+ndvi0 = (nir0 - red0) / np.maximum(nir0 + red0, 1)
+nbr0 = (nir0 - swir0) / np.maximum(nir0 + swir0, 1)
+dnbr = np.where(clear0, nbr0 - nbr, 0)
+# was forest before, lost it since: moderate-to-high severity burn
+burned = np.clip((dnbr - 0.12) / 0.25, 0, 1) * np.clip((ndvi0 - 0.3) / 0.2, 0, 1) * (Hk < treeline + 40)
+print(f'dNBR > 0.27 (moderate+ severity) over {(dnbr > 0.27).mean() * 100:.1f}% of the map')
+aspen = (np.clip((red - grn * 0.95) / 250, 0, 1) * np.clip((ndvi - 0.3) / 0.2, 0, 1) * np.clip((nbr - 0.12) / 0.15, 0, 1)
+         * np.clip((bright - 600) / 500, 0, 1) * (Hk < 3150))
+rock = np.clip((0.18 - ndvi) / 0.15, 0, 1) * np.clip((bright - 700) / 900, 0, 1) * (Hk > 3150) * (slope > 0.25)
+lk = ndimage.zoom(lake_mask.astype(np.float32), COVER / GRID, order=0) > 0.5
+for a in (live, burned, aspen, rock):
+    a[lk] = 0
+cover = np.stack([live, burned, aspen, rock], -1)
+cover = (ndimage.uniform_filter(cover, size=(3, 3, 1)) * 255).astype(np.uint8)
+with gzip.open(os.path.join(OUT, 'cover.bin.gz'), 'wb', compresslevel=9) as f:
+    f.write(cover.tobytes())
+print(f'cover: live {live.mean():.2f}, burned {burned.mean():.2f}, aspen {aspen.mean():.3f}, rock {rock.mean():.2f}')
 
 # ---------------------------------------------------------------- far ring
-# zoom-11 mosaic centred on the play window, cropped to FAR_N px (~60 km)
-cx_g = (X0 * 256 + N / 2) / 8   # global px at zoom 11
-cy_g = (Y0 * 256 + N / 2) / 8
+cx_g = (X0 * 256 + N_PX / 2) / 8
+cy_g = (Y0 * 256 + N_PX / 2) / 8
 fx0 = int((cx_g - FAR_N / 2) // 256)
 fy0 = int((cy_g - FAR_N / 2) // 256)
 fn = FAR_N // 256 + 2
 F = mosaic(FAR_Z, fx0, fy0, fn, fn)
 ox, oy = int(round(cx_g - FAR_N / 2 - fx0 * 256)), int(round(cy_g - FAR_N / 2 - fy0 * 256))
 F = F[oy:oy + FAR_N, ox:ox + FAR_N]
-FAR_CELL = CELL * 8
+FAR_CELL = MERC_WORLD / (2 ** FAR_Z * 256) * math.cos(math.radians(lat_c))
+FT = merc_transform(fx0 * 256 + ox, fy0 * 256 + oy, FAR_Z, FAR_N, FAR_N)
+far_rgb = s2_band('TCI', FT, FAR_N)
+far_rgb = topo_correct(far_rgb, F, FAR_CELL, sun_az, sun_el)
+fg = np.power(np.clip(far_rgb / 255.0, 0, 1), 0.85) * 1.04
+fg = np.where(fg > 0.7, 0.7 + (fg - 0.7) * 0.55, fg)
+Image.fromarray((np.clip(fg, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)).save(os.path.join(OUT, 'far.jpg'), quality=88)
 
 # ---------------------------------------------------------------- write
-os.makedirs(OUT, exist_ok=True)
-
-
 def enc(a):
     return np.clip(np.round((a - H_OFFSET) * H_SCALE), 0, 65535).astype('<u2').tobytes()
 
 
-with open(os.path.join(OUT, 'dem.bin'), 'wb') as f:
-    f.write(enc(H))
+# 2-D delta coding (left, then up, wrapping uint16) gzips about three times smaller
+q = np.frombuffer(enc(H), '<u2').reshape(GRID, GRID).astype(np.int64)
+q[:, 1:] = (q[:, 1:] - q[:, :-1]) & 0xFFFF
+q[1:, :] = (q[1:, :] - q[:-1, :]) & 0xFFFF
+with gzip.open(os.path.join(OUT, 'dem.bin.gz'), 'wb', compresslevel=9) as f:
+    f.write(q.astype('<u2').tobytes())
 with open(os.path.join(OUT, 'far.bin'), 'wb') as f:
     f.write(enc(F))
 
 world = {
-    'source': 'Terrarium terrain tiles (Mapzen / AWS Open Data; USGS 3DEP in this region)',
-    'size': N, 'cell': round(CELL, 5), 'hOffset': H_OFFSET, 'hScale': H_SCALE,
-    'nw': {'lat': round(lat_of(Y0 * 256, Z), 6), 'lon': round(lon_of(X0 * 256, Z), 6)},
+    'sources': {
+        'elevation': 'USGS 3DEP 1 m lidar (CO_ArapahoRooseveltPikeNF_D23, CO_CameronPeakWildfire_2021_D21); Terrarium tiles elsewhere',
+        'imagery': 'Copernicus Sentinel-2 L2A, 2023-09-28',
+        'vectors': f'Overture Maps {OVERTURE_RELEASE} (© OpenStreetMap contributors, ODbL)',
+    },
+    'size': GRID, 'cell': round(CELL, 5), 'hOffset': H_OFFSET, 'hScale': H_SCALE, 'demCoding': 'delta2',
+    'color': COLOR, 'cover': COVER, 'lidar': round(float(have.mean()), 3),
+    'nw': {'lat': round(lat_n, 6), 'lon': round(lon_w, 6)},
     'far': {'size': FAR_N, 'cell': round(FAR_CELL, 4)},
-    'lakes': lakes, 'trails': trails, 'places': places,
+    'lakes': lakes, 'streams': streams, 'trails': trails, 'places': places,
 }
 with open(os.path.join(OUT, 'world.json'), 'w') as f:
     json.dump(world, f, separators=(',', ':'))
-print('wrote', OUT)
+for old in ('dem.bin',):
+    if os.path.exists(os.path.join(OUT, old)):
+        os.remove(os.path.join(OUT, old))
+print('wrote', os.path.abspath(OUT))

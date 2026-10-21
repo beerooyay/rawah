@@ -78,33 +78,45 @@ export class Hud {
   }
 
   // ---------------------------------------------------------------- map
-  buildMap(colorData, size) {
-    const w = this.world, M = 1024, k = size / M;
+  buildMap(image) {
+    const w = this.world, M = 2048;
     const cv = document.createElement('canvas');
     cv.width = cv.height = M;
     const g = cv.getContext('2d');
-    const img = g.createImageData(M, M);
+    g.drawImage(image, 0, 0, M, M);
+    // hillshade and 40 m contours over the satellite image
+    const img = g.getImageData(0, 0, M, M);
+    const k = w.N / M;
     for (let r = 0; r < M; r++) {
       for (let c = 0; c < M; c++) {
         const sc = Math.floor(c * k), sr = Math.floor(r * k);
-        const s = (sr * size + sc) * 4;
-        const gx = (w.gridH(sc + 2, sr) - w.gridH(sc - 2, sr)) / (4 * w.cell);
-        const gz = (w.gridH(sc, sr + 2) - w.gridH(sc, sr - 2)) / (4 * w.cell);
-        const shade = clamp(0.78 + (-gx * 0.7 - gz * 0.7) * 0.9, 0.35, 1.25);
+        const d = Math.max(1, Math.round(k));
+        const gx = (w.gridH(sc + d, sr) - w.gridH(sc - d, sr)) / (2 * d * w.cell);
+        const gz = (w.gridH(sc, sr + d) - w.gridH(sc, sr - d)) / (2 * d * w.cell);
+        const shade = clamp(0.9 + (-gx * 0.7 - gz * 0.7) * 0.5, 0.6, 1.2);
         const e = w.gridH(sc, sr);
-        const contour = Math.floor(e / 40) !== Math.floor(w.gridH(sc + Math.ceil(k), sr) / 40) || Math.floor(e / 40) !== Math.floor(w.gridH(sc, sr + Math.ceil(k)) / 40);
+        const contour = Math.floor(e / 40) !== Math.floor(w.gridH(sc + d, sr) / 40) || Math.floor(e / 40) !== Math.floor(w.gridH(sc, sr + d) / 40);
+        const m = shade * (contour ? (Math.floor(e / 40) % 5 === 4 ? 0.62 : 0.8) : 1);
         const i = (r * M + c) * 4;
-        const m = contour ? 0.78 : 1;
-        img.data[i] = clamp(colorData[s] * shade * m, 0, 255);
-        img.data[i + 1] = clamp(colorData[s + 1] * shade * m, 0, 255);
-        img.data[i + 2] = clamp(colorData[s + 2] * shade * m, 0, 255);
-        img.data[i + 3] = 255;
+        img.data[i] = clamp(img.data[i] * m * 1.1, 0, 255);
+        img.data[i + 1] = clamp(img.data[i + 1] * m * 1.1, 0, 255);
+        img.data[i + 2] = clamp(img.data[i + 2] * m * 1.1, 0, 255);
       }
     }
     g.putImageData(img, 0, 0);
     const S = M / w.N;
     g.fillStyle = '#3f6f8f';
     for (const lake of w.lakes) for (const [r, c0, c1] of lake.runs) g.fillRect(c0 * S, r * S, (c1 - c0 + 1) * S, S + 0.5);
+    g.strokeStyle = '#5d95c4';
+    for (const st of w.streams) {
+      g.lineWidth = Math.max(1.2, st.width * S * 0.6);
+      g.beginPath();
+      st.pts.forEach(([x, z], i) => {
+        const px = (x / w.cell + w.N / 2) * S, pz = (z / w.cell + w.N / 2) * S;
+        if (i) g.lineTo(px, pz); else g.moveTo(px, pz);
+      });
+      g.stroke();
+    }
     const line = (t) => {
       g.beginPath();
       t.pts.forEach(([x, z], i) => {
@@ -114,11 +126,11 @@ export class Hud {
       g.stroke();
     };
     g.lineJoin = g.lineCap = 'round';
-    for (const t of w.trails) { g.strokeStyle = 'rgba(20,16,12,0.55)'; g.lineWidth = t.kind === 'road' ? 5 : 4; g.setLineDash([]); line(t); }
+    for (const t of w.trails) { g.strokeStyle = 'rgba(20,16,12,0.6)'; g.lineWidth = t.kind === 'road' ? 8 : 6; g.setLineDash([]); line(t); }
     for (const t of w.trails) {
-      g.strokeStyle = t.kind === 'road' ? '#efe3c6' : t.kind === 'route' ? '#ffd36b' : '#ff7b54';
-      g.lineWidth = t.kind === 'road' ? 3 : 2.2;
-      g.setLineDash(t.kind === 'route' ? [3, 4] : t.kind === 'trail' ? [8, 3] : []);
+      g.strokeStyle = t.kind === 'road' ? '#efe3c6' : t.kind === 'track' ? '#d8b98a' : '#ff7b54';
+      g.lineWidth = t.kind === 'road' ? 5 : 3.5;
+      g.setLineDash(t.kind === 'trail' ? [12, 5] : t.kind === 'track' ? [5, 5] : []);
       line(t);
     }
     g.setLineDash([]);
@@ -138,17 +150,13 @@ export class Hud {
     g.textBaseline = 'middle';
     for (const p of w.places) {
       const [x, y] = P(p.x, p.z);
-      const known = s.discovered.has(p.name) || p.kind === 'trailhead';
-      if (p.kind === 'lake' && !known && !p.name.startsWith('Chambers')) {
-        g.fillStyle = 'rgba(255,255,255,0.75)';
-        g.fillText('?', x - 3, y);
-        continue;
-      }
+      const known = p.kind === 'lake' ? s.discovered.has(p.name) : p.kind === 'peak' ? s.discovered.has(`peak:${p.name}`) : true;
       g.fillStyle = p.kind === 'peak' ? '#fff3c4' : p.kind === 'trailhead' ? '#ffd1a6' : '#e8f2ff';
       if (p.kind === 'peak') { g.beginPath(); g.moveTo(x, y - 6); g.lineTo(x + 5, y + 4); g.lineTo(x - 5, y + 4); g.fill(); }
       else { g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill(); }
       g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 3;
-      const label = p.kind === 'peak' ? `${p.name} ${ft(p.elev)}′` : (known && p.kind === 'lake' ? `✓ ${p.name}` : p.name);
+      if (p.kind === 'lake' && !known) continue; // undiscovered lakes stay unlabelled dots
+      const label = `${known && p.kind !== 'trailhead' ? '✓ ' : ''}${p.name}${p.kind === 'peak' ? ` ${ft(p.elev)}′` : ''}`;
       g.strokeText(label, x + 7, y); g.fillText(label, x + 7, y);
     }
     if (s.tent) {
@@ -163,7 +171,7 @@ export class Hud {
     g.fillStyle = '#ffb15a'; g.strokeStyle = '#000'; g.lineWidth = 2;
     g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.stroke(); g.fill();
     g.restore();
-    $('map-legend').textContent = `${s.lakesFound} / ${s.lakesTotal} lakes · ${s.summited ? 'Clark Peak summited' : 'Clark Peak not yet'} · ${s.km.toFixed(1)} km hiked`;
+    $('map-legend').textContent = `${s.lakesFound} / ${s.lakesTotal} lakes · ${s.peaksFound} / ${s.peaksTotal} summits · ${s.km.toFixed(1)} km hiked`;
   }
 }
 

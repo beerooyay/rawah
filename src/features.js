@@ -102,7 +102,7 @@ function draped(params) {
 export function buildTrails(world) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true });
-  const tones = { road: [0.56, 0.5, 0.42], trail: [0.43, 0.35, 0.26] };
+  const tones = { road: [0.36, 0.33, 0.28], track: [0.27, 0.22, 0.16], trail: [0.22, 0.165, 0.11] };
   for (const t of world.trails) {
     if (!t.width) continue;
     const pts = t.dense, half = t.width / 2;
@@ -156,7 +156,8 @@ function buildCairns(world) {
   const spots = [];
   for (const t of world.trails) {
     if (t.kind === 'road') continue;
-    const every = t.kind === 'route' ? 30 : 70;
+    if (t.kind !== 'trail') continue;
+    const every = 70;
     let acc = 0;
     for (let i = 1; i < t.dense.length; i++) {
       const [x, z] = t.dense[i];
@@ -165,7 +166,7 @@ function buildCairns(world) {
       const e = world.height(x, z);
       if (e < world.treeline(x, z) + 30) continue;
       acc = 0;
-      const off = t.kind === 'route' ? 0 : 1.6;
+      const off = 1.6;
       spots.push([x + off, world.height(x + off, z), z, 1]);
     }
   }
@@ -229,13 +230,7 @@ function sign(lines, width, height, postH, big) {
   return grp;
 }
 
-const fmtDist = (m) => `${(m / 1000).toFixed(1)} km · ${(m / 1609.34).toFixed(1)} mi`;
-
-function trailLength(t) {
-  let len = 0;
-  for (let i = 1; i < t.dense.length; i++) len += Math.hypot(t.dense[i][0] - t.dense[i - 1][0], t.dense[i][1] - t.dense[i - 1][1]);
-  return len;
-}
+const fmtDist = (m) => `${(m / 1609.34).toFixed(1)} mi`;
 
 export function buildSigns(world) {
   const group = new THREE.Group();
@@ -244,36 +239,108 @@ export function buildSigns(world) {
     obj.rotation.y = Math.atan2(faceX, faceZ);
     group.add(obj);
   };
-  // junction signs where each trail leaves the network
-  for (const t of world.trails) {
-    if (t.kind === 'road' || t.dense.length < 4) continue;
-    const [x0, z0] = t.dense[0], [x1, z1] = t.dense[3];
-    const dx = x1 - x0, dz = z1 - z0, l = Math.hypot(dx, dz) || 1;
-    const s = sign([t.to, fmtDist(trailLength(t))], 1.5, 0.5, 1.4);
-    place(s, x0 + (dx / l) * 3 - (dz / l) * 2.2, z0 + (dz / l) * 3 + (dx / l) * 2.2, -dz / l, dx / l);
+  const named = world.trails.filter((t) => t.kind === 'trail' && t.name.endsWith('Trail') && t.dense.length > 6);
+  const network = world.trails.filter((t) => t.name);
+  const touches = (x, z, self) => network.some((o) => o.name !== self.name &&
+    o.dense.some(([ox, oz]) => Math.abs(ox - x) < 12 && Math.abs(oz - z) < 12 && Math.hypot(ox - x, oz - z) < 12));
+  // a post at every junction where a named trail starts or ends on another trail or road
+  const done = [];
+  for (const t of named) {
+    for (const end of [0, t.dense.length - 1]) {
+      const [x0, z0] = t.dense[end];
+      if (done.some(([n, x, z]) => n === t.name && Math.hypot(x - x0, z - z0) < 60)) continue;
+      if (!touches(x0, z0, t)) continue;
+      done.push([t.name, x0, z0]);
+      const [x1, z1] = t.dense[end === 0 ? 4 : t.dense.length - 5];
+      const dx = x1 - x0, dz = z1 - z0, l = Math.hypot(dx, dz) || 1;
+      const s = sign([t.name, fmtDist(world.trailLength.get(t.name) || 0)], 1.6, 0.48, 1.4);
+      place(s, x0 + (dx / l) * 3 - (dz / l) * 1.8, z0 + (dz / l) * 3 + (dx / l) * 1.8, -dz / l, dx / l);
+    }
   }
-  // the main trailhead gets the wilderness boundary sign and your car
-  const th = world.places.find((p) => p.kind === 'trailhead');
+  // the West Branch Trailhead gets the wilderness sign and your car
+  const th = world.places.find((p) => p.kind === 'trailhead' && p.trail === 'West Branch Trail')
+    || world.places.find((p) => p.kind === 'trailhead');
   if (th) {
-    const big = sign(['RAWAH WILDERNESS', 'Roosevelt National Forest', 'Leave No Trace'], 3.2, 1.6, 2.6, true);
-    const road = world.trails.find((t) => t.kind === 'road');
-    let best = 0, bd = Infinity;
-    road.dense.forEach(([x, z], i) => { const d = Math.hypot(x - th.x, z - th.z); if (d < bd) { bd = d; best = i; } });
-    const [ax, az] = road.dense[Math.max(0, best - 2)], [bx, bz] = road.dense[Math.min(road.dense.length - 1, best + 2)];
-    const rx = bx - ax, rz = bz - az, rl = Math.hypot(rx, rz) || 1;
-    // side of the road the trail leaves from
-    const first = world.trails.find((t) => t.kind === 'trail');
-    const side = first ? Math.sign((first.dense[6][0] - th.x) * (-rz / rl) + (first.dense[6][1] - th.z) * (rx / rl)) || 1 : 1;
-    const nx = (-rz / rl) * side, nz = (rx / rl) * side;
-    place(big, th.x + nx * 9 + (rx / rl) * 4, th.z + nz * 9 + (rz / rl) * 4, -nx, -nz);
-    const car = buildCar();
-    const cx = th.x + nx * 5.5 - (rx / rl) * 6, cz = th.z + nz * 5.5 - (rz / rl) * 6;
-    place(car, cx, cz, rx / rl, rz / rl);
-    world.carSpot = { x: cx, z: cz, faceX: -nx, faceZ: -nz };
-    // where you step out: beside the car, on the trail side, by the sign
-    world.startSpot = { x: th.x + nx * 7 + (rx / rl) * 0.5, z: th.z + nz * 7 + (rz / rl) * 0.5 };
+    world.mainTrailhead = th;
+    let road = null, best = 0, bd = Infinity;
+    for (const t of world.trails) {
+      if (t.kind === 'trail') continue;
+      t.dense.forEach(([x, z], i) => { const d = Math.hypot(x - th.x, z - th.z); if (d < bd) { bd = d; best = i; road = t; } });
+    }
+    const trail = named.find((t) => t.name === th.trail);
+    const tp = trail ? trail.dense[Math.min(12, trail.dense.length - 1)] : [th.x + 10, th.z];
+    // park on flat ground beside the road, clear of water, trail and trees
+    let spot = null, score = Infinity;
+    for (let k = Math.max(1, best - 12); k < Math.min(road.dense.length - 1, best + 12); k++) {
+      const [ax, az] = road.dense[k - 1], [bx, bz] = road.dense[k + 1];
+      const rl = Math.hypot(bx - ax, bz - az) || 1, rx = (bx - ax) / rl, rz = (bz - az) / rl;
+      for (const side of [1, -1]) {
+        for (const off of [5.5, 7, 9]) {
+          const [ox, oz] = road.dense[k];
+          const x = ox - rz * off * side, z = oz + rx * off * side;
+          const brook = world.nearestStream(x, z);
+          const near = world.nearestTrail(x, z);
+          if (world.localGrade(x, z) > 0.14 || world.localGrade(x + 2 * rx, z + 2 * rz) > 0.14) continue;
+          if (brook.stream && brook.d < brook.stream.width / 2 + 7) continue;
+          if (world.lakeAt(x, z) || (near.trail && near.d < 3.6)) continue;
+          const sc = Math.hypot(x - th.x, z - th.z);
+          if (sc < score) { score = sc; spot = { x, z, rx, rz, side }; }
+        }
+      }
+    }
+    if (spot) {
+      const car = buildCar();
+      place(car, spot.x, spot.z, spot.rx, spot.rz);
+      world.carSpot = { x: spot.x, z: spot.z };
+      // the sign stands where the trail leaves, you start beside the car facing it
+      const sx = th.x + (tp[0] - th.x) * 0.25, sz = th.z + (tp[1] - th.z) * 0.25;
+      const fx = tp[0] - th.x, fz = tp[1] - th.z, fl = Math.hypot(fx, fz) || 1;
+      const big = sign(['RAWAH WILDERNESS', th.name, 'Roosevelt National Forest'], 3.2, 1.6, 2.6, true);
+      place(big, sx - (fz / fl) * 4, sz + (fx / fl) * 4, -fx / fl, -fz / fl);
+      const ex = spot.x - spot.rz * 2.4 * -spot.side, ez = spot.z + spot.rx * 2.4 * -spot.side;
+      world.startSpot = { x: ex, z: ez, toward: tp };
+    }
   }
   return group;
+}
+
+/** Streams as flowing water ribbons laid on their carved channels. */
+export function buildStreams(world) {
+  const normalMap = waterNormals(128);
+  const mat = new THREE.MeshPhongMaterial({
+    color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
+    transparent: true, opacity: 0.86, depthWrite: false,
+  });
+  const group = new THREE.Group();
+  for (const st of world.streams) {
+    const p = st.pts, half = st.width / 2;
+    const pos = new Float32Array(p.length * 6), uv = new Float32Array(p.length * 4);
+    let along = 0;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[Math.max(0, i - 1)], b = p[Math.min(p.length - 1, i + 1)];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const l = Math.hypot(dx, dz) || 1;
+      dx /= l; dz /= l;
+      if (i) along += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+      for (let s = 0; s < 2; s++) {
+        const sign = s ? 1 : -1, k = (i * 2 + s) * 3;
+        pos[k] = p[i][0] + dz * half * sign; pos[k + 1] = p[i][2]; pos[k + 2] = p[i][1] - dx * half * sign;
+        uv[(i * 2 + s) * 2] = along / 3; uv[(i * 2 + s) * 2 + 1] = s * st.width / 3;
+      }
+    }
+    const idx = [];
+    for (let i = 0; i < p.length - 1; i++) { const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = 1;
+    group.add(mesh);
+  }
+  return { group, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
 }
 
 function buildCar() {

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { World } from './world.js';
-import { Terrain, farTerrain, terrainMaterial, colorTexture, makeNoiseTexture } from './terrain.js';
+import { Terrain, farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture } from './terrain.js';
 import { Flora } from './flora.js';
-import { buildLakes, buildTrails, buildSigns } from './features.js';
+import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
 import { Sky } from './sky.js';
 import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
@@ -10,7 +10,7 @@ import { Hud } from './hud.js';
 import { Audio } from './audio.js';
 import { clamp, smoothstep, valueNoise } from './noise.js';
 
-const SAVE_KEY = 'rawah-save-v1';
+const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
@@ -50,16 +50,12 @@ const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
 setLoad(0.02, 'Downloading the Rawah…');
 const world = await World.load('./data', (f) => setLoad(f * 0.6));
-setLoad(0.62, 'Painting forests, tundra and granite…');
+setLoad(0.7, 'Raising the Medicine Bow crest…');
 await frame();
-const colorData = world.colorMap((c, r) => world.gridH(c, r), world.N, world.cell, -world.half, -world.half);
 const noiseTex = makeNoiseTexture();
-const terrainMat = terrainMaterial(colorTexture(colorData, world.N), world.extent, noiseTex);
+const terrainMat = terrainMaterial(colorTexture(world.colorImage), world.extent, noiseTex, coverTexture(world.coverData, world.coverN));
 const F = world.far;
-const farAt = (c, r) => F.h[clamp(r, 0, F.N - 1) * F.N + clamp(c, 0, F.N - 1)];
-const farColor = world.colorMap(farAt, F.N, F.cell, -F.N * F.cell / 2, -F.N * F.cell / 2);
-const farMat = terrainMaterial(colorTexture(farColor, F.N), F.N * F.cell, noiseTex);
-setLoad(0.75, 'Raising the Medicine Bow crest…');
+const farMat = terrainMaterial(colorTexture(F.image), F.N * F.cell, noiseTex);
 await frame();
 
 const terrain = new Terrain(world, terrainMat);
@@ -70,6 +66,8 @@ const lakes = buildLakes(world);
 scene.add(lakes.group);
 scene.add(buildTrails(world));
 scene.add(buildSigns(world));
+const streams = buildStreams(world);
+scene.add(streams.group);
 const flora = new Flora(world, scene);
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
@@ -77,33 +75,30 @@ const hud = new Hud(world);
 const audio = new Audio();
 setLoad(0.85, 'Drawing the map…');
 await frame();
-hud.buildMap(colorData, world.N);
+hud.buildMap(world.colorImage);
 
 // ------------------------------------------------------------------ state
-const lakeList = world.lakes.filter((l) => l.area > 3000);
-const peak = world.places.find((p) => p.kind === 'peak');
-const trailhead = world.places.find((p) => p.kind === 'trailhead');
+const lakeList = world.lakes.filter((l) => l.name);
+const peaks = world.places.filter((p) => p.kind === 'peak');
+const trailhead = world.mainTrailhead || world.places.find((p) => p.kind === 'trailhead');
 const state = {
   hour: 7.25, day: 1, km: 0,
   discovered: new Set(),
-  summited: false,
   paused: true, started: false,
   sleeping: 0, resting: false,
   rescue: null,
 };
 
 function spawnAtCar() {
-  const { x, z } = world.startSpot || trailhead;
+  const { x, z, toward } = world.startSpot || { ...trailhead, toward: [trailhead.x - 1, trailhead.z] };
   // face up the trail toward the mountains
-  const trail = world.trails.find((q) => q.kind === 'trail');
-  const [tx, tz] = trail ? trail.dense[Math.min(40, trail.dense.length - 1)] : [x - 1, z];
-  hiker.place(x, z, Math.atan2(-(tx - x), -(tz - z)));
+  hiker.place(x, z, Math.atan2(-(toward[0] - x), -(toward[1] - z)));
 }
 
 function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
-    discovered: [...state.discovered], summited: state.summited, camp: camp.save(),
+    discovered: [...state.discovered], camp: camp.save(),
     stamina: hiker.stamina, warmth: hiker.warmth,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
@@ -113,7 +108,7 @@ function restore() {
   const s = loadJSON(SAVE_KEY, null);
   if (!s) return false;
   hiker.place(s.x, s.z, s.yaw);
-  Object.assign(state, { hour: s.hour, day: s.day, km: s.km || 0, summited: !!s.summited });
+  Object.assign(state, { hour: s.hour, day: s.day, km: s.km || 0 });
   state.discovered = new Set(s.discovered || []);
   hiker.stamina = s.stamina ?? 100; hiker.warmth = s.warmth ?? 100;
   camp.load(s.camp);
@@ -164,7 +159,7 @@ function begin(fresh) {
   if (fresh) {
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     camp.strike();
-    Object.assign(state, { hour: 7.25, day: 1, km: 0, summited: false });
+    Object.assign(state, { hour: 7.25, day: 1, km: 0 });
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     spawnAtCar();
@@ -176,7 +171,7 @@ function begin(fresh) {
   audio.setVolume(settings.volume);
   pause(false);
   if (fresh) {
-    const hello = `Rawah Trailhead · ${Math.round(hiker.pos.y * 3.28084).toLocaleString()} ft. The lakes are up the trail to the west.`;
+    const hello = `${trailhead.name} · ${ft(hiker.pos.y)} ft. Twin Crater Lakes are up the West Branch and Rawah trails.`;
     setTimeout(() => hud.toast(hello), 600);
     setTimeout(() => hud.toast('[M] map · [C] camp · [F] fire · [Z] sleep · [E] climb'), 5200);
   }
@@ -209,15 +204,16 @@ function renderJournal() {
   const list = $('journal-list');
   list.innerHTML = '';
   const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
-  $('journal-summary').textContent = `Day ${state.day} · ${found} of ${lakeList.length} lakes · ${state.km.toFixed(1)} km hiked`;
+  const bagged = peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length;
+  $('journal-summary').textContent = `Day ${state.day} · ${found} of ${lakeList.length} lakes · ${bagged} of ${peaks.length} summits · ${state.km.toFixed(1)} km hiked`;
   const add = (text, done) => {
     const li = document.createElement('li');
     li.textContent = text;
     li.className = done ? 'done' : '';
     list.appendChild(li);
   };
-  add(`Summit Clark Peak (${Math.round(peak.elev * 3.28084).toLocaleString()} ft)`, state.summited);
-  [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(state.discovered.has(l.label) ? l.label : 'Undiscovered lake', state.discovered.has(l.label)));
+  [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(`${q.name} · ${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
+  [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(`${l.label} · ${ft(l.level)} ft`, state.discovered.has(l.label)));
 }
 
 // ------------------------------------------------------------------ actions
@@ -309,16 +305,22 @@ function tempC(hour, elev) {
   return valley - ((elev - 2700) / 1000) * 6.5;
 }
 
-function locate(p) {
+function locate(p, cv) {
+  const zone = cv.snag > 0.35 ? 'Cameron Peak Fire burn (2020)' : 'Rawah Wilderness';
   const lake = world.nearWater(p.x, p.z, 40);
-  if (lake) return [`${lake.label}`, 'Lakeshore'];
+  if (lake) return [lake.label, 'Lakeshore'];
   const t = world.nearestTrail(p.x, p.z);
-  if (t.trail && t.d < 8) return [t.trail.kind === 'road' ? 'Laramie River Road' : t.trail.kind === 'route' ? 'Clark Peak route' : `Trail to ${t.trail.to}`, 'Rawah Wilderness'];
+  if (t.trail && t.d < 8) return [t.trail.name, t.trail.kind === 'trail' ? zone : 'Roosevelt National Forest'];
+  const brook = world.nearestStream(p.x, p.z);
+  if (brook.stream && brook.stream.name && brook.d < 15) return [brook.stream.name, zone];
   const { place, d } = world.nearestPlace(p.x, p.z, (q) => q.kind !== 'lake');
-  if (place && d < 500) return [place.kind === 'peak' && d < 60 ? `${place.name} summit` : `Near ${place.name}`, 'Rawah Wilderness'];
+  if (place && d < 500) return [place.kind === 'peak' && d < 60 ? `${place.name} summit` : `Near ${place.name}`, zone];
   const e = p.y, tl = world.treeline(p.x, p.z);
-  return [e > tl + 60 ? 'Alpine tundra' : e > tl - 80 ? 'Treeline' : p.x > 3500 ? 'Laramie River valley' : 'Subalpine forest', 'Rawah Wilderness · off trail'];
+  const where = cv.snag > 0.35 ? 'Burned forest' : e > tl + 60 ? 'Alpine tundra' : e > tl - 80 ? 'Treeline' : cv.aspen > 0.3 ? 'Aspen grove' : cv.forest > 0.3 ? 'Spruce-fir forest' : 'Subalpine meadow';
+  return [where, `${zone} · off trail`];
 }
+
+const ft = (m) => Math.round(m * 3.28084).toLocaleString();
 
 function latLon(p) {
   const nw = world.meta.nw;
@@ -341,13 +343,16 @@ function checkDiscoveries() {
     if (Math.hypot(l.x - p.x, l.z - p.z) < r) {
       state.discovered.add(l.label);
       const n = lakeList.filter((q) => state.discovered.has(q.label)).length;
-      hud.discovery(l.label, `${Math.round(l.level * 3.28084).toLocaleString()} ft · lake ${n} of ${lakeList.length}`);
+      hud.discovery(l.label, `${ft(l.level)} ft · lake ${n} of ${lakeList.length}`);
       save();
     }
   }
-  if (!state.summited && Math.hypot(peak.x - p.x, peak.z - p.z) < 35 && p.y > peak.elev - 12) {
-    state.summited = true;
-    hud.discovery('Clark Peak', `${Math.round(peak.elev * 3.28084).toLocaleString()} ft · the roof of the Rawah`);
+  for (const q of peaks) {
+    const key = `peak:${q.name}`;
+    if (state.discovered.has(key) || Math.hypot(q.x - p.x, q.z - p.z) > 35 || p.y < q.elev - 12) continue;
+    state.discovered.add(key);
+    const n = peaks.filter((o) => state.discovered.has(`peak:${o.name}`)).length;
+    hud.discovery(q.name, `${ft(q.elev)} ft · summit ${n} of ${peaks.length}${q.elev === Math.max(...peaks.map((o) => o.elev)) ? ' · the roof of the Rawah' : ''}`);
     save();
   }
 }
@@ -429,20 +434,27 @@ function tick(dt, draw = true) {
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.update(t);
+  streams.update(t);
 
   // ambience
   const cv = world.cover(p.x, p.z, p.y);
+  const brook = world.nearestStream(p.x, p.z);
+  const creek = brook.stream ? Math.max(0, 1 - brook.d / (22 + brook.stream.width * 3)) * Math.min(1, 0.45 + brook.stream.width / 6) : 0;
+  if (state.started && cv.snag > 0.45 && !state.inBurn) {
+    state.inBurn = true;
+    hud.toast('Burn scar — the Cameron Peak Fire swept through here in 2020.');
+  } else if (cv.snag < 0.1) state.inBurn = false;
   const gust = valueNoise(t * 0.15, 3.7) ** 2;
   const exposure = smoothstep(cv.treeline - 120, cv.treeline + 200, p.y);
   audio.update(dt, {
     exposure, gust, forest: cv.forest, daylight: sky.light,
     dusk: (state.hour > 17.8 && state.hour < 20.5) || (state.hour > 5.8 && state.hour < 7.5),
-    elevation: p.y,
+    elevation: p.y, creek,
     fireDist: camp.fire ? Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) : 999,
   });
 
   if (state.started) {
-    const [place, sub] = locate(p);
+    const [place, sub] = locate(p, cv);
     const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
       hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '']
@@ -457,7 +469,8 @@ function tick(dt, draw = true) {
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
       hint, injured: hiker.injured > 0, status,
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
-      lakesFound: found, lakesTotal: lakeList.length, summited: state.summited, km: state.km,
+      lakesFound: found, lakesTotal: lakeList.length, km: state.km,
+      peaksFound: peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length, peaksTotal: peaks.length,
     });
   }
   if (draw) renderer.render(scene, camera);

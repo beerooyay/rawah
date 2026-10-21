@@ -2,18 +2,20 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 
-// Trees, krummholz, willows and boulders, streamed in square tiles around the
-// hiker. Placement is a jittered grid driven by World.cover(), so the same
-// tree always grows in the same spot. Near tiles get detailed meshes and cast
-// shadows; far tiles get cheap silhouettes; beyond that the colour map's
-// canopy tint carries the forest to the horizon.
+// Trees, burned snags, downed logs, krummholz, willows and boulders, streamed
+// in square tiles around the hiker. Placement is a jittered grid driven by
+// World.cover(), which reads the Sentinel-2 land cover, so live forest, the
+// 2020 burn and the aspen groves grow where they really are. Near tiles get
+// detailed meshes and cast shadows; far tiles get cheap silhouettes; beyond
+// that the satellite colour carries the forest to the horizon.
 
-const TILE = 32;          // cells per tile side (~232 m)
+const TILE_M = 232;       // tile side in metres
 const SPACING = 5.2;      // metres between placement candidates
 const NEAR = 150;         // detailed meshes + shadows
 const THIN = 650;         // beyond this, far tiles draw every other tree
 const RADIUS = 1250;
-const KINDS = ['spruce', 'lodgepole', 'aspen', 'krumm', 'willow', 'boulder'];
+const KINDS = ['spruce', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow', 'boulder', 'log'];
+const NEAR_ONLY = new Set(['boulder', 'log']);
 
 function painted(geo, color) {
   const g = geo.index ? geo.toNonIndexed() : geo;
@@ -66,13 +68,26 @@ function buildGeometries() {
   const krumm = mergeGeometries([blob(1.3, 0.25, 0.45, '#2f4a32', 0, 6), blob(0.8, 0.45, 0.5, '#3b5a3a', 0, 8)]);
   const willow = mergeGeometries([blob(1.1, 0.5, 0.65, '#9c6a32', 0, 9), blob(0.7, 0.8, 0.7, '#b07a3a', 0, 10)]);
   const boulder = blob(1, 0, 0.78, '#8e8882', 1, 11);
+  // fire-killed lodgepole and spruce: charred base, silver-grey spar, a few stubs
+  const stubs = [];
+  for (let i = 0; i < 4; i++) {
+    const b = new THREE.BoxGeometry(0.05, 0.05, 0.6 + hash2(i, 2, 3) * 0.7);
+    b.translate(0, 0, 0.35);
+    b.rotateY(i * 2.4);
+    b.rotateX(-0.25);
+    b.translate(0, 3.6 + i * 1.4, 0);
+    stubs.push(painted(b, '#77716a'));
+  }
+  const snag = mergeGeometries([trunk(0.17, 2.6, '#2b2724', 5), (() => { const g = new THREE.CylinderGeometry(0.03, 0.14, 7.4, 5, 1); g.translate(0, 2.5 + 3.7, 0); return painted(g, '#8a847c'); })(), ...stubs]);
+  const log = (() => { const g = new THREE.CylinderGeometry(0.16, 0.2, 6, 6, 1); g.rotateZ(Math.PI / 2); return painted(g, '#5d5650'); })();
   const far = {
+    snag: trunk(0.16, 9.5, '#6d6760', 3),
     spruce: cone(1.4, 9, 0, dark, 4),
     lodgepole: mergeGeometries([trunk(0.2, 6, '#6b5240', 3), cone(1, 5, 5.5, pine, 4)]),
     aspen: mergeGeometries([trunk(0.15, 5, '#e6e1d3', 3), cone(1.5, 4.6, 3.6, '#e0a62c', 5)]),
     krumm: blob(1.2, 0.3, 0.5, '#2f4a32', 0, 6), willow: blob(1.0, 0.5, 0.65, '#9c6a32', 0, 9), boulder,
   };
-  return { near: { spruce, lodgepole, aspen, krumm, willow, boulder }, far };
+  return { near: { spruce, lodgepole, aspen, snag, krumm, willow, boulder, log }, far };
 }
 
 export class Flora {
@@ -81,7 +96,8 @@ export class Flora {
     this.scene = scene;
     this.geos = buildGeometries();
     this.material = new THREE.MeshLambertMaterial({ vertexColors: true });
-    this.nt = world.N / TILE;
+    this.tile = Math.max(8, Math.round(TILE_M / world.cell));
+    this.nt = Math.ceil(world.N / this.tile);
     this.tiles = new Map();
     this.group = new THREE.Group();
     scene.add(this.group);
@@ -95,11 +111,11 @@ export class Flora {
 
   tileKey(x, z) {
     const w = this.world;
-    return [Math.floor((x + w.half) / (TILE * w.cell)), Math.floor((z + w.half) / (TILE * w.cell))];
+    return [Math.floor((x + w.half) / (this.tile * w.cell)), Math.floor((z + w.half) / (this.tile * w.cell))];
   }
 
   update(pos, budget = 1) {
-    const w = this.world, size = TILE * w.cell;
+    const w = this.world, size = this.tile * w.cell;
     const want = new Set();
     const span = Math.ceil(RADIUS / size) + 1;
     const [ti, tj] = this.tileKey(pos.x, pos.z);
@@ -132,7 +148,7 @@ export class Flora {
   }
 
   #populate(ti, tj) {
-    const w = this.world, size = TILE * w.cell;
+    const w = this.world, size = this.tile * w.cell;
     const x0 = ti * size - w.half, z0 = tj * size - w.half;
     const n = Math.floor(size / SPACING);
     const items = Object.fromEntries(KINDS.map((k) => [k, []]));
@@ -145,24 +161,28 @@ export class Flora {
         const e = w.height(x, z);
         const cv = w.cover(x, z, e);
         let kind = null;
-        if (r1 < cv.forest * 0.62) {
-          if (r1 < cv.aspen * 0.62) kind = 'aspen';
-          else kind = e < 2960 + hash2(gi, gj, 4) * 140 ? 'lodgepole' : 'spruce';
-        } else if (r1 < cv.forest * 0.62 + cv.krumm * 0.3) kind = 'krumm';
-        else if (e < 2770 && cv.meadow > 0.55 && r1 > 0.94 + (1 - cv.patch) * 0.04) kind = 'willow';
-        else if (r1 > 1 - (cv.rock * 0.05 + cv.krumm * 0.01)) kind = 'boulder';
+        const pf = cv.forest * 0.6, pa = cv.aspen * 0.5, ps = cv.snag * 0.42, pk = cv.krumm * 0.3;
+        if (r1 < pa) kind = 'aspen';
+        else if (r1 < pa + pf) kind = e < 2980 + hash2(gi, gj, 4) * 160 ? 'lodgepole' : 'spruce';
+        else if (r1 < pa + pf + ps) kind = 'snag';
+        else if (r1 < pa + pf + ps + pk) kind = 'krumm';
+        else if (r1 > 1 - (cv.snag * 0.1 + cv.forest * 0.025)) kind = 'log';
+        else if (e < 2780 && cv.meadow > 0.6 && cv.grade < 0.08 && r1 > 0.93) kind = 'willow';
+        else if (r1 > 1 - (cv.rock * 0.05 + cv.alpine * 0.004)) kind = 'boulder';
         if (!kind) continue;
         const lake = w.lakeAt(x, z);
         if (lake && e < lake.level + 0.7) continue;
         const near = w.nearestTrail(x, z);
-        if (near.trail && near.d < near.trail.width / 2 + (kind === 'boulder' ? 1.2 : 2.2)) continue;
+        if (near.trail && near.d < near.trail.width / 2 + (kind === 'boulder' || kind === 'log' ? 1.2 : 2.2)) continue;
+        const brook = w.nearestStream(x, z);
+        if (brook.stream && brook.d < brook.stream.width / 2 + 1.5) continue;
         const s = kind === 'boulder' ? 0.5 + Math.pow(hash2(gi, gj, 5), 2.2) * (1.3 + cv.rock * 1.4)
           : kind === 'krumm' || kind === 'willow' ? 0.7 + hash2(gi, gj, 5) * 0.7
           : 0.7 + hash2(gi, gj, 5) * 0.65 - Math.max(0, e - cv.treeline + 120) / 400;
         if (s < 0.35) continue;
         items[kind].push(x, e, z, s, hash2(gi, gj, 6));
         if (kind === 'boulder') solids.push(x, z, s, e + s * 0.55);
-        else if (kind !== 'krumm' && kind !== 'willow') solids.push(x, z, 0.32 * s + 0.12, Infinity);
+        else if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.16 : 0.32) * s + 0.12, Infinity);
       }
     }
     return { ti, tj, items, solids: new Float32Array(solids), meshes: [], lod: null };
@@ -176,7 +196,7 @@ export class Flora {
       const stride = lod === 'thin' ? 2 : 1;
       const count = Math.floor(list.length / 5 / stride);
       if (!count) continue;
-      if (lod !== 'near' && kind === 'boulder') continue;
+      if (lod !== 'near' && NEAR_ONLY.has(kind)) continue;
       const mesh = new THREE.InstancedMesh(this.geos[lod === 'near' ? 'near' : 'far'][kind], this.material, count);
       for (let n = 0; n < count; n++) {
         const k = n * stride;
@@ -185,6 +205,9 @@ export class Flora {
         if (kind === 'boulder') {
           this._p.set(x, e - s * 0.2, z);
           this._s.set(s * (0.9 + r * 0.5), s, s * (1.3 - r * 0.4));
+        } else if (kind === 'log') {
+          this._p.set(x, e + 0.12, z);
+          this._s.set(0.6 + s * 0.6, 1, 1);
         } else {
           this._p.set(x, e - 0.15, z);
           this._s.set(s, s * (kind === 'spruce' ? 0.9 + r * 0.35 : 1), s);
@@ -211,7 +234,7 @@ export class Flora {
   /** Push a circle of radius r out of trunks and boulders; returns ground lift from boulder tops. */
   collide(p, r, feetY) {
     let ground = -Infinity;
-    const w = this.world, size = TILE * w.cell;
+    const w = this.world, size = this.tile * w.cell;
     const fi = (p.x + w.half) / size, fj = (p.z + w.half) / size;
     for (let j = Math.floor(fj - 0.1); j <= Math.floor(fj + 0.1); j++) {
       for (let i = Math.floor(fi - 0.1); i <= Math.floor(fi + 0.1); i++) {

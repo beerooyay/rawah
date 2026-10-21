@@ -1,45 +1,54 @@
 import { fbm, clamp, smoothstep, lerp } from './noise.js';
 
-// The world is a real 2048x2048 elevation grid (~7.25 m cells, ~14.8 km a side)
-// over the Rawah crest, baked by tools/bake_world.py. Metres everywhere:
-// x east, z south, y is true elevation above sea level.
+// The world is real data baked by tools/bake_world.py onto one grid over the
+// Rawah crest: USGS lidar elevation, Sentinel-2 imagery and land cover, and
+// OpenStreetMap trails, streams, lakes and names. Metres everywhere: x east,
+// z south, y true elevation above sea level. Grid sample (r, c) sits at
+// x = (c - N/2) * cell, z = (r - N/2) * cell.
 
-const FIELD = 512; // resolution of the precomputed ecology noise fields
+const FIELD = 512; // resolution of the precomputed noise fields
 
 export class World {
   static async load(base, onProgress = () => {}) {
     const meta = await (await fetch(`${base}/world.json`)).json();
-    const dem = await fetchBytes(`${base}/dem.bin`, (f) => onProgress(f * 0.9));
-    const far = await fetchBytes(`${base}/far.bin`, () => {});
+    const [dem, cover, far, color, farColor] = await Promise.all([
+      fetchBytes(`${base}/dem.bin.gz`, (f) => onProgress(f * 0.85), true),
+      fetchBytes(`${base}/cover.bin.gz`, () => {}, true),
+      fetchBytes(`${base}/far.bin`, () => {}),
+      loadImage(`${base}/color.jpg`),
+      loadImage(`${base}/far.jpg`),
+    ]);
     onProgress(0.95);
-    return new World(meta, decode(dem, meta), decode(far, meta));
+    if (meta.demCoding === 'delta2') undelta(dem, meta.size);
+    return new World(meta, decode(dem, meta), decode(far, meta), cover, color, farColor);
   }
 
-  constructor(meta, heights, farHeights) {
+  constructor(meta, heights, farHeights, cover, colorImage, farImage) {
     this.meta = meta;
     this.N = meta.size;
     this.cell = meta.cell;
     this.extent = this.N * this.cell;
     this.half = this.extent / 2;
     this.h = heights;
-    this.far = { N: meta.far.size, cell: meta.far.cell, h: farHeights };
+    this.far = { N: meta.far.size, cell: meta.far.cell, h: farHeights, image: farImage };
+    this.colorImage = colorImage;
+    this.coverData = cover;
+    this.coverN = meta.cover;
     this.lakes = meta.lakes;
     this.places = meta.places;
     this.trails = meta.trails;
-
-    let lo = Infinity, hi = -Infinity;
-    for (const v of heights) { if (v < lo) lo = v; if (v > hi) hi = v; }
-    this.minH = lo; this.maxH = hi;
+    this.streams = meta.streams;
 
     // lake id + 1 for every cell a lake's water sheet covers
-    this.water = new Uint8Array(this.N * this.N);
+    this.water = new Uint16Array(this.N * this.N);
     this.lakes.forEach((lake, i) => {
-      for (const [r, c0, c1] of lake.runs) this.water.fill(i + 1, r * this.N + c0, r * this.N + c1 + 1);
-      lake.label = lake.name || `Lake ${Math.round(lake.level * 3.28084).toLocaleString()} ft`;
+      const id = i + 1;
+      for (const [r, c0, c1] of lake.runs) this.water.fill(id, r * this.N + c0, r * this.N + c1 + 1);
+      lake.label = lake.name || `Unnamed tarn · ${Math.round(lake.level * 3.28084).toLocaleString()} ft`;
     });
 
     this.#buildFields();
-    this.#buildTrailIndex();
+    this.#buildLineIndex();
   }
 
   // ------------------------------------------------------------ sampling
@@ -60,9 +69,9 @@ export class World {
     return ha + fv * (this.gridH(c, r + 1) - ha) + fu * (hc - this.gridH(c, r + 1));
   }
 
-  /** Smoothed gradient (dh/dx, dh/dz) over one cell either side. */
+  /** Smoothed gradient (dh/dx, dh/dz) over ~2 m either side. */
   gradient(x, z, out = { x: 0, z: 0 }) {
-    const d = this.cell;
+    const d = Math.max(2, this.cell * 0.75);
     out.x = (this.height(x + d, z) - this.height(x - d, z)) / (2 * d);
     out.z = (this.height(x, z + d) - this.height(x, z - d)) / (2 * d);
     return out;
@@ -90,9 +99,9 @@ export class World {
     return id ? this.lakes[id - 1] : null;
   }
 
-  /** Lake whose shore is within `pad` metres of (x, z), if any. */
+  /** Lake whose water is within `pad` metres of (x, z), if any. */
   nearWater(x, z, pad) {
-    const step = this.cell;
+    const step = Math.max(this.cell, pad / 8);
     for (let dz = -pad; dz <= pad; dz += step) {
       for (let dx = -pad; dx <= pad; dx += step) {
         if (dx * dx + dz * dz > pad * pad) continue;
@@ -103,7 +112,7 @@ export class World {
     return null;
   }
 
-  // ------------------------------------------------------------ ecology
+  // ------------------------------------------------------------ land cover
   #buildFields() {
     const make = (scale, oct, seed) => {
       const f = new Float32Array(FIELD * FIELD);
@@ -113,14 +122,11 @@ export class World {
       }
       return f;
     };
-    this.fPatch = make(260, 3, 1);   // forest clearings / meadows
-    this.fFine = make(70, 2, 2);      // rock & lichen mottling
-    this.fLine = make(900, 2, 3);     // treeline wobble
-    this.fAspen = make(180, 3, 4);    // aspen groves
-    this.fSnow = make(90, 3, 5);      // late-season snowfields
+    this.fFine = make(70, 2, 2);
+    this.fLine = make(900, 2, 3);
   }
 
-  /** Bilinear lookup into a noise field; wraps so the far horizon gets texture too. */
+  /** Bilinear lookup into a noise field; wraps. */
   field(f, x, z) {
     const u = (x + this.half) / this.extent * FIELD, v = (z + this.half) / this.extent * FIELD;
     const cu = Math.floor(u), rv = Math.floor(v), fu = u - cu, fv = v - rv;
@@ -130,106 +136,116 @@ export class World {
     return a + (b - a) * fu + (d - a) * fv + (a - b - d + e) * fu * fv;
   }
 
+  /** Satellite land-cover channel (0 live conifer, 1 burned, 2 aspen, 3 rock), bilinear, 0..1. */
+  coverAt(x, z, ch) {
+    const n = this.coverN, d = this.coverData;
+    const u = clamp((x + this.half) / this.extent * n - 0.5, 0, n - 1.001);
+    const v = clamp((z + this.half) / this.extent * n - 0.5, 0, n - 1.001);
+    const c = u | 0, r = v | 0, fu = u - c, fv = v - r;
+    const i = (r * n + c) * 4 + ch;
+    const a = d[i], b = d[i + 4], e = d[i + n * 4], f = d[i + n * 4 + 4];
+    return (a + (b - a) * fu + (e - a) * fv + (a - b - e + f) * fu * fv) / 255;
+  }
+
   treeline(x, z) {
-    return 3425 + (this.field(this.fLine, x, z) - 0.5) * 150;
+    return 3430 + (this.field(this.fLine, x, z) - 0.5) * 140;
   }
 
   /**
-   * Land cover at a point. Returns the shared `cover` scratch object:
-   * forest/krumm/aspen/rock/snow/meadow weights in 0..1 and the treeline.
+   * Land cover at a point, from the Sentinel-2 classification plus terrain.
+   * Returns the shared `cover` scratch object with weights in 0..1.
    */
   cover(x, z, e = this.height(x, z), g = this.gradient(x, z, _g)) {
     const grade = Math.hypot(g.x, g.z);
-    const north = grade > 1e-4 ? g.z / grade : 0; // +1 = slope faces north
     const tl = this.treeline(x, z);
-    const patch = this.field(this.fPatch, x, z);
-    const fine = this.field(this.fFine, x, z);
-
-    const steep = smoothstep(0.7, 1.05, grade);
-    const alpine = smoothstep(tl - 20, tl + 120, e);
-    const valley = smoothstep(2790, 2690, e) * smoothstep(0.13, 0.05, grade);
-
+    const live = this.coverAt(x, z, 0);
+    const burned = this.coverAt(x, z, 1);
+    const aspen = this.coverAt(x, z, 2);
+    const rockSat = this.coverAt(x, z, 3);
+    const nearLine = smoothstep(tl - 110, tl - 10, e);
+    const steep = smoothstep(0.85, 1.2, grade);
     _cover.treeline = tl;
-    _cover.rock = clamp(steep + alpine * smoothstep(0.3, 0.75, grade) * 0.8 + alpine * smoothstep(tl + 250, tl + 450, e) * (0.4 + fine * 0.6), 0, 1);
-    _cover.forest = smoothstep(tl + 40, tl - 90, e) * (1 - steep) * smoothstep(0.24, 0.38, patch) * (1 - valley);
-    _cover.aspen = _cover.forest * smoothstep(3080, 2920, e) * smoothstep(0.63, 0.7, this.field(this.fAspen, x, z)) * (0.6 - north * 0.4);
-    _cover.krumm = smoothstep(tl - 80, tl - 10, e) * smoothstep(tl + 170, tl + 60, e) * (1 - _cover.rock) * smoothstep(0.35, 0.55, patch + 0.1);
-    _cover.meadow = Math.max(valley, (1 - smoothstep(0.24, 0.38, patch)) * (1 - alpine));
-    _cover.snow = e > 3560 && north > 0.35 && grade < 1.0
-      ? smoothstep(0.7, 0.78, this.field(this.fSnow, x, z) + (e - 3560) / 1400 + north * 0.08) : 0;
-    _cover.north = north;
+    _cover.forest = live * (1 - nearLine) * (1 - steep);
+    _cover.krumm = live * nearLine * (1 - steep) + smoothstep(tl - 40, tl + 40, e) * smoothstep(tl + 160, tl + 60, e) * 0.15 * (1 - rockSat);
+    _cover.snag = burned * (1 - steep);
+    _cover.aspen = aspen * (1 - steep);
+    _cover.rock = clamp(Math.max(rockSat, steep, smoothstep(0.6, 0.95, grade) * smoothstep(tl, tl + 200, e)), 0, 1);
+    _cover.meadow = clamp(1 - live - burned - _cover.rock, 0, 1);
+    _cover.alpine = smoothstep(tl - 20, tl + 120, e);
     _cover.grade = grade;
-    _cover.fine = fine;
-    _cover.patch = patch;
+    _cover.fine = this.field(this.fFine, x, z);
     return _cover;
   }
 
-  /** RGBA colour map (sRGB bytes) for any height grid sharing our ecology. */
-  colorMap(sample, size, cellSize, originX, originZ) {
-    const data = new Uint8Array(size * size * 4);
-    const col = [0, 0, 0];
-    const g = { x: 0, z: 0 };
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const x = originX + c * cellSize, z = originZ + r * cellSize;
-        const e = sample(c, r);
-        g.x = (sample(c + 1, r) - sample(c - 1, r)) / (2 * cellSize);
-        g.z = (sample(c, r + 1) - sample(c, r - 1)) / (2 * cellSize);
-        const cv = this.cover(x, z, e, g);
-        // concavity darkening: cheap ambient occlusion from the laplacian
-        const lap = (sample(c + 2, r) + sample(c - 2, r) + sample(c, r + 2) + sample(c, r - 2) - 4 * e) / (4 * cellSize);
-        groundColor(cv, e, col);
-        const ao = clamp(1 + lap * 0.9, 0.78, 1.08);
-        const i = (r * size + c) * 4;
-        data[i] = clamp(col[0] * ao, 0, 255);
-        data[i + 1] = clamp(col[1] * ao, 0, 255);
-        data[i + 2] = clamp(col[2] * ao, 0, 255);
-        data[i + 3] = 255;
-      }
-    }
-    return data;
-  }
-
-  // ------------------------------------------------------------ trails
-  #buildTrailIndex() {
-    this.trailCell = 32;
+  // ------------------------------------------------------------ trails & streams
+  #buildLineIndex() {
+    this.lineCell = 32;
     this.trailGrid = new Map();
+    this.streamGrid = new Map();
     this.segments = [];
+    this.streamSegs = [];
+    const add = (grid, key, id) => { if (!grid.has(key)) grid.set(key, []); grid.get(key).push(id); };
+    const totals = new Map();
     for (const t of this.trails) {
       const pts = resample(t.pts, t.kind === 'road' ? 4 : 2.5);
       t.dense = pts;
-      t.width = t.kind === 'road' ? 4.2 : t.kind === 'trail' ? 1.3 : 0;
+      t.width = t.kind === 'road' ? 5.2 : t.kind === 'track' ? 3 : 1.1;
+      let len = 0;
       for (let i = 0; i < pts.length - 1; i++) {
         const s = { ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1], trail: t };
-        const id = this.segments.push(s) - 1;
-        const k = this.#trailKey((s.ax + s.bx) / 2, (s.az + s.bz) / 2);
-        if (!this.trailGrid.has(k)) this.trailGrid.set(k, []);
-        this.trailGrid.get(k).push(id);
+        len += Math.hypot(s.bx - s.ax, s.bz - s.az);
+        add(this.trailGrid, this.#key((s.ax + s.bx) / 2, (s.az + s.bz) / 2), this.segments.push(s) - 1);
+      }
+      totals.set(t.name, (totals.get(t.name) || 0) + len);
+    }
+    this.trailLength = totals;
+    for (const st of this.streams) {
+      const p = st.pts;
+      for (let i = 0; i < p.length - 1; i++) {
+        const s = { ax: p[i][0], az: p[i][1], ay: p[i][2], bx: p[i + 1][0], bz: p[i + 1][1], by: p[i + 1][2], stream: st };
+        add(this.streamGrid, this.#key((s.ax + s.bx) / 2, (s.az + s.bz) / 2), this.streamSegs.push(s) - 1);
       }
     }
   }
 
-  #trailKey(x, z) {
-    return `${Math.floor(x / this.trailCell)},${Math.floor(z / this.trailCell)}`;
+  #key(x, z) {
+    return `${Math.floor(x / this.lineCell)},${Math.floor(z / this.lineCell)}`;
   }
 
-  /** Distance to the nearest trail or road centreline within ~32 m. */
-  nearestTrail(x, z) {
-    let best = Infinity, trail = null;
-    const cx = Math.floor(x / this.trailCell), cz = Math.floor(z / this.trailCell);
+  #nearest(grid, list, x, z, out) {
+    let best = Infinity, hit = null, t = 0;
+    const cx = Math.floor(x / this.lineCell), cz = Math.floor(z / this.lineCell);
     for (let j = -1; j <= 1; j++) {
       for (let i = -1; i <= 1; i++) {
-        const ids = this.trailGrid.get(`${cx + i},${cz + j}`);
+        const ids = grid.get(`${cx + i},${cz + j}`);
         if (!ids) continue;
         for (const id of ids) {
-          const s = this.segments[id];
-          const d = segDist(x, z, s.ax, s.az, s.bx, s.bz);
-          if (d < best) { best = d; trail = s.trail; }
+          const s = list[id];
+          const dx = s.bx - s.ax, dz = s.bz - s.az;
+          const k = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+          const d = Math.hypot(x - s.ax - dx * k, z - s.az - dz * k);
+          if (d < best) { best = d; hit = s; t = k; }
         }
       }
     }
-    _near.d = best; _near.trail = trail;
+    out.d = best; out.seg = hit; out.t = t;
+    return out;
+  }
+
+  /** Distance to the nearest trail, track or road centreline within ~32 m. */
+  nearestTrail(x, z) {
+    this.#nearest(this.trailGrid, this.segments, x, z, _near);
+    _near.trail = _near.seg ? _near.seg.trail : null;
     return _near;
+  }
+
+  /** Nearest stream within ~32 m: distance, the stream, and its water surface height there. */
+  nearestStream(x, z) {
+    this.#nearest(this.streamGrid, this.streamSegs, x, z, _stream);
+    const s = _stream.seg;
+    _stream.stream = s ? s.stream : null;
+    _stream.y = s ? lerp(s.ay, s.by, _stream.t) : -Infinity;
+    return _stream;
   }
 
   nearestPlace(x, z, filter = () => true) {
@@ -245,38 +261,8 @@ export class World {
 
 const _g = { x: 0, z: 0 };
 const _cover = {};
-const _near = { d: Infinity, trail: null };
-
-// late-September palette: gold aspens, tawny meadows, rust tundra, pink-grey granite
-const C = {
-  meadow: [176, 158, 96], willow: [150, 104, 58], forest: [40, 62, 40], lodgepole: [58, 80, 50],
-  aspen: [218, 166, 52], tundra: [138, 112, 76], tundra2: [112, 96, 70], krumm: [62, 84, 54],
-  rock: [160, 152, 144], rock2: [138, 131, 124], talus: [172, 165, 155], snow: [236, 241, 246],
-};
-
-function mix(out, a, t) {
-  out[0] += (a[0] - out[0]) * t; out[1] += (a[1] - out[1]) * t; out[2] += (a[2] - out[2]) * t;
-}
-
-export function groundColor(cv, e, out) {
-  const tundra = cv.fine > 0.5 ? C.tundra : C.tundra2;
-  out[0] = C.meadow[0]; out[1] = C.meadow[1]; out[2] = C.meadow[2];
-  if (e < 2760) mix(out, C.willow, smoothstep(0.45, 0.75, cv.patch) * 0.6 * cv.meadow);
-  mix(out, tundra, smoothstep(cv.treeline - 150, cv.treeline + 60, e));
-  mix(out, e < 3000 ? C.lodgepole : C.forest, cv.forest * 0.92);
-  mix(out, C.aspen, cv.aspen * 0.95);
-  mix(out, C.krumm, cv.krumm * 0.55);
-  const rockTone = cv.fine > 0.55 ? C.rock2 : e > cv.treeline + 200 ? C.talus : C.rock;
-  mix(out, rockTone, cv.rock);
-  mix(out, C.snow, cv.snow);
-  return out;
-}
-
-function segDist(px, pz, ax, az, bx, bz) {
-  const dx = bx - ax, dz = bz - az;
-  const t = clamp(((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-  return Math.hypot(px - ax - dx * t, pz - az - dz * t);
-}
+const _near = { d: Infinity, seg: null, trail: null, t: 0 };
+const _stream = { d: Infinity, seg: null, stream: null, t: 0, y: 0 };
 
 export function resample(pts, step) {
   const out = [pts[0]];
@@ -295,22 +281,38 @@ export function resample(pts, step) {
   return out;
 }
 
-async function fetchBytes(url, onProgress) {
+async function fetchBytes(url, onProgress, gunzip = false) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   const total = Number(res.headers.get('content-length')) || 0;
-  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
-  const out = new Uint8Array(total);
-  const reader = res.body.getReader();
   let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    out.set(value, got);
-    got += value.length;
-    onProgress(got / total);
+  const counted = res.body.pipeThrough(new TransformStream({
+    transform(chunk, ctl) { got += chunk.length; if (total) onProgress(got / total); ctl.enqueue(chunk); },
+  }));
+  const stream = gunzip ? counted.pipeThrough(new DecompressionStream('gzip')) : counted;
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`${url}: failed to load`));
+    img.src = url;
+  });
+}
+
+/** Undo the bake's 2-D delta coding in place (uint16, wrapping): rows first, then columns. */
+function undelta(bytes, n) {
+  const q = new Uint16Array(bytes.buffer, bytes.byteOffset, n * n);
+  for (let r = 1; r < n; r++) {
+    const o = r * n;
+    for (let c = 0; c < n; c++) q[o + c] += q[o - n + c];
   }
-  return out;
+  for (let r = 0; r < n; r++) {
+    const o = r * n;
+    for (let c = 1; c < n; c++) q[o + c] += q[o + c - 1];
+  }
 }
 
 function decode(bytes, meta) {

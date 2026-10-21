@@ -76,7 +76,10 @@ export class Hiker {
 
     const lake = w.lakeAt(p.x, p.z);
     const groundH = w.height(p.x, p.z);
-    const depth = lake ? lake.level - groundH : 0;
+    const brook = w.nearestStream(p.x, p.z);
+    const creekDepth = brook.stream && brook.d < brook.stream.width / 2 + 0.3 ? Math.max(0, brook.y - groundH) : 0;
+    const depth = Math.max(lake ? lake.level - groundH : 0, creekDepth);
+    if (creekDepth > 0.05 && this.grounded) this.wet = Math.max(this.wet, 40);
     if (depth > 1.3) {
       if (this.mode !== 'swim') this.events.push({ type: 'splash', big: true });
       this.mode = 'swim';

@@ -42,6 +42,14 @@ export class Audio {
     this.fireGain = ctx.createGain(); this.fireGain.gain.value = 0;
     fsrc.connect(ff).connect(this.fireGain).connect(this.master);
     fsrc.start();
+    // creek bed: bright noise with a wandering bandpass, like water over cobbles
+    const csrc = ctx.createBufferSource();
+    csrc.buffer = this.white; csrc.loop = true;
+    this.creekFilter = ctx.createBiquadFilter();
+    this.creekFilter.type = 'bandpass'; this.creekFilter.frequency.value = 1800; this.creekFilter.Q.value = 0.9;
+    this.creekGain = ctx.createGain(); this.creekGain.gain.value = 0;
+    csrc.connect(this.creekFilter).connect(this.creekGain).connect(this.master);
+    csrc.start();
     this.nextBird = 4; this.nextElk = 20; this.nextCrackle = 0;
   }
 
@@ -159,6 +167,8 @@ export class Audio {
     const wind = Math.min(1, 0.12 + s.exposure * 0.55 + s.gust * 0.35);
     this.windGain.gain.setTargetAtTime(wind * 0.32, now, 0.6);
     this.windFilter.frequency.setTargetAtTime(260 + wind * 520 + s.gust * 200, now, 0.8);
+    this.creekGain.gain.setTargetAtTime((s.creek || 0) * 0.14, now, 0.4);
+    this.creekFilter.frequency.setTargetAtTime(1500 + Math.sin(now * 2.3) * 400 + Math.sin(now * 5.1) * 250, now, 0.1);
     this.fireGain.gain.setTargetAtTime(s.fireDist < 25 ? 0.05 * (1 - s.fireDist / 25) : 0, now, 0.3);
     if (s.fireDist < 20) {
       this.nextCrackle -= dt;

@@ -1,9 +1,12 @@
 # Rawah
 
 An open-world hiking, camping and climbing game set in the real Rawah Wilderness
-in Colorado's Medicine Bow Mountains. The terrain is a 14.8 × 14.8 km slice of
-the actual crest, built from USGS 3DEP elevation data: the Laramie River valley,
-the cirque lakes, and Clark Peak (12,957 ft in the data).
+in Colorado's Medicine Bow Mountains: a 14.8 × 14.8 km slice of the crest built
+from lidar, satellite imagery and OpenStreetMap. Start at the West Branch
+Trailhead and hike the real West Branch and Rawah trails to Twin Crater Lakes,
+the Rawah Lakes, Island Lake, Camp Lakes and McIntyre Lake. Summit North Rawah,
+South Rawah or Clark Peak, and walk through the 2020 Cameron Peak Fire scar
+along the Laramie River.
 
 No build step and no runtime CDN. It runs on static Three.js (r160, vendored).
 
@@ -38,31 +41,34 @@ What you're up against:
 - **Grip** only matters while climbing. Ledges let you rest. If you run out, you fall.
 - **Falls** over about 6 m hurt your ankle. Over about 17 m you wake up back at camp, or at the car.
 
-To finish the journal, find all 20 lakes and stand on Clark Peak. The game saves to `localStorage` every 10 seconds and every time you sleep.
+To finish the journal, visit every named lake and stand on every named summit. The game saves to `localStorage` every 10 seconds and every time you sleep.
 
 ## How the world is made
 
-`tools/bake_world.py` writes everything in `data/`:
+Everything is real public data, resampled onto one 4096² grid (3.6 m cells) by `tools/bake_world.py`:
 
-- `dem.bin` is a 2048² uint16 heightfield (zoom-14 Terrarium tiles, about 7.25 m per cell). Each value is `(metres - 1000) * 16`.
-- `far.bin` is a 512² zoom-11 heightfield, about 60 km across, used for the horizon ring.
-- `world.json` holds the grid metadata, lakes, trails and places.
+| Layer | Source |
+| --- | --- |
+| Elevation | USGS 3DEP **1 m lidar** (Arapaho-Roosevelt NF 2023, Northwest Colorado 2020 and neighbouring flights), filled with 10 m 3DEP Terrarium tiles where no lidar exists |
+| Ground colour | **Sentinel-2** true colour from **28 Sep 2023**, a cloud-free day at peak aspen. The baked-in terrain shading is mostly divided out so the game's sun does the lighting |
+| Vegetation | Classified from the same scene: NDVI picks out live spruce-fir and lodgepole, the burn ratio (NBR) finds the **2020 Cameron Peak Fire** scar (standing snags and downed logs), the red/green ratio finds gold aspen, and low NDVI on bright ground marks talus |
+| Trails, roads, lakes, streams, peaks, names | **Overture Maps** (OpenStreetMap). This includes the West Branch, Rawah, Twin Crater Lakes, Camp Lake, McIntyre, Link and Blue Lake trails, the Rawah Lakes, Island Lake and Twin Crater Lakes, the West Branch Laramie River, Rawah Creek, and North Rawah, South Rawah and Clark peaks |
 
-**Lakes** are found as exactly-flat water surfaces, because 3DEP is hydro-flattened. Each one gets a carved bed so the water renders.
+The bake also adjusts the terrain to fit the vector data:
 
-**Trails** are least-cost paths with a grade penalty, starting from a road traced along the valley floor. That makes them switchback the way built trails do. They are *not* the surveyed Forest Service trails.
+- **Streams** are snapped to the lowest ground in their lidar channel and forced to flow only downhill. The bed is carved so the water sits inside its banks.
+- **Lakes** take their shoreline from OpenStreetMap and grow over the lidar's flattened water surface.
+- **Roads** are graded flat across and smoothed along their length.
 
-**Names** are only given where we're sure of them: Clark Peak and Chambers Lake. Every other lake is labelled by its elevation for now. Add real names to `NAMED_LAKES` in the bake script, then re-bake.
+Outputs in `data/`: `dem.bin.gz`, `cover.bin.gz`, `color.jpg`, `far.bin`, `far.jpg` and `world.json`. Heights are uint16 `(m - 1000) * 16`. The browser streams the gzip files through `DecompressionStream`.
 
 To regenerate:
 
 ```bash
 cd rawah/tools
-pip install numpy pillow scipy
-python3 bake_world.py         # downloads tiles into tools/.cache/, about a minute
+pip install numpy pillow scipy pyproj rasterio shapely pyarrow
+python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 ```
-
-At runtime, ground cover comes from `World.cover()` and depends on elevation, slope, aspect and noise. That covers the spruce-fir forest, lodgepole lower down, gold aspen groves (it's late September in-game), krummholz at treeline, tundra, granite, willows in the valley and late-season snowfields. The same function drives both the per-pixel colour map and where trees grow.
 
 ## Code map
 
@@ -81,4 +87,7 @@ At runtime, ground cover comes from `World.cover()` and depends on elevation, sl
 
 ## Credits
 
-Terrain comes from the [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) dataset (Mapzen / AWS Open Data). In the US those tiles come from USGS 3DEP. Three.js is MIT-licensed; see `vendor/three/LICENSE`.
+- **Elevation:** USGS 3D Elevation Program (public domain), plus [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen / AWS Open Data).
+- **Imagery:** contains modified Copernicus Sentinel data (2023).
+- **Trails, roads, water and names:** © OpenStreetMap contributors, distributed via Overture Maps under the ODbL.
+- **Three.js:** MIT; see `vendor/three/LICENSE`.
