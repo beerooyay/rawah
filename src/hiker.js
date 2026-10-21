@@ -24,7 +24,7 @@ export class Hiker {
     this.stamina = 100; this.grip = 100; this.warmth = 100;
     this.wet = 0; this.injured = 0;
     this.airTop = 0; this.slideDrop = 0;
-    this.stride = 0; this.bob = 0; this.moving = 0;
+    this.phase = 0; this.moving = 0;  // phase advances PI per footstep
     this.hint = '';
     this.events = [];
     this.wallUp = new THREE.Vector2(0, -1);
@@ -43,9 +43,7 @@ export class Hiker {
     if (this.mode === 'climb') {
       return out.set(this.pos.x - this.wallUp.x * 0.55, this.pos.y + 1.45, this.pos.z - this.wallUp.y * 0.55);
     }
-    const bob = this.grounded && this.mode === 'walk' ? Math.sin(this.bob) * 0.035 * this.moving : 0;
-    const eyeH = this.mode === 'swim' ? 1.68 : EYE;
-    return out.set(this.pos.x, this.pos.y + eyeH + bob, this.pos.z);
+    return out.set(this.pos.x, this.pos.y + (this.mode === 'swim' ? 1.68 : EYE), this.pos.z);
   }
 
   ground(x, z) {
@@ -69,8 +67,10 @@ export class Hiker {
   #walk(dt, inp) {
     const w = this.world, p = this.pos;
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
-    let wx = fx * inp.move.y + -fz * inp.move.x;
-    let wz = fz * inp.move.y + fx * inp.move.x;
+    // bodies walk backwards and sideways slower than forwards
+    const my = inp.move.y < 0 ? inp.move.y * 0.6 : inp.move.y, mx = inp.move.x * 0.85;
+    let wx = fx * my + -fz * mx;
+    let wz = fz * my + fx * mx;
     const wl = Math.hypot(wx, wz);
     if (wl > 1) { wx /= wl; wz /= wl; }
 
@@ -87,7 +87,7 @@ export class Hiker {
 
     const winded = this.stamina < 2;
     const sprinting = inp.sprint && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
-    let speed = this.mode === 'swim' ? 1.35 : sprinting ? 6.3 : winded ? 2.3 : 3.5;
+    let speed = this.mode === 'swim' ? 1.2 : sprinting ? 4.5 : winded ? 1.8 : 2.5;
     if (this.injured > 0) speed *= 0.55;
     if (depth > 0.15 && this.mode === 'walk') speed *= 0.6;
 
@@ -173,7 +173,7 @@ export class Hiker {
 
     if (inp.grab) this.#tryGrab();
     const surface = depthSurface(depth) || surfaceAt(w, p, this.grounded);
-    this.#strideStep(dt, surface, sprinting ? 2.1 : 1.45);
+    this.#strideStep(dt, surface, sprinting ? 1.75 : 1.4);
   }
 
   #landed(fall) {
@@ -182,19 +182,18 @@ export class Hiker {
       this.injured = 30 + fall * 2;
       this.stamina = Math.max(0, this.stamina - fall * 3);
       this.events.push({ type: 'fall', severe: false, why: 'Hard landing — you tweaked an ankle.' });
-    } else if (fall > 1.2) this.events.push({ type: 'land', hard: fall > 3 });
+    } else if (fall > 0.35) this.events.push({ type: 'land', hard: fall > 3, fall });
   }
 
+  /** Advance the stride phase; a footstep lands each time it crosses a multiple of PI. */
   #strideStep(dt, surface, stride) {
     const v = Math.hypot(this.vel.x, this.vel.z);
     this.moving += ((v > 0.4 ? 1 : 0) - this.moving) * Math.min(1, dt * 8);
     if (!this.grounded) return;
-    this.bob += v * dt * (Math.PI / stride);
-    this.stride += v * dt;
-    if (this.stride > stride) {
-      this.stride = 0;
-      this.events.push({ type: 'step', surface, speed: v });
-    }
+    const before = Math.floor(this.phase / Math.PI);
+    // at rest, settle onto the next footfall instead of freezing mid-stride
+    this.phase += v > 0.15 ? v * dt * (Math.PI / stride) : Math.min(0.6 * dt, Math.PI - (this.phase % Math.PI)) * (this.phase % Math.PI > 0.01 ? 1 : 0);
+    if (Math.floor(this.phase / Math.PI) !== before && v > 0.25) this.events.push({ type: 'step', surface, speed: v });
   }
 
   #tryGrab() {
@@ -246,6 +245,7 @@ export class Hiker {
     this.stamina = Math.max(0, this.stamina - (moving ? 2.5 : 0.5) * dt);
     this.hint = ledge ? 'Good ledge — catch your breath' : '[W/S] climb · [A/D] traverse · [Space] lunge · [E] let go';
     this.climbStride = (this.climbStride || 0) + (moving ? ds : 0);
+    if (moving) this.phase += ds * 2.2;
     if (this.climbStride > 0.7) { this.climbStride = 0; this.events.push({ type: 'step', surface: 'rock', speed: 1 }); }
 
     if (steep < TOP_OUT) {
@@ -269,7 +269,7 @@ export class Hiker {
     const working = this.moving > 0.5;
     const thin = 1 - smoothstep(3000, 3950, this.pos.y) * 0.4; // thinner air, slower recovery
     if (this.mode === 'walk' && this.grounded) {
-      const sprint = working && Math.hypot(this.vel.x, this.vel.z) > 4.8;
+      const sprint = working && Math.hypot(this.vel.x, this.vel.z) > 3.6;
       const climbGrade = Math.max(0, this.lastGrade || 0);
       if (sprint) this.stamina -= (13 + climbGrade * 14) * dt;
       else if (working) this.stamina += (7 - climbGrade * 22) * thin * dt;

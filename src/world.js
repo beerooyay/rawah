@@ -1,4 +1,5 @@
 import { fbm, clamp, smoothstep, lerp } from './noise.js';
+import { relief, reliefAmp } from './detail.js';
 
 // The world is real data baked by tools/bake_world.py onto one grid over the
 // Rawah crest: USGS lidar elevation, Sentinel-2 imagery and land cover, and
@@ -20,7 +21,8 @@ export class World {
     ]);
     onProgress(0.95);
     if (meta.demCoding === 'delta2') undelta(dem, meta.size);
-    return new World(meta, decode(dem, meta), decode(far, meta), cover, color, farColor);
+    const raw = new Uint16Array(dem.buffer, dem.byteOffset, meta.size * meta.size);
+    return new World(meta, raw, decode(far, meta), cover, color, farColor);
   }
 
   constructor(meta, heights, farHeights, cover, colorImage, farImage) {
@@ -29,7 +31,9 @@ export class World {
     this.cell = meta.cell;
     this.extent = this.N * this.cell;
     this.half = this.extent / 2;
-    this.h = heights;
+    this.h = heights;              // raw uint16: (m - hOffset) * hScale
+    this.hScale = 1 / meta.hScale;
+    this.hOffset = meta.hOffset;
     this.far = { N: meta.far.size, cell: meta.far.cell, h: farHeights, image: farImage };
     this.colorImage = colorImage;
     this.coverData = cover;
@@ -49,6 +53,7 @@ export class World {
 
     this.#buildFields();
     this.#buildLineIndex();
+    this.#buildMask();
   }
 
   // ------------------------------------------------------------ sampling
@@ -56,11 +61,18 @@ export class World {
     const N = this.N;
     c = c < 0 ? 0 : c >= N ? N - 1 : c;
     r = r < 0 ? 0 : r >= N ? N - 1 : r;
-    return this.h[r * N + c];
+    return this.h[r * N + c] * this.hScale + this.hOffset;
   }
 
-  /** Terrain height matching the full-resolution mesh triangulation exactly. */
+  /** Ground height: lidar plus fractal micro-relief, exactly as the terrain shader draws it. */
   height(x, z) {
+    const base = this.baseHeight(x, z);
+    const rock = this.coverAt(x, z, 3);
+    return base + relief(x, z, reliefAmp(rock, this.maskAt(x, z)), rock);
+  }
+
+  /** Lidar height alone, matching the grid triangulation (quad split along the c,r to c+1,r+1 diagonal). */
+  baseHeight(x, z) {
     const u = x / this.cell + this.N / 2, v = z / this.cell + this.N / 2;
     const c = Math.floor(u), r = Math.floor(v);
     const fu = u - c, fv = v - r;
@@ -110,6 +122,43 @@ export class World {
       }
     }
     return null;
+  }
+
+  // ------------------------------------------------------------ smoothing mask
+  /** 0..255 per grid sample: where micro-relief is suppressed (trails, roads, water). */
+  #buildMask() {
+    const N = this.N, cell = this.cell, m = this.mask = new Uint8Array(N * N);
+    const stamp = (x, z, inner, outer) => {
+      const u = x / cell + N / 2, v = z / cell + N / 2;
+      const R = Math.ceil(outer / cell);
+      for (let r = Math.floor(v) - R; r <= Math.ceil(v) + R; r++) {
+        if (r < 0 || r >= N) continue;
+        for (let c = Math.floor(u) - R; c <= Math.ceil(u) + R; c++) {
+          if (c < 0 || c >= N) continue;
+          const d = Math.hypot(c - u, r - v) * cell;
+          if (d > outer) continue;
+          const k = d <= inner ? 255 : Math.round(255 * (1 - (d - inner) / (outer - inner)));
+          if (k > m[r * N + c]) m[r * N + c] = k;
+        }
+      }
+    };
+    for (const t of this.trails) for (const [x, z] of t.dense) stamp(x, z, t.width / 2 + 0.8, t.width / 2 + 4);
+    for (const st of this.streams) for (const [x, z] of st.pts) stamp(x, z, st.width / 2 + 1, st.width / 2 + 5);
+    for (const lake of this.lakes) {
+      for (const [r, c0, c1] of lake.runs) {
+        for (let c = c0; c <= c1; c += 2) stamp((c - N / 2) * cell, (r - N / 2) * cell, 2, 9);
+        stamp((c1 - N / 2) * cell, (r - N / 2) * cell, 2, 9);
+      }
+    }
+  }
+
+  /** Smoothing mask 0..1, bilinear on grid samples. */
+  maskAt(x, z) {
+    const N = this.N, m = this.mask;
+    const u = clamp(x / this.cell + N / 2, 0, N - 1.001), v = clamp(z / this.cell + N / 2, 0, N - 1.001);
+    const c = u | 0, r = v | 0, fu = u - c, fv = v - r, i = r * N + c;
+    const a = m[i], b = m[i + 1], d = m[i + N], e = m[i + N + 1];
+    return (a + (b - a) * fu + (d - a) * fv + (a - b - d + e) * fu * fv) / 255;
   }
 
   // ------------------------------------------------------------ land cover

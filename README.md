@@ -23,16 +23,19 @@ Any static server works. ES modules need HTTP, not `file://`.
 
 | Key | Action |
 | --- | --- |
-| W A S D | Walk. Uphill is slower; you can't walk up past about 46° |
-| Shift | Hike fast (uses stamina) |
+| W A S D | Walk at about 2.5 m/s. Uphill, backwards and sideways are slower, and you can't walk up past about 46° |
+| Shift | Hike fast at about 4.5 m/s (uses stamina) |
 | Space | Hop. While climbing, lunge up (uses grip) |
 | E | Grab a rock face too steep to walk, or let go |
 | C | Pitch the tent (flat ground, 200 ft from lakes, off the trail) or pack it up |
 | F | Light a campfire at camp (below treeline only), or put it out |
 | Z | Sleep at the tent until morning. Hold it elsewhere to sit and rest |
 | L | Headlamp |
+| V | Switch between first and third person (scroll to zoom in third) |
 | M / Tab | Map |
 | Esc | Pause, journal and settings |
+
+A gamepad works too. The sticks walk and look, and walking speed follows how far you push the stick. A hops, B grabs rock, X pitches the tent, Y switches camera, RB lights a fire, LB toggles the headlamp, LT rests, RT or L3 hikes fast, Back opens the map, and Start pauses.
 
 What you're up against:
 
@@ -70,19 +73,36 @@ pip install numpy pillow scipy pyproj rasterio shapely pyarrow
 python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 ```
 
+## Rendering
+
+- **Terrain** uses continuous LOD (CDLOD). Each frame a quadtree over the map picks nodes, and every node is the same 32×32 grid. The vertex shader reads heights straight from a 16-bit lidar texture, adds seeded fractal micro-relief, and morphs vertices between levels so nothing pops. The relief is rougher on rock, gentler in meadows, and switched off on trails, streams and lakeshores. Up close the vertex spacing is about 0.9 m, finer than the lidar. Normals are computed per pixel. The CPU never rebuilds terrain geometry. The relief function exists in both JS and GLSL (`src/detail.js`), so what you stand on matches what you see.
+- **Trees** are built at startup:
+  - needle sprays, pine tufts, aspen leaves and bark are painted into a texture atlas;
+  - spruce, fir, lodgepole, aspen, snags, krummholz and willow are built from those as branch whorls of drooping sprays;
+  - each tree is rendered once into an impostor atlas.
+
+  Within about 85 m you see the real card trees, which sway in the wind and cast leafy shadows. Beyond that they're crossed-quad impostors out to 1.25 km. The whole forest is about 20 draw calls.
+- **Camera** has two modes. First person rides a spring over the ground, and the head motion follows the stride: a dip at each footfall, sway from foot to foot, roll into strafes, a lean and wider FOV at speed, a dip when you land, and breathing. Third person is a shoulder-offset orbit that pulls in to stay out of the hillside, following a placeholder hiker. In first person that hiker still casts your shadow.
+
 ## Code map
 
 | File | What it does |
 | --- | --- |
 | `src/main.js` | Boot, game loop, actions, saving, and local-only dev hooks (`window.__rawah`) |
-| `src/world.js` | Heightfield sampling, ecology, the colour map, and trail lookups |
-| `src/terrain.js` | 128-cell chunks with distance LOD and skirts, the far horizon mesh, and the terrain shader |
-| `src/flora.js` | Streamed instanced trees and boulders with three LOD tiers, plus tree and boulder collision |
-| `src/features.js` | Lakes, trail ribbons, cairns, signs, and the car |
+| `src/world.js` | Heightfield and relief sampling, the smoothing mask, land cover, and trail and stream lookups |
+| `src/cdlod.js` | Quadtree LOD terrain on the GPU |
+| `src/detail.js` | Fractal micro-relief, in matching JS and GLSL |
+| `src/terrain.js` | Texture helpers, the shared albedo shader, and the far horizon mesh |
+| `src/trees.js` | Painted foliage atlas, procedural tree meshes, impostor baking, and wind |
+| `src/flora.js` | Placement tiles from satellite land cover, per-instance LOD refills, and collision |
+| `src/features.js` | Lakes, streams, trail ribbons, cairns, signs, and the car |
 | `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, lights and fog |
-| `src/hiker.js` | Movement, sliding, swimming, climbing, and the stamina, warmth and grip meters |
+| `src/hiker.js` | Movement, stride phase, sliding, swimming, climbing, and the stamina, warmth and grip meters |
+| `src/camera.js` | First- and third-person camera rig |
+| `src/avatar.js` | Placeholder hiker body with procedural walk, climb and swim poses |
+| `src/input.js` | Keyboard, mouse and gamepad |
 | `src/camp.js` | Tent, fire, and Leave No Trace rules |
-| `src/audio.js` | Synthesized wind, footsteps, fire, chickadees and elk bugles |
+| `src/audio.js` | Synthesized wind, footsteps, creeks, fire, chickadees and elk bugles |
 | `src/hud.js` | Compass, location card, meters, toasts and the map |
 
 ## Credits

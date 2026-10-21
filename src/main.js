@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { World } from './world.js';
-import { Terrain, farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture } from './terrain.js';
+import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture } from './terrain.js';
+import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
 import { Sky } from './sky.js';
@@ -8,6 +9,9 @@ import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
 import { Hud } from './hud.js';
 import { Audio } from './audio.js';
+import { Input } from './input.js';
+import { CameraRig } from './camera.js';
+import { Avatar } from './avatar.js';
 import { clamp, smoothstep, valueNoise } from './noise.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -53,12 +57,11 @@ const world = await World.load('./data', (f) => setLoad(f * 0.6));
 setLoad(0.7, 'Raising the Medicine Bow crest…');
 await frame();
 const noiseTex = makeNoiseTexture();
-const terrainMat = terrainMaterial(colorTexture(world.colorImage), world.extent, noiseTex, coverTexture(world.coverData, world.coverN));
 const F = world.far;
 const farMat = terrainMaterial(colorTexture(F.image), F.N * F.cell, noiseTex);
 await frame();
 
-const terrain = new Terrain(world, terrainMat);
+const terrain = new CDLODTerrain(world, { colorMap: colorTexture(world.colorImage), coverMap: coverTexture(world.coverData, world.coverN), noise: noiseTex });
 scene.add(terrain.group);
 scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene);
@@ -68,9 +71,11 @@ scene.add(buildTrails(world));
 scene.add(buildSigns(world));
 const streams = buildStreams(world);
 scene.add(streams.group);
-const flora = new Flora(world, scene);
+const flora = new Flora(world, scene, renderer);
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
+const avatar = new Avatar(scene);
+const rig = new CameraRig(camera, world, hiker, avatar);
 const hud = new Hud(world);
 const audio = new Audio();
 setLoad(0.85, 'Drawing the map…');
@@ -120,20 +125,14 @@ spawnAtCar();
 $('btn-continue').classList.toggle('hidden', !hasSave);
 
 // ------------------------------------------------------------------ input
-const keys = new Set();
-const pressed = new Set();
-let mouseDX = 0, mouseDY = 0;
-addEventListener('keydown', (e) => {
-  if (e.repeat) return;
-  keys.add(e.code); pressed.add(e.code);
-  if (e.code === 'KeyM' && state.started) toggleMap();
-  if (e.code === 'Tab') { e.preventDefault(); if (state.started) toggleMap(); }
-});
-addEventListener('keyup', (e) => keys.delete(e.code));
-addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement !== renderer.domElement) return;
-  mouseDX += e.movementX; mouseDY += e.movementY;
-});
+const input = new Input(renderer.domElement);
+const { keys, pressed } = input;
+input.onPress = (code) => {
+  if (!state.started) return;
+  if (code === 'KeyM' || code === 'Tab') toggleMap();
+  if (code === 'KeyV' && !state.paused) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
+  if (code === 'Escape' && input.usingPad) pause(!state.paused); // keyboard Escape releases pointer lock instead
+};
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== renderer.domElement && state.started && !hud.mapOpen && !state.sleeping) pause(true);
@@ -189,7 +188,7 @@ const bindRange = (id, key, apply) => {
   el.oninput = () => { settings[key] = Number(el.value); apply?.(); storeJSON('rawah-settings', settings); };
 };
 bindRange('set-sens', 'sens');
-bindRange('set-fov', 'fov', () => { camera.fov = settings.fov; camera.updateProjectionMatrix(); });
+bindRange('set-fov', 'fov', () => rig.setFov(settings.fov));
 bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume));
 bindRange('set-time', 'timeScale');
 $('set-shadows').checked = settings.shadows;
@@ -359,10 +358,9 @@ function checkDiscoveries() {
 
 // ------------------------------------------------------------------ loop
 const eye = new THREE.Vector3();
-const input = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, lookX: 0, lookY: 0 };
+const ctl = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, lookX: 0, lookY: 0 };
 let last = performance.now(), saveTimer = 0, floraTimer = 0, t = 0;
 
-terrain.update(eye.copy(hiker.pos), true);
 while (flora.update(hiker.pos, 8) > 0) { /* fill the first ring of trees */ }
 setLoad(1, 'Ready');
 $('loading').classList.add('hidden');
@@ -379,15 +377,15 @@ function tick(dt, draw = true) {
     if (state.rescue.t > 2.6) finishRescue();
   }
 
-  const s = settings.sens * 0.0022;
-  input.lookX = live ? mouseDX * s : 0;
-  input.lookY = live ? mouseDY * s : 0;
-  mouseDX = mouseDY = 0;
-  input.move.set((keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0), (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0));
-  if (!live || hud.mapOpen) input.move.set(0, 0);
-  input.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
-  input.jump = live && pressed.has('Space');
-  input.grab = live && pressed.has('KeyE');
+  input.poll();
+  const [lx, ly] = input.look(dt, settings.sens);
+  ctl.lookX = live && !hud.mapOpen ? lx : 0;
+  ctl.lookY = live && !hud.mapOpen ? ly : 0;
+  input.move(ctl.move);
+  if (!live || hud.mapOpen) ctl.move.set(0, 0);
+  ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  ctl.jump = live && pressed.has('Space');
+  ctl.grab = live && pressed.has('KeyE');
 
   const p = hiker.pos;
   const env = {
@@ -398,17 +396,17 @@ function tick(dt, draw = true) {
   };
   if (live) {
     const before = hiker.pos.clone();
-    const events = hiker.update(dt, input, env);
+    const events = hiker.update(dt, ctl, env);
     state.km += Math.hypot(p.x - before.x, p.z - before.z) / 1000;
     for (const e of events) {
       if (e.type === 'step') audio.step(e.surface, e.speed);
-      else if (e.type === 'land') audio.thud(e.hard);
+      else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
       else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); }
       else if (e.type === 'grab') audio.step('rock', 2);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'fall') {
         if (e.severe) rescue(e.why);
-        else { audio.thud(true); hud.toast(e.why, 'warn'); }
+        else { audio.thud(true); rig.land(8); hud.toast(e.why, 'warn'); }
       }
     }
     act();
@@ -421,15 +419,17 @@ function tick(dt, draw = true) {
   } else {
     camp.update(dt, 0, t);
   }
-  pressed.clear();
+  input.endFrame();
 
-  hiker.eye(eye);
-  camera.position.copy(eye);
-  camera.rotation.set(hiker.pitch, hiker.yaw, 0);
+  avatar.update(dt, hiker);
+  rig.update(dt, { zoom: input.takeWheel(), sprinting: ctl.sprint && hiker.moving > 0.5 && hiker.stamina > 2, strafe: ctl.move.x });
+  eye.copy(camera.position);
 
-  terrain.update(eye);
+  camera.updateMatrixWorld();
+  terrain.update(camera);
   floraTimer += dt;
-  if (floraTimer > 0.12) { floraTimer = 0; flora.update(p, 1); }
+  flora.update(p, floraTimer > 0.12 ? 1 : 0, dt);
+  if (floraTimer > 0.12) floraTimer = 0;
   sky.update(state.hour, eye, p, t);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -488,8 +488,9 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save,
-    teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); terrain.update(hiker.pos, true); while (flora.update(hiker.pos, 8) > 0); },
+    begin, tick, save, rig, avatar, input,
+    cam() { return rig.toggle(); },
+    teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
     goto(name) { const pl = world.places.find((q) => q.name === name); if (pl) this.teleport(pl.x, pl.z); return pl; },
     setHour(h) { state.hour = h; },
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
