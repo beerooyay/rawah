@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rawah</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three/build/three.module.js",
+      "three/addons/": "./vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="frost"></div>
+  <div id="hurt"></div>
+
+  <div id="hud" class="hidden">
+    <div id="compass-wrap">
+      <canvas id="compass" width="420" height="34"></canvas>
+      <div id="heading">0°</div>
+    </div>
+
+    <div id="card">
+      <div id="loc-name">Rawah Wilderness</div>
+      <div id="loc-sub"></div>
+      <div id="readouts"><span id="elev"></span><span id="clock"></span><span id="temp"></span></div>
+      <div id="status"></div>
+    </div>
+
+    <div id="bars">
+      <div class="bar" id="bar-stamina"><label>Stamina</label><b><i></i></b></div>
+      <div class="bar" id="bar-warmth"><label>Warmth</label><b><i></i></b></div>
+      <div class="bar hidden" id="bar-grip"><label>Grip</label><b><i></i></b></div>
+    </div>
+
+    <div id="hint" class="hidden"></div>
+    <div id="toasts"></div>
+    <div id="discovery"><div class="d-kicker">Discovered</div><div class="d-title"></div><div class="d-sub"></div></div>
+    <div id="dot"></div>
+  </div>
+
+  <div id="map" class="hidden">
+    <canvas id="map-canvas"></canvas>
+    <div id="map-legend"></div>
+    <div id="map-close">[M] close map</div>
+  </div>
+
+  <div id="fade"><div id="fade-text"></div></div>
+
+  <div id="loading" class="screen">
+    <h1>RAWAH</h1>
+    <div class="load-track"><div id="load-bar"></div></div>
+    <div id="load-text">Starting…</div>
+  </div>
+
+  <div id="title" class="screen hidden">
+    <div class="title-inner">
+      <div class="kicker">Medicine Bow Mountains · Northern Colorado</div>
+      <h1>RAWAH</h1>
+      <p class="lede">A 15 × 15 km slice of the real Rawah Wilderness, raised from USGS elevation data.
+        Walk up from the Laramie River, find every alpine lake, stand on Clark Peak, and make camp before dark.</p>
+      <div class="buttons">
+        <button id="btn-start">Start at the trailhead</button>
+        <button id="btn-continue" class="secondary hidden">Continue</button>
+      </div>
+      <div class="controls">
+        <span><kbd>W A S D</kbd> walk</span><span><kbd>Shift</kbd> hike fast</span><span><kbd>Space</kbd> hop</span>
+        <span><kbd>E</kbd> grab rock / let go</span><span><kbd>C</kbd> pitch / pack tent</span><span><kbd>F</kbd> campfire</span>
+        <span><kbd>Z</kbd> sleep at tent · hold to rest</span><span><kbd>L</kbd> headlamp</span><span><kbd>M</kbd> map</span><span><kbd>Esc</kbd> pause</span>
+      </div>
+      <div class="credit">Terrain: USGS 3DEP via Mapzen/AWS terrain tiles. Trails are generated, not surveyed.</div>
+    </div>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <div class="pause-inner">
+      <h2>Paused</h2>
+      <div id="journal">
+        <h3>Journal</h3>
+        <div id="journal-summary"></div>
+        <ul id="journal-list"></ul>
+      </div>
+      <div id="settings">
+        <h3>Settings</h3>
+        <label>Mouse sensitivity <input type="range" id="set-sens" min="0.3" max="2.5" step="0.05" /></label>
+        <label>Field of view <input type="range" id="set-fov" min="55" max="95" step="1" /></label>
+        <label>Volume <input type="range" id="set-volume" min="0" max="1" step="0.05" /></label>
+        <label>Time speed <input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
+        <label class="check"><input type="checkbox" id="set-shadows" /> Shadows</label>
+      </div>
+      <div class="buttons">
+        <button id="btn-resume">Resume</button>
+        <button id="btn-restart" class="secondary">Start over</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
