@@ -33,7 +33,7 @@
     <div id="card">
       <div id="loc-name">Rawah Wilderness</div>
       <div id="loc-sub"></div>
-      <div id="readouts"><span id="elev"></span><span id="clock"></span><span id="temp"></span></div>
+      <div id="readouts"><span id="elev"></span><span id="clock"></span><span id="temp"></span><span id="wx"></span></div>
       <div id="status"></div>
     </div>
 
@@ -51,6 +51,15 @@
 
   <div id="map" class="hidden">
     <canvas id="map-canvas"></canvas>
+    <div id="map-side">
+      <h3>Quick travel</h3>
+      <div id="map-list"></div>
+    </div>
+    <div id="map-info" class="hidden">
+      <div class="mi-name"></div>
+      <div class="mi-sub"></div>
+      <button id="map-go">Travel here</button>
+    </div>
     <div id="map-legend"></div>
     <div id="map-close">[M] close map</div>
   </div>
@@ -77,7 +86,7 @@
         <span><kbd>W A S D</kbd> walk</span><span><kbd>Shift</kbd> hike fast</span><span><kbd>Space</kbd> hop</span>
         <span><kbd>E</kbd> grab rock / let go</span><span><kbd>C</kbd> pitch / pack tent</span><span><kbd>F</kbd> campfire</span>
         <span><kbd>Z</kbd> sleep at tent · hold to rest</span><span><kbd>L</kbd> headlamp</span><span><kbd>V</kbd> first / third person</span><span><kbd>M</kbd> map</span><span><kbd>Esc</kbd> pause</span>
-        <span>Gamepad supported: sticks to walk and look, <kbd>A</kbd> hop, <kbd>B</kbd> grab, <kbd>Y</kbd> camera</span>
+        <span>Xbox controller: sticks walk and look, <kbd>A</kbd> hop, <kbd>B</kbd> grab, <kbd>X</kbd> tent, <kbd>Y</kbd> camera, <kbd>RB</kbd> fire, <kbd>LB</kbd> lamp, <kbd>LT</kbd> rest, <kbd>RT</kbd> hike fast, <kbd>View</kbd> map, <kbd>Menu</kbd> pause</span>
       </div>
       <div class="credit">Elevation: USGS 3DEP lidar · Imagery: Copernicus Sentinel-2, 28 Sep 2023 · Trails &amp; names: © OpenStreetMap contributors via Overture Maps</div>
     </div>
@@ -88,6 +97,7 @@
       <h2>Paused</h2>
       <div id="journal">
         <h3>Journal</h3>
+        <div id="journal-forecast"></div>
         <div id="journal-summary"></div>
         <ul id="journal-list"></ul>
       </div>
@@ -98,10 +108,12 @@
         <label>Volume <input type="range" id="set-volume" min="0" max="1" step="0.05" /></label>
         <label>Time speed <input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
         <label>Quality <select id="set-quality"><option value="auto">Auto</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low (phones)</option></select></label>
+        <label>Weather <select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
         <label class="check"><input type="checkbox" id="set-shadows" /> Shadows</label>
       </div>
       <div class="buttons">
         <button id="btn-resume">Resume</button>
+        <button id="btn-map" class="secondary">Map &amp; quick travel</button>
         <button id="btn-restart" class="secondary">Start over</button>
       </div>
     </div>

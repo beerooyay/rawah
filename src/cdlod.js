@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
-import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms } from './terrain.js';
+import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR } from './terrain.js';
 import { withAtmosphere } from './atmosphere.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
@@ -77,7 +77,7 @@ float groundH(vec2 xz, float spacing) {
 `;
 
 export class CDLODTerrain {
-  constructor(world, { colorMap, coverMap, noise }) {
+  constructor(world, { colorMap, coverMap, noise, detail = true }) {
     this.world = world;
     this.colorMap = colorMap;
     this.coverMap = coverMap;
@@ -102,10 +102,11 @@ export class CDLODTerrain {
       uRanges: { value: this.ranges }, uGrid: { value: GRID }, uCam: { value: new THREE.Vector3() },
     };
     const mat = this.material = new THREE.MeshLambertMaterial();
+    if (detail) mat.defines = { NEAR_DETAIL: '' };
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       albedoUniforms(shader, colorMap, world.extent, noise, coverMap);
-      withAtmosphere(shader);
+      withAtmosphere(shader, { weather: 1 });
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           attribute vec4 nodeA;
@@ -136,7 +137,8 @@ export class CDLODTerrain {
         .replace('#include <common>', `#include <common>
           varying vec3 vWPos;
           ${ALBEDO_UNIFORMS}
-          ${HEIGHT_GLSL}`)
+          ${HEIGHT_GLSL}
+          ${WORLEY_GLSL}`)
         .replace('#include <normal_fragment_begin>', `
           float camD = length(vWPos - cameraPosition);
           float e = max(uCell * 0.55, camD * 0.0025);
@@ -150,10 +152,16 @@ export class CDLODTerrain {
             gz += k * (relief(p + vec2(0.0, de), amp, rock, sp) - relief(p - vec2(0.0, de), amp, rock, sp)) / (2.0 * de);
           }
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
+          #ifdef NEAR_DETAIL
+          ${NEAR_NORMAL}
+          #endif
           float faceDirection = 1.0;
           vec3 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
           vec3 nonPerturbedNormal = normal;
-          ${ALBEDO}`);
+          ${ALBEDO}
+          #ifdef NEAR_DETAIL
+          ${NEAR_COLOR}
+          #endif`);
     };
     mat.customProgramCacheKey = () => 'rawah-cdlod';
 

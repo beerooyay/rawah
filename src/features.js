@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
+import { NOISE_GLSL } from './detail.js';
+import { WORLEY_GLSL } from './terrain.js';
 
 // Lakes, trail ribbons, cairns, trail signs and the car at the trailhead.
 
@@ -83,19 +85,54 @@ export function buildLakes(world) {
 }
 
 // ------------------------------------------------------------------ trails
-/** Material that nudges geometry toward the camera with distance, so ribbons
- *  stay on top of coarse far-LOD terrain without z-fighting up close. */
+/** Trail tread: nudged toward the camera with distance so ribbons stay on top
+ *  of coarse far-LOD terrain without z-fighting, with ragged edges where the
+ *  meadow creeps in, a worn line down the middle (wheel ruts on roads), and
+ *  gravel and pebbles up close. `aSide` runs 0..1 across the ribbon. */
 function draped(params) {
   const mat = new THREE.MeshLambertMaterial(params);
   mat.polygonOffset = true;
   mat.polygonOffsetFactor = -2;
   mat.polygonOffsetUnits = -4;
   mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', `
+    withAtmosphere(shader, { weather: 0.7 });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 aSide;\nvarying vec2 vSide;\nvarying vec3 vTW;')
+      .replace('#include <project_vertex>', `
+      vSide = aSide;
+      vTW = transformed;
       vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
       float dCam = length(mvPosition.xyz);
       mvPosition.xyz -= normalize(mvPosition.xyz) * (0.04 + dCam * 0.0045);
       gl_Position = projectionMatrix * mvPosition;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec2 vSide;
+        varying vec3 vTW;
+        ${NOISE_GLSL}
+        ${WORLEY_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec2 p = vTW.xz;
+          float camD = distance(vTW, cameraPosition);
+          float e = abs(vSide.x - 0.5) * 2.0;
+          float n = vnoise(p * 1.7) * 0.6 + vnoise(p * 6.0) * 0.4;
+          if (e > 0.72 + n * 0.32) discard;                     // ragged edges
+          float road = vSide.y;
+          // worn tread: a dark line down the middle of a trail, two ruts on a road
+          float worn = road > 0.5 ? smoothstep(0.16, 0.0, abs(e - 0.5)) : smoothstep(0.5, 0.0, e);
+          diffuseColor.rgb *= 1.0 - worn * 0.14 + (n - 0.5) * 0.25;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.8, 0.9, 0.7), smoothstep(0.55, 0.95, e) * 0.6);
+          float nearK = 1.0 - smoothstep(10.0, 45.0, camD);
+          if (nearK > 0.0) {
+            // grit and scattered gravel, sizes all over the place, low contrast like real tread
+            vec4 w = worley(p / 0.07);
+            vec4 v = worley(p / 0.19 + 3.3);
+            float grit = smoothstep(0.45 * w.y + 0.1, 0.05, w.x) * step(w.y, 0.6);
+            float peb = smoothstep(0.32 * v.y + 0.08, 0.04, v.x) * step(v.y, mix(0.22, 0.4, road));
+            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 0.35 + peb * (v.y - 0.15) * 0.6) * nearK;
+          }
+        }`);
   };
   mat.customProgramCacheKey = () => 'rawah-draped';
   return mat;
@@ -104,11 +141,12 @@ function draped(params) {
 export function buildTrails(world) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true });
-  const tones = { road: [0.36, 0.33, 0.28], track: [0.27, 0.22, 0.16], trail: [0.22, 0.165, 0.11] };
+  const tones = { road: [0.3, 0.28, 0.24], track: [0.27, 0.22, 0.16], trail: [0.22, 0.165, 0.11] };
   for (const t of world.trails) {
     if (!t.width) continue;
     const pts = t.dense, half = t.width / 2;
     const pos = new Float32Array(pts.length * 2 * 3), col = new Float32Array(pts.length * 2 * 3), nor = new Float32Array(pts.length * 2 * 3);
+    const side = new Float32Array(pts.length * 2 * 2);
     for (let i = 0; i < pts.length; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
       let dx = b[0] - a[0], dz = b[1] - a[1];
@@ -121,6 +159,7 @@ export function buildTrails(world) {
         const k = (i * 2 + s) * 3;
         pos[k] = x; pos[k + 1] = world.height(x, z) + 0.05; pos[k + 2] = z;
         nor[k + 1] = 1;
+        side[(i * 2 + s) * 2] = s; side[(i * 2 + s) * 2 + 1] = t.kind === 'road' ? 1 : 0;
         const v = 0.9 + hash2(i, s, 5) * 0.2, base = tones[t.kind];
         col[k] = base[0] * v; col[k + 1] = base[1] * v; col[k + 2] = base[2] * v;
       }
@@ -134,6 +173,7 @@ export function buildTrails(world) {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('aSide', new THREE.BufferAttribute(side, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
     geo.computeBoundingSphere();

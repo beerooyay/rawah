@@ -32,10 +32,57 @@ Any static server works. ES modules need HTTP, not `file://`.
 | Z | Sleep at the tent until morning. Hold it elsewhere to sit and rest |
 | L | Headlamp |
 | V | Switch between first and third person (scroll to zoom in third) |
-| M / Tab | Map |
+| M / Tab | Map and quick travel |
 | Esc | Pause, journal and settings |
 
-A gamepad works too. The sticks walk and look, and walking speed follows how far you push the stick. A hops, B grabs rock, X pitches the tent, Y switches camera, RB lights a fire, LB toggles the headlamp, LT rests, RT or L3 hikes fast, Back opens the map, and Start pauses.
+An Xbox controller (or any pad in the browser's standard layout) works everywhere, menus included:
+
+| Button | Action |
+| --- | --- |
+| Left stick | Walk. Speed follows how far you push |
+| Right stick | Look |
+| A | Hop / lunge |
+| B | Grab rock or let go |
+| X | Pitch or pack the tent |
+| Y | First or third person |
+| RB | Campfire |
+| LB | Headlamp |
+| LT | Rest (sleep at the tent) |
+| RT or L3 | Hike fast |
+| View | Map and quick travel |
+| Menu | Pause |
+
+In menus the D-pad or left stick moves, A selects, left and right change sliders and dropdowns, and B goes back. The pad rumbles when lightning strikes close.
+
+### Map and quick travel
+
+Open the map and pick a trailhead, lake, summit, your camp or your car from the list, or point anywhere on the map. Then travel. The camera lifts off, glides over the real terrain and settles back into your eyes at the spot. You land on dry, walkable ground: on the shore facing the water for a lake, on the summit for a peak.
+
+- **Mouse:** scroll to zoom, drag to pan, click to pick, and double-click or press *Travel here* to go.
+- **Touch:** tap to pick, drag to pan, pinch to zoom.
+- **Gamepad:** the left stick moves a cursor, the right stick pans, LT and RT zoom, the D-pad steps through the list, A travels, Y finds you, and B closes.
+
+### Weather
+
+Weather follows a schedule for each day, rolled from a seed, so the forecast in the journal (and the one you hear when you wake up) tells you what's coming. The patterns are typical of late September on the crest:
+
+- clear, cold mornings, sometimes with valley fog;
+- cumulus building over the peaks by noon;
+- afternoon thunderstorms on some days;
+- grey days with showers;
+- the occasional cold front with snow squalls that drop the snow line to the lakes.
+
+What changes with the weather:
+
+- **Clouds and sky:** the sky clouds over, greys and dims under a thick deck, and the clouds' shadows drift across the ground.
+- **Fog:** it thickens in fog banks and squalls.
+- **Rain and snow:** they fall around you. What falls depends on the air temperature where you stand.
+- **Wind:** it picks up the grass, the trees and the audio.
+- **Ground:** rain darkens it. Snow whitens anything facing the sky above the snow line, then melts off in the sun.
+- **Warmth:** temperature, wind chill and getting soaked all count against it.
+- **Lightning:** it flashes, and the thunder arrives at the speed of sound. Get below treeline when it does.
+
+You can also pin the weather in the pause menu.
 
 What you're up against:
 
@@ -82,6 +129,9 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
   - each tree is rendered once into an impostor atlas.
 
   Within about 85 m you see the real card trees, which sway in the wind and cast leafy shadows. Beyond that they're crossed-quad impostors out to 1.25 km. The whole forest is about 20 draw calls.
+- **Ground up close** is finer than any data. A cellular pattern scatters pebbles everywhere and cobbles and blocks on rocky ground. Each stone is a small dome that catches the light, with a dark contact line around it, and some carry lichen. Between them you see dry grass thatch in meadows and needle litter under the trees. Trails get ragged edges, a worn tread or wheel ruts, and gravel.
+- **Grass** is tufts of three blades with their own heights and leans, mostly cured gold with a few still green.
+- **Sky and weather:** a cloud deck at 4,700 m is drawn from tiling noise. It's lit from the sun's side, with silver linings toward the sun and dark, thick bases in storms. The same density function shades the ground below, along the sun's ray, so cloud shadows are where the clouds are. Rain and snow are GPU particles placed from `gl_InstanceID` in a box that wraps around the camera, in world space.
 - **Camera** has two modes. First person rides a spring over the ground, and the head motion follows the stride: a dip at each footfall, sway from foot to foot, roll into strafes, a lean and wider FOV at speed, a dip when you land, and breathing. Third person is a shoulder-offset orbit that pulls in to stay out of the hillside, following a placeholder hiker. In first person that hiker still casts your shadow.
 
 ## Code map
@@ -96,14 +146,18 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 | `src/trees.js` | Painted foliage atlas, procedural tree meshes, impostor baking, and wind |
 | `src/flora.js` | Placement tiles from satellite land cover, per-instance LOD refills, and collision |
 | `src/features.js` | Lakes, streams, trail ribbons, cairns, signs, and the car |
-| `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, lights and fog |
+| `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, clouds, lights and fog |
 | `src/hiker.js` | Movement, stride phase, sliding, swimming, climbing, and the stamina, warmth and grip meters |
 | `src/camera.js` | First- and third-person camera rig |
 | `src/avatar.js` | Placeholder hiker body with procedural walk, climb and swim poses |
-| `src/input.js` | Keyboard, mouse and gamepad |
+| `src/input.js` | Keyboard, mouse, touch and gamepad, including menu navigation and rumble |
 | `src/camp.js` | Tent, fire, and Leave No Trace rules |
 | `src/audio.js` | Synthesized wind, footsteps, creeks, fire, chickadees and elk bugles |
-| `src/hud.js` | Compass, location card, meters, toasts and the map |
+| `src/hud.js` | Compass, location card, meters and toasts |
+| `src/map.js` | The map, the destination list, and picking places with mouse, touch or pad |
+| `src/weather.js` | Daily weather schedules, the forecast, and the live weather state (clouds, rain, snow, wind, temperature, wet ground, snow cover, lightning) |
+| `src/precip.js` | Rain and snow particles |
+| `src/atmosphere.js` | Sunward haze, backlit translucency, cloud shadows, and rain and snow on surfaces |
 
 ## Credits
 

@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { clamp, smoothstep, lerp } from './noise.js';
+import { atmosphere, CLOUD_GLSL, cloudDensityAt } from './atmosphere.js';
 
-// Sky dome, sun, moon, stars and the Milky Way, plus the lights and fog that
-// follow them. The sun runs on a real ephemeris for the trailhead's latitude in
+// Sky dome, sun, moon, stars, the Milky Way and the clouds, plus the lights
+// and fog that follow them and the weather. The sun runs on a real ephemeris for the trailhead's latitude in
 // late September, so sunrise over the Laramie valley lands just before 7 am.
 
 const LAT = 40.65 * Math.PI / 180;
@@ -40,8 +41,9 @@ void main() {
 }`;
 
 const FRAG = `varying vec3 vDir;
-uniform vec3 uSun, uMoon, uZenith, uHorizon, uGlow;
-uniform float uNight, uTime;
+uniform vec3 uSun, uMoon, uZenith, uHorizon, uGlow, uCloudLit, uCloudDark;
+uniform float uNight, uTime, uThick, uFlash;
+${CLOUD_GLSL}
 float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float noise(vec3 x) {
   vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
@@ -54,24 +56,41 @@ void main() {
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
-  col += uGlow * (pow(sd, 6.0) * 0.28 + pow(sd, 48.0) * 0.45) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h));
-  col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0;
+  col += uGlow * (pow(sd, 6.0) * 0.28 + pow(sd, 48.0) * 0.45) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
+  // clouds: a deck at uCloudAlt, lit from the side the sun is on, thick and dark when stormy
+  float cloud = 0.0;
+  vec3 cc = vec3(0.0);
+  if (h > 0.0 && uCloudCover > 0.005) {
+    float dh = max(uCloudAlt - cameraPosition.y, 350.0);
+    float tt = dh / max(h, 0.015);
+    vec2 P = cameraPosition.xz + d.xz * tt;
+    float dens = cloudDensity(P, 4);
+    vec2 toward = normalize(uSun.xz + 1e-4) * 420.0;
+    float shadow = cloudDensity(P + toward, 2);
+    float body = clamp(shadow * 0.8 + uThick * 0.55 * dens, 0.0, 1.0);
+    cc = mix(uCloudLit, uCloudDark, body);
+    cc += uGlow * pow(sd, 5.0) * (1.0 - dens) * dens * 2.2 * (1.0 - uNight);   // silver lining
+    cc += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dens);
+    cloud = dens * smoothstep(0.0, 0.07, h) * exp(-tt / 90000.0);
+    col = mix(col, cc, cloud);
+  }
+  col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0 * (1.0 - cloud);
   if (uNight > 0.0) {
     // Milky Way: a soft noisy band across the sky
     vec3 bandN = normalize(vec3(0.5, 0.35, 0.8));
     float band = exp(-pow(dot(d, bandN) / 0.13, 2.0));
     float dust = noise(d * 38.0) * 0.55 + noise(d * 90.0) * 0.45;
     float lane = smoothstep(0.02, 0.0, abs(dot(d, bandN) + 0.02 * noise(d * 12.0))) * 0.6;
-    col += vec3(0.5, 0.55, 0.7) * band * (0.35 + dust * 0.65) * (1.0 - lane) * 0.075 * uNight;
+    col += vec3(0.5, 0.55, 0.7) * band * (0.35 + dust * 0.65) * (1.0 - lane) * 0.075 * uNight * (1.0 - cloud);
     vec3 p = d * 260.0;
     vec3 c = floor(p);
     float r = hash(c);
     float star = smoothstep(0.9965 - band * 0.004, 1.0, r) * smoothstep(0.5, 0.0, length(fract(p) - 0.5));
     star *= 0.7 + 0.3 * sin(uTime * (2.0 + r * 5.0) + r * 40.0);
-    col += vec3(0.9, 0.93, 1.0) * star * 2.2 * uNight * smoothstep(-0.05, 0.15, h);
+    col += vec3(0.9, 0.93, 1.0) * star * 2.2 * uNight * smoothstep(-0.05, 0.15, h) * (1.0 - cloud);
     float md = dot(d, uMoon);
-    col += vec3(0.95, 0.93, 0.85) * smoothstep(0.99975, 0.99985, md) * 1.8 * uNight;
-    col += vec3(0.2, 0.25, 0.35) * pow(max(md, 0.0), 30.0) * 0.25 * uNight;
+    col += vec3(0.95, 0.93, 0.85) * smoothstep(0.99975, 0.99985, md) * 1.8 * uNight * (1.0 - cloud);
+    col += vec3(0.2, 0.25, 0.35) * pow(max(md, 0.0), 30.0) * 0.25 * uNight * (1.0 - cloud * 0.7);
   }
   col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0; // dither away gradient banding
   gl_FragColor = vec4(col, 1.0);
@@ -85,6 +104,9 @@ export class Sky {
       uSun: { value: new THREE.Vector3() }, uMoon: { value: new THREE.Vector3() },
       uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() }, uGlow: { value: new THREE.Color() },
       uNight: { value: 0 }, uTime: { value: 0 },
+      uCloudLit: { value: new THREE.Color() }, uCloudDark: { value: new THREE.Color() },
+      uThick: { value: 0 }, uFlash: { value: 0 },
+      uCloudTex: atmosphere.uCloudTex, uCloudOff: atmosphere.uCloudOff, uCloudCover: atmosphere.uCloudCover, uCloudAlt: atmosphere.uCloudAlt,
     };
     this.dome = new THREE.Mesh(
       new THREE.SphereGeometry(1000, 48, 24),
@@ -109,6 +131,8 @@ export class Sky {
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
     this.light = 1; // 0 = deep night, 1 = full day (for gameplay)
+    this.overcast = 0;
+    this.sunBlock = 0;  // smoothed cloud over the sun, as seen from the hiker
     this._a = new THREE.Color(); this._b = new THREE.Color();
     this._r = new THREE.Vector3(); this._u = new THREE.Vector3(); this._f = new THREE.Vector3(); this._up = new THREE.Vector3();
   }
@@ -121,7 +145,7 @@ export class Sky {
     return this._a.setHex(c0[i]).lerp(this._b.setHex(c1[i]), t);
   }
 
-  update(hour, camPos, focus, t) {
+  update(hour, camPos, focus, t, wx) {
     sunDirection(hour, this.sunDir);
     // a waxing gibbous moon trailing the sun by ~9.5 hours
     sunDirection((hour + 14.5) % 24, this.moonDir);
@@ -134,6 +158,23 @@ export class Sky {
     u.uZenith.value.copy(this.#palette(s, 0));
     u.uHorizon.value.copy(this.#palette(s, 1));
     u.uGlow.value.copy(this.#palette(s, 2));
+    // weather: grey the sky under a thick deck; the light through it goes flat and cool
+    const A = atmosphere;
+    A.uCloudCover.value = wx.cloud;
+    A.uCloudOff.value.copy(wx.offset);
+    const overcast = this.overcast = smoothstep(0.45, 0.95, wx.cloud) * (0.4 + 0.6 * wx.thick);
+    const grey = (c, k) => { const l = c.r * 0.3 + c.g * 0.55 + c.b * 0.15; return c.lerp(this._b.setRGB(l, l * 1.02, l * 1.06), k); };
+    grey(u.uZenith.value, overcast * 0.85).multiplyScalar(1 - overcast * 0.35);
+    grey(u.uHorizon.value, overcast * 0.8).multiplyScalar(1 - overcast * 0.25);
+    u.uGlow.value.multiplyScalar(1 - overcast * 0.7);
+    u.uThick.value = wx.thick;
+    u.uFlash.value = wx.flash;
+    const lit = smoothstep(-0.1, 0.25, s);
+    const nightL = 0.035;
+    u.uCloudLit.value.copy(u.uGlow.value).lerp(this._a.setRGB(1, 0.98, 0.95), smoothstep(0.05, 0.4, s)).multiplyScalar(lerp(nightL, 1.05, lit) * (1 - wx.thick * 0.35));
+    u.uCloudDark.value.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.4);
+    grey(u.uCloudDark.value, 0.6).multiplyScalar(lerp(0.4, 0.62, overcast) * (1 - wx.thick * 0.45) + nightL * 0.4);
+    this.sunBlock += ((s > 0 ? cloudDensityAt(focus.x + (this.sunDir.x / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y), focus.z + (this.sunDir.z / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y)) : 0) - this.sunBlock) * 0.1;
     u.uNight.value = smoothstep(0.02, -0.16, s);
     u.uTime.value = t;
     this.dome.position.copy(camPos);
@@ -156,12 +197,15 @@ export class Sky {
       this.sun.intensity = 0.32 * moonUp;
     } else {
       this.sun.color.setRGB(1, lerp(0.62, 0.96, warm), lerp(0.38, 0.9, warm));
-      this.sun.intensity = 3.1 * day;
+      this.sun.intensity = 3.1 * day * (1 - overcast * 0.55);
     }
-    this.hemi.color.copy(u.uZenith.value).lerp(this._a.setRGB(1, 1, 1), 0.35);
+    if (useMoon) this.sun.intensity *= 1 - wx.cloud * 0.85;
+    this.hemi.color.copy(u.uZenith.value).lerp(this._a.setRGB(1, 1, 1), 0.35 + overcast * 0.3);
     this.hemi.groundColor.setRGB(0.42, 0.38, 0.32).multiplyScalar(0.25 + day * 0.75);
-    this.hemi.intensity = lerp(0.42, 1.25, day);
+    this.hemi.intensity = lerp(0.42, 1.25, day) * (1 - overcast * 0.22) * (1 - wx.precip * 0.2) + wx.flash * 4;
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
-    this.light = clamp(day + moonUp * 0.25, 0, 1);
+    // haze, valley fog, and the grey wall of a squall
+    this.fog.density = 0.000052 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;
+    this.light = clamp((day + moonUp * 0.25) * (1 - overcast * 0.35), 0, 1);
   }
 }

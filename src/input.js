@@ -1,7 +1,10 @@
 // Keyboard, mouse and gamepad, folded into one state per frame. Gamepad
 // buttons are mapped onto the same key codes the keyboard uses, so game code
 // only ever asks "is KeyE pressed"; the sticks add analog movement (a light
-// push is a slow amble) and look.
+// push is a slow amble) and look. Menus and the map also get the raw pad:
+// named button presses (`onPad`), and the left stick and D-pad folded into
+// repeating Up/Down/Left/Right like a held arrow key. Layout is the browser's
+// standard mapping, which is what an Xbox controller reports.
 
 const PAD = {
   0: 'Space',      // A: hop / lunge
@@ -17,7 +20,9 @@ const PAD = {
   10: 'ShiftLeft', // L3: hike fast
   11: 'KeyV',      // R3: camera
 };
+const NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'L3', 'R3', 'Up', 'Down', 'Left', 'Right', 'Guide'];
 const DEAD = 0.14;
+const REPEAT = [0.38, 0.11]; // first delay, then repeat rate for held directions
 
 function stick(x, y) {
   const m = Math.hypot(x, y);
@@ -39,7 +44,10 @@ export class Input {
     this.usingPad = false;
     this.mode = 'kbm';           // 'kbm' | 'pad' | 'touch'
     this.touchMove = [0, 0];
+    this.pad = null;             // the raw Gamepad this frame, if any
     this.onPress = () => {};
+    this.onPad = () => {};       // (name, stickOnly) for every pad button press, plus repeating directions
+    this.dirHeld = { Up: 0, Down: 0, Left: 0, Right: 0 };
     addEventListener('keydown', (e) => {
       if (e.code === 'Tab') e.preventDefault();
       if (e.repeat) return;
@@ -65,27 +73,51 @@ export class Input {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const pad = [...pads].find((p) => p && p.connected);
     this.padMove = [0, 0]; this.padLook = [0, 0];
+    this.pad = pad || null;
     if (!pad) return;
     const ax = pad.axes;
     this.padMove = stick(ax[0] || 0, ax[1] || 0);
     this.padLook = stick(ax[2] || 0, ax[3] || 0);
     pad.buttons.forEach((b, i) => {
-      const code = PAD[i];
-      if (!code) return;
       const down = b.pressed || b.value > 0.5;
       const was = this.padHeld.has(i);
-      if (down && !was) {
+      if (down === was) return;
+      const code = PAD[i];
+      if (down) {
         this.padHeld.add(i);
-        this.keys.add(code); this.pressed.add(code);
         this.usingPad = true;
         this.mode = 'pad';
-        this.onPress(code);
-      } else if (!down && was) {
+        if (code) { this.keys.add(code); this.pressed.add(code); }
+        if (i < 12 || i > 15) this.onPad(NAMES[i]);
+        if (code) this.onPress(code);
+      } else {
         this.padHeld.delete(i);
-        if (![...this.padHeld].some((j) => PAD[j] === code)) this.keys.delete(code);
+        if (code && ![...this.padHeld].some((j) => PAD[j] === code)) this.keys.delete(code);
       }
     });
+    // D-pad and left stick as repeating arrows, for menus and the map list
+    const [mx, my] = this.padMove;
+    const dirs = {
+      Up: [this.padHeld.has(12), my < -0.6], Down: [this.padHeld.has(13), my > 0.6],
+      Left: [this.padHeld.has(14), mx < -0.6], Right: [this.padHeld.has(15), mx > 0.6],
+    };
+    const now = performance.now() / 1000;
+    for (const [name, [dpad, stk]] of Object.entries(dirs)) {
+      const t = this.dirHeld[name];
+      if (!dpad && !stk) { this.dirHeld[name] = 0; continue; }
+      // second argument: true when only the stick is pushing (the map uses the stick as a cursor)
+      if (!t) { this.dirHeld[name] = now + REPEAT[0]; this.onPad(name, !dpad); }
+      else if (now >= t) { this.dirHeld[name] = now + REPEAT[1]; this.onPad(name, !dpad); }
+    }
     if (Math.hypot(...this.padMove) + Math.hypot(...this.padLook) > 0) { this.usingPad = true; this.mode = 'pad'; }
+  }
+
+  /** Analog trigger value 0..1 (6 = LT, 7 = RT). */
+  trigger(i) { return this.pad?.buttons[i]?.value || 0; }
+
+  /** Rumble, where the browser and pad support it. */
+  rumble(strong = 0.5, weak = 0.5, ms = 200) {
+    try { this.pad?.vibrationActuator?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: strong, weakMagnitude: weak })?.catch?.(() => {}); } catch { /* unsupported */ }
   }
 
   /** Movement: x right, y forward, magnitude 0..1. */

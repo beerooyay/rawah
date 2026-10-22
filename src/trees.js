@@ -389,12 +389,31 @@ function windy(shader, uniforms) {
     .replace('#include <project_vertex>', SWAY);
 }
 
+/** Each tree a slightly different green: brightness and hue jittered by where it stands. */
+function tinted(shader) {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        vec2 tp = instanceMatrix[3].xz;
+        float tv = fract(sin(dot(tp, vec2(12.9898, 78.233))) * 43758.5453);
+        float tw = fract(tv * 7.31);
+        vTint = vec3(0.84 + tv * 0.3) * vec3(1.0 + (tw - 0.5) * 0.1, 1.0 + (tw - 0.5) * 0.04, 1.0 - (tw - 0.5) * 0.12);
+      #else
+        vTint = vec3(1.0);
+      #endif`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;');
+}
+
 /** Foliage material: alpha-tested atlas, vertex shade, wind, light through the leaves. */
 export function foliageMaterial(atlas, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: atlas, alphaTest: 0.35, alphaToCoverage: true, side: THREE.DoubleSide, vertexColors: true });
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
-    withAtmosphere(shader, { translucency: 0.55 });
+    tinted(shader);
+    withAtmosphere(shader, { translucency: 0.55, weather: 0.6 });
   };
   mat.customProgramCacheKey = () => 'rawah-foliage';
   return mat;
@@ -479,7 +498,8 @@ export function impostorMaterial(texture, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: texture, alphaTest: 0.3, alphaToCoverage: true, side: THREE.DoubleSide });
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
-    withAtmosphere(shader, { translucency: 0.35 });
+    tinted(shader);
+    withAtmosphere(shader, { translucency: 0.35, weather: 0.6 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec2 aCell;')
       .replace('#include <uv_vertex>', `#include <uv_vertex>

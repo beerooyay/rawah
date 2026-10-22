@@ -50,7 +50,15 @@ export class Audio {
     this.creekGain = ctx.createGain(); this.creekGain.gain.value = 0;
     csrc.connect(this.creekFilter).connect(this.creekGain).connect(this.master);
     csrc.start();
-    this.nextBird = 4; this.nextElk = 20; this.nextCrackle = 0;
+    // rain bed: bright hiss plus a softer patter
+    const rsrc = ctx.createBufferSource();
+    rsrc.buffer = this.white; rsrc.loop = true;
+    const rh = ctx.createBiquadFilter(); rh.type = 'highpass'; rh.frequency.value = 900;
+    const rl = ctx.createBiquadFilter(); rl.type = 'lowpass'; rl.frequency.value = 7000;
+    this.rainGain = ctx.createGain(); this.rainGain.gain.value = 0;
+    rsrc.connect(rh).connect(rl).connect(this.rainGain).connect(this.master);
+    rsrc.start();
+    this.nextBird = 4; this.nextElk = 20; this.nextCrackle = 0; this.nextDrop = 0;
   }
 
   setVolume(v) {
@@ -160,14 +168,64 @@ export class Audio {
     for (let i = 0; i < 3; i++) this.#burst(0.18, 180, 1.2, gain * 1.4, 'bandpass', 3.3 + i * 0.32, this.noise);
   }
 
+  /** Rushing air for a quick-travel flight: swells, then settles as you land. */
+  whoosh(dur) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise; src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.Q.value = 0.7;
+    f.frequency.setValueAtTime(220, now);
+    f.frequency.linearRampToValueAtTime(900, now + dur * 0.45);
+    f.frequency.linearRampToValueAtTime(260, now + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.5, now + dur * 0.4);
+    g.gain.linearRampToValueAtTime(0, now + dur);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(now);
+    src.stop(now + dur + 0.1);
+  }
+
+  /** Thunder from a strike `dist` metres away: crack for close ones, then a long rolling rumble. */
+  thunder(dist) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, when = ctx.currentTime + dist / 343;
+    const near = Math.max(0, 1 - dist / 2500);
+    if (near > 0.3) this.#burst(0.25, 1800, 0.6, 0.5 * near, 'bandpass', dist / 343, this.white);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise; src.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 160 + near * 260; f.Q.value = 0.9;
+    const g = ctx.createGain();
+    const peak = 0.35 + near * 0.9, len = 3.5 + Math.random() * 3 + (1 - near) * 2;
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(peak, when + 0.08 + (1 - near) * 0.5);
+    // a few rolls as the sound comes back off the ridges
+    for (let i = 1; i < 5; i++) g.gain.linearRampToValueAtTime(peak * (0.35 + Math.random() * 0.5) * (1 - i / 6), when + (len * i) / 5);
+    g.gain.linearRampToValueAtTime(0, when + len);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(when);
+    src.stop(when + len + 0.1);
+  }
+
   /** Per-frame ambience. */
   update(dt, s) {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
-    const wind = Math.min(1, 0.12 + s.exposure * 0.55 + s.gust * 0.35);
+    const wind = Math.min(1, 0.12 + s.exposure * 0.55 + s.gust * 0.35 + (s.storm || 0) * 0.2);
     this.windGain.gain.setTargetAtTime(wind * 0.32, now, 0.6);
     this.windFilter.frequency.setTargetAtTime(260 + wind * 520 + s.gust * 200, now, 0.8);
     this.creekGain.gain.setTargetAtTime((s.creek || 0) * 0.14, now, 0.4);
+    const rain = s.rain || 0;
+    this.rainGain.gain.setTargetAtTime(rain * 0.16 * (1 - s.exposure * 0.3), now, 0.8);
+    if (rain > 0.1) {
+      this.nextDrop -= dt;
+      if (this.nextDrop < 0) {   // fat drops on the hood and the leaves
+        this.nextDrop = Math.random() * 0.12 / rain;
+        this.#burst(0.02, 2500 + Math.random() * 3500, 3, 0.05 * rain * (0.4 + s.forest));
+      }
+    }
     this.creekFilter.frequency.setTargetAtTime(1500 + Math.sin(now * 2.3) * 400 + Math.sin(now * 5.1) * 250, now, 0.1);
     this.fireGain.gain.setTargetAtTime(s.fireDist < 25 ? 0.05 * (1 - s.fireDist / 25) : 0, now, 0.3);
     if (s.fireDist < 20) {
@@ -180,7 +238,7 @@ export class Audio {
     this.nextBird -= dt;
     if (this.nextBird < 0) {
       this.nextBird = 6 + Math.random() * 18;
-      if (s.forest > 0.3 && s.daylight > 0.5) this.chickadee(Math.random() * 3);
+      if (s.forest > 0.3 && s.daylight > 0.5 && !(s.rain > 0.2)) this.chickadee(Math.random() * 3);
     }
     this.nextElk -= dt;
     if (this.nextElk < 0) {
