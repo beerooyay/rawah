@@ -69,6 +69,9 @@ export class Companion {
     this.idleFor = 0;             // how long you've been standing still
     this.stuck = { t: 0, x: 0, z: 0 };
     this.saidAt = -999; this.nextAmbient = 40;
+    this.lead = false; this.side = 1; this.nextMood = 20;   // walk ahead or behind, left or right; changes now and then
+    this.hangout = null;
+    this.face = null;   // which way to look when standing
     this.cooldowns = {};
     this.bubble = document.getElementById('bubble');
     this._v = new THREE.Vector3();
@@ -152,10 +155,10 @@ export class Companion {
     if (this.stance === 'rest') { this.activity = 'sit'; return; }
     const stormy = weather.storm > 0.4 || weather.precip > 0.4;
     // explore when curious and either told to, or you're dawdling and it's nice out
-    const wantsToWander = this.curiosity > 70 && !stormy && (this.stance === 'free' || (this.idleFor > 12 && this.energy > 40));
+    const wantsToWander = this.curiosity > 65 && !stormy && this.energy > 35 && (this.stance === 'free' || this.idleFor > 8 || Math.random() < 0.15);
     if (this.activity === 'wander' && this.target) {
       const tdist = Math.hypot(this.target.x - this.pos.x, this.target.z - this.pos.z);
-      const leash = this.stance === 'free' ? 320 : 90;
+      const leash = this.stance === 'free' ? 320 : 140;
       if (tdist < 4 || d > leash) {
         this.curiosity = Math.max(0, this.curiosity - 50);
         this.activity = 'follow';
@@ -164,6 +167,7 @@ export class Companion {
       return;
     }
     if (wantsToWander) {
+      this.scoutDir = Math.atan2(-Math.cos(ctx.playerYaw), -Math.sin(ctx.playerYaw));
       const t = this.#interesting(player);
       if (t) { this.activity = 'wander'; this.target = t; this.say('wander', {}, { cool: 150 }); return; }
     }
@@ -176,8 +180,11 @@ export class Companion {
   #interesting(player) {
     const w = this.world;
     let best = null, score = -Infinity;
+    const ahead = this.idleFor > 3 ? null : this.scoutDir;
     for (let k = 0; k < 24; k++) {
-      const a = Math.random() * Math.PI * 2, r = 30 + Math.random() * 110;
+      // while you're hiking they scout ahead of you; when you've stopped, anywhere around
+      const a = ahead === null ? Math.random() * Math.PI * 2 : ahead + (Math.random() - 0.5) * 1.6;
+      const r = 30 + Math.random() * 110;
       const x = player.x + Math.cos(a) * r, z = player.z + Math.sin(a) * r;
       if (!w.inBounds(x, z, 60) || w.lakeAt(x, z) || w.localGrade(x, z) > 0.7) continue;
       const rise = w.height(x, z) - player.y;
@@ -194,10 +201,23 @@ export class Companion {
     switch (this.activity) {
       case 'follow':
       case 'catchup': {
-        // walk beside and a little behind; when you're moving, a step ahead on your off side
+        const d = Math.hypot(player.x - this.pos.x, player.z - this.pos.z);
+        if (playerSpeed < 0.4 && this.activity === 'follow') {
+          // you've stopped: they pick their own spot nearby to hang out, and stay put
+          if (!this.hangout || Math.hypot(this.hangout.ax - player.x, this.hangout.az - player.z) > 8) {
+            const a = Math.atan2(this.pos.z - player.z, this.pos.x - player.x) + (Math.random() - 0.5) * 1.6;
+            const r = 5 + Math.random() * 4;
+            const [x, z] = this.spotNear(player.x + Math.cos(a) * r, player.z + Math.sin(a) * r, 0);
+            this.hangout = { x, z, ax: player.x, az: player.z, face: Math.random() * Math.PI * 2 };
+          }
+          return { x: this.hangout.x, z: this.hangout.z, near: 1.5 };
+        }
+        this.hangout = null;
+        // hiking: off your shoulder at a comfortable distance, sometimes out ahead on their own line
         const fx = -Math.sin(playerYaw), fz = -Math.cos(playerYaw), rx = Math.cos(playerYaw), rz = -Math.sin(playerYaw);
-        const back = playerSpeed > 0.5 ? 2.2 : 1.2, side = 1.8;
-        return { x: player.x - fx * back + rx * side, z: player.z - fz * back + rz * side, near: playerSpeed > 0.5 ? 0.8 : 2.2 };
+        const along = this.lead ? 6 : -3.5, side = this.side * 4;
+        // no need to chase the exact slot: within a loose bubble, just keep walking alongside
+        return { x: player.x + fx * along + rx * side, z: player.z + fz * along + rz * side, near: d < 8 ? 2.5 : 1.5 };
       }
       case 'wander': case 'camp': case 'race': return { ...this.target, near: 1.2 };
       default: return null;
@@ -214,7 +234,9 @@ export class Companion {
     // needs drift
     const moving = Math.hypot(this.vel.x, this.vel.z) > 0.4;
     this.energy = clamp(this.energy + (moving ? -0.09 : this.sitting ? 0.8 : 0.25) * dt * (1 + Math.max(0, this.lastGrade) * 2), 0, 100);
-    this.curiosity = clamp(this.curiosity + dt * (this.stance === 'free' ? 2 : 0.35), 0, 100);
+    this.curiosity = clamp(this.curiosity + dt * (this.stance === 'free' ? 2 : 0.7), 0, 100);
+    this.nextMood -= dt;
+    if (this.nextMood < 0) { this.nextMood = 25 + Math.random() * 40; this.lead = Math.random() < 0.4; if (Math.random() < 0.3) this.side *= -1; }
 
     // far behind (quick travel, a fall back to camp): reappear just out of sight
     if (d > 400 || (this.activity === 'catchup' && d > 260)) {
@@ -229,6 +251,11 @@ export class Companion {
 
     // move
     const goal = this.#goal(ctx);
+    if (goal && this.activity !== 'race') {
+      // personal space: whatever they're heading for, they don't walk into you
+      const gx = goal.x - player.x, gz = goal.z - player.z, gd = Math.hypot(gx, gz);
+      if (gd < 3) { goal.x = player.x + (gx / (gd || 1)) * 3; goal.z = player.z + (gz / (gd || 1)) * 3; }
+    }
     let wx = 0, wz = 0, speed = 0;
     if (goal) {
       const gx = goal.x - p.x, gz = goal.z - p.z, gd = Math.hypot(gx, gz);
@@ -303,6 +330,10 @@ export class Companion {
       const kind = sun < 0.1 ? 'night' : cv.snag > 0.35 ? 'burn' : cv.alpine > 0.5 ? 'alpine' : cv.forest > 0.5 ? 'forest' : 'meadow';
       this.say(kind, {}, { cool: 200 });
     }
+    // standing: look at you while talking, otherwise at the view
+    const now = performance.now() / 1000;
+    this.talking = this.line && now < this.lineUntil && d < 25 ? 'nod' : null;
+    this.face = this.talking ? Math.atan2(-(player.x - p.x), -(player.z - p.z)) : this.hangout ? this.hangout.face : null;
     this.char.update(dt, this);
   }
 

@@ -29,7 +29,7 @@ const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
-const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', season: 'autumn', hero: 'blaize' });
+const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', season: 'autumn', hero: 'blaize', view: 'third' });
 if (!CHARACTERS[settings.hero]) settings.hero = 'blaize';
 const PARTNER = settings.hero === 'blaize' ? 'grant' : 'blaize';
 if (!SEASONS[settings.season]) settings.season = 'autumn';
@@ -114,6 +114,7 @@ const map = new GameMap(world);
 const audio = new Audio();
 setLoad(0.8, `Waking up ${CHARACTERS[settings.hero].name} and ${CHARACTERS[PARTNER].name}…`);
 await Promise.all([avatar.load(), partner.load()]);
+if (settings.view === 'third' && rig.mode === 'first') rig.toggle();
 avatar.setFirstPerson(rig.mode === 'first');
 const companion = new Companion(world, flora, partner, CHARACTERS[PARTNER].name);
 setLoad(0.85, 'Drawing the map…');
@@ -177,7 +178,12 @@ input.onPress = (code) => {
   if (code === 'KeyG' && !state.paused && !map.open) toggleTogether();
   if (state.together && code.startsWith('Digit')) { const b = $('together').querySelectorAll('button')[Number(code.slice(5)) - 1]; b?.click(); }
   if (state.together && code === 'Escape') { toggleTogether(false); return; }
-  if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
+  if (code === 'KeyV' && !state.paused && !map.open) {
+    settings.view = rig.toggle();
+    storeJSON('rawah-settings', settings);
+    $('set-view').value = settings.view;
+    hud.toast(settings.view === 'first' ? 'First person · [V] third person' : 'Third person · scroll to zoom · [V] first person');
+  }
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
@@ -452,6 +458,12 @@ $('set-weather').onchange = () => {
   settings.weather = $('set-weather').value;
   weather.override = REGIMES[settings.weather] ? settings.weather : null;
   weather.settle(state.day, state.hour);
+  storeJSON('rawah-settings', settings);
+};
+$('set-view').value = settings.view;
+$('set-view').onchange = () => {
+  if ($('set-view').value !== rig.mode) rig.toggle();
+  settings.view = rig.mode;
   storeJSON('rawah-settings', settings);
 };
 $('set-shadows').checked = settings.shadows;

@@ -23,8 +23,8 @@ export class CameraRig {
     this.roll = 0;
     this.fovKick = 0;
     this.breath = 0;
-    this.dist = 3.4;          // third-person boom length
-    this.boom = 3.4;
+    this.dist = 4.2;          // third-person boom length
+    this.boom = 4.2;
     this._eye = new THREE.Vector3();
     this._t = new THREE.Vector3();
     avatar.setFirstPerson(true);

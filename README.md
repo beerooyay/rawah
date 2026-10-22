@@ -73,7 +73,11 @@ Get close and press **G** (D-pad up on a controller, **Pal** on touch) to do som
 - take a break
 - race to the nearest summit or lake
 
-Both characters are Mixamo-rigged glTF models in `assets/characters/`. Any Mixamo clips exported to glTF and listed in `assets/characters/anims/anims.json` play on either of them. Until then, a procedural animator poses the skeleton for walking, running, idling, sitting, swimming and climbing.
+They keep their distance: about 6 m off your shoulder while you hike, sometimes out ahead on their own line. When you stop, they pick their own spot to hang out, facing the view, and never walk up closer than about 3 m.
+
+The camera starts in third person, so you can see them. Switch with **V** (Y on a controller) or under Settings → Camera.
+
+Both characters are Mixamo-rigged glTF models in `assets/characters/`. Standing, walking and running use real Mixamo motion capture (from three.js's Xbot example), baked by `tools/bake_anims.html` into `data/anims.json` as rotations relative to the rest pose in character space, so it plays on any Mixamo rig. Talking adds a nod. Any Mixamo clips exported to glTF and listed in `assets/characters/anims/anims.json` play on either of them. Until then, a procedural animator poses the skeleton for walking, running, idling, sitting, swimming and climbing.
 
 ### Map and quick travel
 

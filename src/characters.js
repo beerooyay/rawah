@@ -129,10 +129,10 @@ export class Character {
   update(dt, body) {
     if (!this.model) { this.avatar.update(dt, body); this.heading = this.avatar.heading; return; }
     const v = body.vel, speed = Math.hypot(v.x, v.z);
-    const want = speed > 0.3 ? Math.atan2(-v.x, -v.z) : this.heading;
+    const want = speed > 0.3 ? Math.atan2(-v.x, -v.z) : body.face ?? this.heading;
     let d = want - this.heading;
     d = Math.atan2(Math.sin(d), Math.cos(d));
-    this.heading += d * Math.min(1, dt * 8);
+    this.heading += d * Math.min(1, dt * (speed > 0.3 ? 8 : 2.5));
     this.model.position.set(body.pos.x, body.pos.y + (body.mode === 'swim' ? 1.0 : 0), body.pos.z);
     // models face +z by convention; we face -z
     this.model.rotation.y = this.heading + Math.PI;
@@ -160,7 +160,35 @@ const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
 const rx = (a) => new THREE.Quaternion().setFromAxisAngle(X, a);
 const rz = (a) => new THREE.Quaternion().setFromAxisAngle(Z, a);
 const DRIVEN = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'RightShoulder',
-  'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightFoot'];
+  'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftHand', 'RightHand', 'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg',
+  'LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase'];
+
+// Motion capture, baked by tools/bake_anims.html from a Mixamo donor: per-bone
+// rotations relative to the donor's bind pose, in character space, 30 fps.
+// Because they're relative and in character space, they drop onto any rig
+// through the same machinery as the procedural poses.
+let MOCAP = null;
+const mocapReady = fetch('./data/anims.json').then((r) => (r.ok ? r.json() : null)).then((j) => {
+  if (!j) return;
+  MOCAP = { bones: j.bones, clips: {} };
+  for (const [k, c] of Object.entries(j.clips)) MOCAP.clips[k] = { ...c, q: Float32Array.from(c.q) };
+}).catch(() => {});
+
+/** Sample a baked clip at cycle fraction u (0..1) into out[bone] (world-delta quaternions). */
+function sample(clip, u, out, only) {
+  const n = MOCAP.bones.length, f = (((u % 1) + 1) % 1) * clip.frames;
+  const f0 = Math.floor(f) % clip.frames, f1 = (f0 + 1) % clip.frames, t = f - Math.floor(f);
+  const a = new THREE.Quaternion(), b = new THREE.Quaternion();
+  MOCAP.bones.forEach((name, i) => {
+    if (only && !only.includes(name)) return;
+    const i0 = (f0 * n + i) * 4, i1 = (f1 * n + i) * 4, q = clip.q;
+    a.set(q[i0], q[i0 + 1], q[i0 + 2], q[i0 + 3]);
+    b.set(q[i1], q[i1 + 1], q[i1 + 2], q[i1 + 3]);
+    out[name] = (out[name] || new THREE.Quaternion()).copy(a).slerp(b, t);
+  });
+  const h0 = clip.hips[f0], h1 = clip.hips[f1];
+  return h0 + (h1 - h0) * t;
+}
 
 /**
  * Poses a Mixamo skeleton in character space. Every bone's rotation is given
@@ -211,11 +239,49 @@ class Rig {
     this.hipsY = b.Hips ? wp(b.Hips).y : 1;
     this.t = 0;
     this.sit = 0;
+    this.proc = 1;        // weight of the procedural pose vs motion capture
+    this.blend = { idle: 1, walk: 0, run: 0 };
+    this.talk = 0;
+    this.mocap = {};
+    mocapReady.then(() => { this.hasMocap = !!MOCAP; });
   }
 
-  /** Pose for this frame; returns how far to drop the body (sitting). */
+  /** Pose for this frame; returns how far to raise or drop the body. */
   pose(dt, body, speed) {
     this.t += dt;
+    // motion capture for standing, walking and running; procedural for sitting, swimming, climbing
+    const special = body.sitting || body.mode === 'swim' || body.mode === 'climb';
+    const wantProc = !this.hasMocap || special ? 1 : 0;
+    this.proc += (wantProc - this.proc) * Math.min(1, dt * 6);
+    let hipsLift = 0;
+    if (this.hasMocap && this.proc < 0.999) {
+      const run = THREE.MathUtils.clamp((speed - 2.6) / 1.4, 0, 1), walk = THREE.MathUtils.clamp(speed / 1.1, 0, 1);
+      const want = { idle: 1 - walk, walk: walk * (1 - run), run };
+      for (const k in want) this.blend[k] += (want[k] - this.blend[k]) * Math.min(1, dt * 8);
+      // walk and run stay locked to the footsteps: one cycle is two strides (2 PI of phase)
+      const cyc = (body.phase || 0) / (Math.PI * 2);
+      const tmp = {}, acc = this.mocap;
+      let first = true, wsum = 0;
+      for (const k of ['idle', 'walk', 'run']) {
+        const w = this.blend[k];
+        if (w < 0.01) continue;
+        const h = sample(MOCAP.clips[k], k === 'idle' ? this.t / MOCAP.clips.idle.duration : cyc, tmp);
+        wsum += w;
+        for (const n in tmp) {
+          if (first) (acc[n] = acc[n] || new THREE.Quaternion()).copy(tmp[n]);
+          else acc[n].slerp(tmp[n], w / wsum);
+        }
+        hipsLift += h * w;
+        first = false;
+      }
+      // a nod or a shake of the head while they talk
+      this.talk += ((body.talking ? 1 : 0) - this.talk) * Math.min(1, dt * 3);
+      if (this.talk > 0.02) {
+        const clip = MOCAP.clips[body.talking === 'shake' ? 'shake' : 'nod'];
+        sample(clip, this.t / clip.duration, tmp, ['Neck', 'Head', 'Spine2']);
+        for (const n of ['Neck', 'Head', 'Spine2']) if (acc[n] && tmp[n]) acc[n].slerp(tmp[n], this.talk * 0.8);
+      }
+    }
     const R = {};
     const ph = body.phase || 0, s = Math.sin(ph);
     const k = Math.min(1, speed / 2.5) * (body.moving ?? 1);
@@ -258,17 +324,20 @@ class Rig {
     this.#apply(R);
     // bob on each footfall; drop to the ground to sit
     const bob = (Math.abs(Math.cos(ph)) - 0.6) * 0.04 * k;
-    return bob - sit * this.hipsY * 0.5;
+    const procLift = bob - sit * this.hipsY * 0.5;
+    return procLift * this.proc + hipsLift * this.hipsY * (1 - this.proc);
   }
 
+  /** Accumulate the procedural rotations down the chain, blend with motion capture, write local rotations. */
   #apply(R) {
     const C = {}, W = {};
     for (const n of this.order) {
       const p = this.parentOf[n];
-      const cp = p ? C[p] : _q2.identity();
-      C[n] = (R[n] ? R[n].clone() : new THREE.Quaternion()).multiply(cp);
-      W[n] = C[n].clone().multiply(this.bind[n]);
-      const pw = p ? W[p] : cp.clone().multiply(this.rootParent);
+      C[n] = (R[n] ? R[n].clone() : new THREE.Quaternion()).multiply(p ? C[p] : _q2.identity());
+      // C is a world delta from the bind pose, the same thing the mocap stores: blend them here
+      const D = this.proc < 0.999 && this.mocap[n] ? this.mocap[n].clone().slerp(C[n], this.proc) : C[n];
+      W[n] = D.clone().multiply(this.bind[n]);
+      const pw = p ? W[p] : this.rootParent;
       this.bones[n].quaternion.copy(_q.copy(pw).invert().multiply(W[n]));
     }
   }
