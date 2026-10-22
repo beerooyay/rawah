@@ -12,10 +12,11 @@ const FIELD = 512; // resolution of the precomputed noise fields
 export class World {
   static async load(base, onProgress = () => {}) {
     const meta = await (await fetch(`${base}/world.json`)).json();
+    const N = meta.size, F = meta.far.size, C = meta.cover;
     const [dem, cover, far, color, farColor] = await Promise.all([
-      fetchBytes(`${base}/dem.bin.gz`, (f) => onProgress(f * 0.85), true),
-      fetchBytes(`${base}/cover.bin.gz`, () => {}, true),
-      fetchBytes(`${base}/far.bin`, () => {}),
+      fetchPacked(`${base}/dem.png`, N * N * 2, (f) => onProgress(f * 0.85)),
+      fetchPacked(`${base}/cover.png`, C * C * 4),
+      fetchPacked(`${base}/far.png`, F * F * 2),
       loadImage(`${base}/color.jpg`),
       loadImage(`${base}/far.jpg`),
     ]);
@@ -330,7 +331,12 @@ export function resample(pts, step) {
   return out;
 }
 
-async function fetchBytes(url, onProgress, gunzip = false) {
+/**
+ * Binary data ships as lossless RGB PNGs (tools/pack_png.py): bytes run through
+ * the R, G, B channels row by row. Decode without colour conversion and read
+ * the first `length` bytes back.
+ */
+async function fetchPacked(url, length, onProgress = () => {}) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   const total = Number(res.headers.get('content-length')) || 0;
@@ -338,8 +344,20 @@ async function fetchBytes(url, onProgress, gunzip = false) {
   const counted = res.body.pipeThrough(new TransformStream({
     transform(chunk, ctl) { got += chunk.length; if (total) onProgress(got / total); ctl.enqueue(chunk); },
   }));
-  const stream = gunzip ? counted.pipeThrough(new DecompressionStream('gzip')) : counted;
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const blob = await new Response(counted).blob();
+  const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(bmp.width, bmp.height) : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
+  const g = cv.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+  g.drawImage(bmp, 0, 0);
+  bmp.close?.();
+  const px = g.getImageData(0, 0, cv.width, cv.height).data;
+  const out = new Uint8Array(length);
+  for (let i = 0, j = 0; i < length; j += 4) {
+    out[i++] = px[j];
+    if (i < length) out[i++] = px[j + 1];
+    if (i < length) out[i++] = px[j + 2];
+  }
+  return out;
 }
 
 function loadImage(url) {

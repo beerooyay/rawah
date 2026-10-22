@@ -1,4 +1,3 @@
-# bake pipeline and dev files: the game never fetches these
 tools/
 devserver.py
 AGENTS.md

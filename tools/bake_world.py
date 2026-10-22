@@ -17,11 +17,12 @@ Everything is resampled onto one Web Mercator grid (the zoom-14 tile window
               (OpenStreetMap contributors), release OVERTURE_RELEASE
 
 Outputs in data/:
-  dem.bin.gz    uint16 heights, (metres - H_OFFSET) * H_SCALE, row-major, north first
-  far.bin       uint16 heights for a ~60 km horizon ring at zoom 11
+  dem.png       uint16 heights, (metres - H_OFFSET) * H_SCALE, row-major, north first,
+                2-D delta coded, bytes packed into a lossless RGB PNG (pack_png.py)
+  far.png       uint16 heights for a ~60 km horizon ring at zoom 11, packed the same way
   color.jpg     terrain albedo, COLOR x COLOR
   far.jpg       horizon albedo
-  cover.bin.gz  COVER x COVER x 4 bytes: live conifer, burned snags, aspen, rock
+  cover.png     COVER x COVER x 4 bytes: live conifer, burned snags, aspen, rock (packed)
   world.json    grid metadata, lakes, streams, trails, places
 
 Usage (from rawah/tools):  python3 bake_world.py
@@ -549,4 +550,7 @@ with open(os.path.join(OUT, 'world.json'), 'w') as f:
 for old in ('dem.bin',):
     if os.path.exists(os.path.join(OUT, old)):
         os.remove(os.path.join(OUT, old))
+# ship binaries as lossless PNGs so any static host serves them
+import pack_png  # noqa: E402
+pack_png.pack_all()
 print('wrote', os.path.abspath(OUT))

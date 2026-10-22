@@ -63,7 +63,7 @@ The bake also adjusts the terrain to fit the vector data:
 - **Lakes** take their shoreline from OpenStreetMap and grow over the lidar's flattened water surface.
 - **Roads** are graded flat across and smoothed along their length.
 
-Outputs in `data/`: `dem.bin.gz`, `cover.bin.gz`, `color.jpg`, `far.bin`, `far.jpg` and `world.json`. Heights are uint16 `(m - 1000) * 16`. The browser streams the gzip files through `DecompressionStream`.
+Outputs in `data/`: `dem.png`, `cover.png`, `far.png`, `color.jpg`, `far.jpg` and `world.json`. Heights are uint16 `(m - 1000) * 16`, delta-coded. The binary layers ship as lossless RGB PNGs so any static host serves them; the loader decodes them without color conversion and reads the bytes back exactly (`tools/pack_png.py`).
 
 To regenerate:
 
