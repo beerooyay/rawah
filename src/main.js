@@ -4,10 +4,11 @@ import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTextu
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
-import { Sky } from './sky.js';
+import { Sky, setSun } from './sky.js';
+import { Calendar, SEASONS } from './calendar.js';
 import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
-import { Hud } from './hud.js';
+import { Hud, keyCap } from './hud.js';
 import { GameMap } from './map.js';
 import { Audio } from './audio.js';
 import { Input } from './input.js';
@@ -18,15 +19,18 @@ import { Grass } from './grass.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
 import { Weather, REGIMES } from './weather.js';
 import { Precip } from './precip.js';
+import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
-import { PRESETS, resolveQuality, isTouch } from './quality.js';
+import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
-const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto' });
+const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', season: 'autumn' });
+if (!SEASONS[settings.season]) settings.season = 'autumn';
+const calendar = new Calendar(SEASONS[settings.season].doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
 settings.shadows ??= Q.shadows;
@@ -41,6 +45,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 renderer.shadowMap.enabled = settings.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false; // redrawn every other frame; see the loop
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -70,6 +75,10 @@ setLoad(0.7, 'Raising the Medicine Bow crest…');
 await frame();
 const noiseTex = makeNoiseTexture();
 atmosphere.uCloudTex.value = noiseTex;
+setLoad(0.72, 'Measuring the sky from every cirque…');
+await frame();
+atmosphere.uSkyView.value = skyViewTexture(world);
+atmosphere.uSkyExtent.value = world.extent;
 const F = world.far;
 const farMat = terrainMaterial(colorTexture(F.image), F.N * F.cell, noiseTex);
 await frame();
@@ -85,7 +94,7 @@ scene.add(buildTrails(world));
 scene.add(buildSigns(world));
 const streams = buildStreams(world);
 scene.add(streams.group);
-const flora = new Flora(world, scene, renderer, Q.flora);
+const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
 const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
@@ -165,7 +174,10 @@ input.onPad = (name, stickOnly) => {
     else map.pad(name, stickOnly);
     return;
   }
-  const screen = !state.started ? $('title') : state.paused ? $('pause') : null;
+  const sheet = !$('controls-sheet').classList.contains('hidden') ? $('controls-sheet') : null;
+  const screen = sheet || (!state.started ? $('title') : state.paused ? $('pause') : null);
+  if (sheet && (name === 'B' || name === 'Start')) { closeControls(); return; }
+  if (screen === $('pause') && (name === 'LB' || name === 'RB')) { cycleTab(name === 'RB' ? 1 : -1); return; }
   if (screen) menuPad(screen, name);
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
@@ -226,10 +238,11 @@ function toggleMap() {
   if (!hudState) return;
   map.show(hudState);
   document.body.classList.add('map-open');
-  $('map-close').textContent = input.mode === 'pad'
-    ? 'Left stick: cursor · right stick: pan · LT/RT: zoom · D-pad: places · Ⓐ travel · Ⓨ find me · Ⓑ close'
-    : input.mode === 'touch' ? 'Tap a place, then Travel · pinch to zoom · ✕ close'
-      : 'Click a place or anywhere · double-click to travel · scroll to zoom · drag to pan · [M] close';
+  const pad = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`;
+  $('map-close').innerHTML = input.mode === 'pad'
+    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('A', 'a')} travel</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
+    : input.mode === 'touch' ? '<span>Tap a place · pinch to zoom</span><span class="key">Close</span>'
+      : `<span>Click to pick · double-click to travel · scroll to zoom</span><span>${keyCap('M', 'kbm')} close</span>`;
   if (document.pointerLockElement) document.exitPointerLock();
 }
 map.onClose = () => { if (map.open) toggleMap(); };
@@ -240,9 +253,41 @@ function pause(on) {
   state.paused = on;
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
-  if (on) { renderJournal(); keys.clear(); }
-  else lockPointer();
+  if (on) { renderJournal(); keys.clear(); showTab('journal'); }
+  else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
 }
+
+// pause-sheet tabs (LB / RB on a pad)
+const TABS = ['journal', 'settings', 'controls'];
+let tab = 'journal';
+function showTab(name) {
+  tab = name;
+  for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === name);
+  for (const p of document.querySelectorAll('.panel')) p.classList.toggle('hidden', p.dataset.panel !== name);
+  if (name === 'controls') renderControls($('controls-pause'));
+}
+function cycleTab(dir) { showTab(TABS[(TABS.indexOf(tab) + dir + TABS.length) % TABS.length]); }
+for (const b of document.querySelectorAll('.tab')) b.onclick = () => showTab(b.dataset.tab);
+
+/** The controls reference, in three columns: keyboard and mouse, Xbox controller, touch. */
+function renderControls(el) {
+  const k = (c) => keyCap(c, 'kbm'), p = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`, t = (x) => `<span class="key">${x}</span>`;
+  const col = (title, rows) => `<div><h4>${title}</h4><dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl></div>`;
+  el.innerHTML = [
+    col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'],
+      [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
+      [k('L'), 'Headlamp'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
+    col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
+      [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('Y', 'y'), 'Camera'],
+      [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
+    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Fast'), 'Toggle hiking fast'],
+      [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
+  ].join('');
+}
+function openControls() { renderControls($('controls-title')); $('controls-sheet').classList.remove('hidden'); }
+function closeControls() { $('controls-sheet').classList.add('hidden'); }
+$('btn-controls').onclick = openControls;
+$('controls-close').onclick = closeControls;
 
 function begin(fresh) {
   if (fresh) {
@@ -254,6 +299,7 @@ function begin(fresh) {
     weather.load({ seed: (Math.random() * 1e9) | 0 });
     spawnAtCar();
   } else restore();
+  updateCalendar();
   weather.settle(state.day, state.hour);
   state.started = true;
   if (isTouch) {
@@ -275,7 +321,39 @@ function begin(fresh) {
 $('btn-start').onclick = () => begin(true);
 $('btn-continue').onclick = () => begin(false);
 $('btn-resume').onclick = () => pause(false);
-$('btn-restart').onclick = () => { if (confirm('Start over at the trailhead? Your journal will be cleared.')) begin(true); };
+// starting over takes two presses, so it can't happen by accident
+let restartArmed = 0;
+$('btn-restart').onclick = () => {
+  if (performance.now() - restartArmed < 4000) { begin(true); return; }
+  restartArmed = performance.now();
+  $('btn-restart').textContent = 'Press again to clear your journal';
+  setTimeout(() => { if (performance.now() - restartArmed >= 3900) $('btn-restart').textContent = 'Start over'; }, 4000);
+};
+
+// season: the title-screen chips and the settings select both reload into the new season
+function setSeason(name) {
+  if (name === settings.season) return;
+  settings.season = name;
+  storeJSON('rawah-settings', settings);
+  if (state.started) save();
+  $('loading').classList.remove('hidden');
+  $('load-text').textContent = `Turning the year to ${SEASONS[name].label.split(' · ')[1] || name}…`;
+  location.reload();
+}
+for (const [key, sz] of Object.entries(SEASONS)) {
+  const chip = document.createElement('button');
+  chip.className = `chip${key === settings.season ? ' on' : ''}`;
+  chip.textContent = sz.label.split(' · ')[0];
+  chip.title = sz.label;
+  chip.onclick = () => setSeason(key);
+  $('season-chips').appendChild(chip);
+  const opt = document.createElement('option');
+  opt.value = key; opt.textContent = sz.label;
+  $('set-season').appendChild(opt);
+}
+$('season-note').textContent = SEASONS[settings.season].label.split(' · ')[1];
+$('set-season').value = settings.season;
+$('set-season').onchange = () => setSeason($('set-season').value);
 
 // settings controls
 const bindRange = (id, key, apply) => {
@@ -314,16 +392,22 @@ function renderJournal() {
   list.innerHTML = '';
   const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
   const bagged = peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length;
-  $('journal-forecast').textContent = `Forecast, day ${state.day}: ${weather.forecast}`;
-  $('journal-summary').textContent = `Day ${state.day} · ${found} of ${lakeList.length} lakes · ${bagged} of ${peaks.length} summits · ${state.km.toFixed(1)} km hiked`;
-  const add = (text, done) => {
+  $('pause-date').textContent = `Day ${state.day} · ${calendar.dateLabel} · ${clock(state.hour)}`;
+  $('journal-forecast').textContent = weather.forecast;
+  const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
+  $('journal-stats').innerHTML = stat(`${found}/${lakeList.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
+    + stat(state.km.toFixed(1), 'Km hiked') + stat(state.day, state.day === 1 ? 'Day' : 'Days');
+  const add = (text, sub, done, cls = '') => {
     const li = document.createElement('li');
-    li.textContent = text;
-    li.className = done ? 'done' : '';
+    li.className = `${done ? 'done' : ''} ${cls}`;
+    li.innerHTML = '<span></span><small></small>';
+    li.firstChild.textContent = text; li.lastChild.textContent = sub;
     list.appendChild(li);
   };
-  [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(`${q.name} · ${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
-  [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(`${l.label} · ${ft(l.level)} ft`, state.discovered.has(l.label)));
+  add('Summits', '', false, 'head');
+  [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(q.name, `${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
+  add('Lakes', '', false, 'head');
+  [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(l.label, `${ft(l.level)} ft`, state.discovered.has(l.label)));
 }
 
 // ------------------------------------------------------------------ actions
@@ -389,7 +473,16 @@ function finishSleep() {
 
 function advanceClock(mins) {
   state.hour += mins / 60;
-  while (state.hour >= 24) { state.hour -= 24; state.day++; }
+  while (state.hour >= 24) { state.hour -= 24; state.day++; updateCalendar(); }
+}
+
+/** The date drives the sun, the season's weather mix, lake ice and snowpack. */
+function updateCalendar() {
+  calendar.setDay(state.day);
+  setSun(calendar.sun);
+  weather.climate = calendar.climate;
+  world.iceLine = calendar.iceLine;
+  lakes.uniforms.uIceLine.value = world.iceLine;
 }
 
 function rescue(why) {
@@ -526,7 +619,8 @@ function flyStep(dt, focus) {
 // ------------------------------------------------------------------ world queries
 /** Air temperature: a late-September diurnal swing in the valley, the lapse rate with height, and the weather. */
 function tempC(hour, elev) {
-  const valley = 7.5 + 9.5 * Math.cos(((hour - 15) / 24) * Math.PI * 2) * (1 - weather.cloud * 0.45);
+  const { mean, swing } = calendar.valley;
+  const valley = mean + swing * Math.cos(((hour - 15) / 24) * Math.PI * 2) * (1 - weather.cloud * 0.45);
   return valley + weather.temp - ((elev - 2700) / 1000) * 6.5;
 }
 
@@ -588,7 +682,7 @@ function checkDiscoveries() {
 }
 
 // ------------------------------------------------------------------ loop
-const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = new THREE.Color();
+const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = new THREE.Color(), _snowBounce = new THREE.Color();
 const ctl = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, lookX: 0, lookY: 0 };
 let last = performance.now(), saveTimer = 0, floraTimer = 0, t = 0;
 
@@ -680,9 +774,19 @@ function tick(dt, draw = true) {
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
   for (const e of weather.events) if (e.type === 'bolt') { audio.thunder?.(e.dist); if (e.dist < 1500) input.rumble(0.6 * (1 - e.dist / 1500), 0.3, 400); }
   atmosphere.uWet.value = weather.wet;
-  atmosphere.uSnow.value = weather.snowCover;
-  atmosphere.uSnowLine.value = weather.snowLine;
+  // fresh snow from the weather on top of the season's snowpack
+  const packLine = calendar.snowLine, fresh = weather.snowCover > 0.02;
+  atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
+  atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
+  atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
   sky.update(state.hour, eye, focus, t, weather);
+  // snow underfoot bounces light back up into the shadows
+  const onSnow = atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, p.y);
+  sky.hemi.groundColor.lerp(_snowBounce.setScalar(0.55 * sky.light + 0.04), onSnow * 0.7);
+  // eye adaptation: open up in flat grey light and at dusk, settle back in full sun
+  const lum = sky.sun.intensity * Math.max(0, sky.sunDir.y) * (1 - sky.sunBlock * 0.8) + sky.hemi.intensity * 0.8 + onSnow * sky.light * 0.8;
+  const targetExp = clamp(1.08 * Math.pow(3.4 / (lum + 0.3), 0.32), 0.85, 1.6);
+  renderer.toneMappingExposure += (targetExp - renderer.toneMappingExposure) * Math.min(1, dt * 0.8);
   updateAtmosphere(sky, camera);
   // the day's breeze: still at dawn, gusty through the afternoon, settling at dusk
   const h = state.hour;
@@ -690,7 +794,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0));
+  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.update(t);
@@ -731,9 +835,10 @@ function tick(dt, draw = true) {
       if (say && state.wxLabel) hud.toast(say, wxLabel === 'Thunderstorm' ? 'warn' : '');
       state.wxLabel = wxLabel;
     }
+    hud.mode = input.mode;
     hud.update(hudState = {
-      yaw: hiker.yaw, place, sub: `${sub} · ${latLon(p)}`, elev: p.y,
-      clock: `Day ${state.day} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
+      yaw: hiker.yaw, place, sub, elev: p.y, night: sky.sunDir.y < -0.03, coords: latLon(p),
+      clock: `${calendar.dateLabel} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
       hint, injured: hiker.injured > 0, status,
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
@@ -742,12 +847,40 @@ function tick(dt, draw = true) {
     });
   }
   if (map.open && hudState) map.draw(hudState);
+  // the sun's shadows only change slowly: redraw them every other frame (always while flying)
+  perf.frame++;
+  renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel);
   if (draw) renderer.render(scene, camera);
 }
 
+// Adaptive resolution: hold the frame rate by trading pixels, measured over
+// ~1.5 s windows so it settles instead of hunting. The HUD stays crisp; only
+// the 3-D view scales.
+const basePR = Math.min(devicePixelRatio, Q.dpr);
+const perf = { scale: 1, acc: 0, n: 0, frame: 0 };
+function adapt(rawDt) {
+  if (rawDt > 0.25 || document.hidden) return;   // ignore stalls and background tabs
+  perf.acc += rawDt; perf.n++;
+  if (perf.acc < 1.5) return;
+  const avg = perf.acc / perf.n;
+  perf.acc = 0; perf.n = 0;
+  let s = perf.scale;
+  if (avg > 1 / 45) s *= 0.85;
+  else if (avg > 1 / 54) s *= 0.94;
+  else if (avg < 1 / 58) s *= 1.06;
+  s = clamp(s, SCALE.min, SCALE.max);
+  if (Math.abs(s - perf.scale) > 0.01) {
+    perf.scale = s;
+    renderer.setPixelRatio(basePR * s);
+    renderer.setSize(innerWidth, innerHeight);
+  }
+}
+
 function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const raw = (now - last) / 1000;
+  const dt = Math.min(0.05, raw);
   last = now;
+  adapt(raw);
   tick(dt);
   requestAnimationFrame(loop);
 }

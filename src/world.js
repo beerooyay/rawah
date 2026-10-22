@@ -105,6 +105,9 @@ export class World {
     return x > -m && x < m && z > -m && z < m;
   }
 
+  /** Lakes with their surface above this elevation are frozen (set from the calendar). */
+  iceLine = 9999;
+
   lakeAt(x, z) {
     const c = Math.round(x / this.cell + this.N / 2), r = Math.round(z / this.cell + this.N / 2);
     if (c < 0 || r < 0 || c >= this.N || r >= this.N) return null;

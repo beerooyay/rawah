@@ -62,6 +62,26 @@ Open the map and pick a trailhead, lake, summit, your camp or your car from the 
 - **Touch:** tap to pick, drag to pan, pinch to zoom.
 - **Gamepad:** the left stick moves a cursor, the right stick pans, LT and RT zoom, the D-pad steps through the list, A travels, Y finds you, and B closes.
 
+### Seasons
+
+Pick the season on the title screen or in Settings:
+
+- **Spring thaw** (late May)
+- **High summer** (mid July)
+- **Golden aspens** (late September)
+- **Late autumn** (late October)
+- **Deep winter** (mid January)
+
+The date drives most of the world, and it advances one day every time you sleep:
+
+- **Sun:** its path follows the real declination for the date, the equation of time and daylight saving.
+- **Temperature:** monthly valley highs and lows, then the lapse rate with height.
+- **Snowpack:** how far down it reaches. In winter that's the whole map; in early summer only the high north faces keep snow.
+- **Lakes:** which ones are frozen hard enough to walk across.
+- **Grass:** how much of each meadow has cured from green to gold, decided blade by blade.
+- **Aspens and willows:** spring green, summer green, gold or bare.
+- **Weather mix:** summer monsoon thunderstorms, autumn fronts, winter snow.
+
 ### Weather
 
 Weather follows a schedule for each day, rolled from a seed, so the forecast in the journal (and the one you hear when you wake up) tells you what's coming. The patterns are typical of late September on the crest:
@@ -130,7 +150,22 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 
   Within about 85 m you see the real card trees, which sway in the wind and cast leafy shadows. Beyond that they're crossed-quad impostors out to 1.25 km. The whole forest is about 20 draw calls.
 - **Ground up close** is finer than any data. A cellular pattern scatters pebbles everywhere and cobbles and blocks on rocky ground. Each stone is a small dome that catches the light, with a dark contact line around it, and some carry lichen. Between them you see dry grass thatch in meadows and needle litter under the trees. Trails get ragged edges, a worn tread or wheel ruts, and gravel.
-- **Grass** is tufts of three blades with their own heights and leans, mostly cured gold with a few still green.
+- **Grass** is clumps, not blades. A painted atlas holds four clumps:
+  - tall meadow grass with seed heads
+  - bunchgrass
+  - alpine turf
+  - lush sedge by the water
+
+  Each clump has a few hundred curved blades and is drawn on three crossed cards. The atlas stores data instead of colour: brightness, the point in the season when each blade cures, and position from root to tip. The shader colours every blade from the satellite pixel under it and the calendar. The result reads as thousands of blades for about a tenth of the triangles blade geometry needed.
+- **Light:**
+  - **Sky view:** the lidar is scanned once at load for how much sky each spot can see (horizon angles in eight directions out to about 2 km, with tree canopy on top). That scales the ambient light everywhere, so cirque floors, gullies and forest floors sit in cooler, dimmer shade while ridges stay open.
+  - **Eye adaptation:** exposure eases up in flat grey light and at dusk.
+  - **Snow:** it bounces light back up into the shadows.
+  - **Haze:** distant ridges fade into blue air.
+- **Performance:**
+  - Lakes, streams and trails draw in one call each.
+  - Shadows redraw every other frame.
+  - Adaptive resolution trades pixels for frame rate, between 60% and 100% of the quality preset.
 - **Sky and weather:** a cloud deck at 4,700 m is drawn from tiling noise. It's lit from the sun's side, with silver linings toward the sun and dark, thick bases in storms. The same density function shades the ground below, along the sun's ray, so cloud shadows are where the clouds are. Rain and snow are GPU particles placed from `gl_InstanceID` in a box that wraps around the camera, in world space.
 - **Camera** has two modes. First person rides a spring over the ground, and the head motion follows the stride: a dip at each footfall, sway from foot to foot, roll into strafes, a lean and wider FOV at speed, a dip when you land, and breathing. Third person is a shoulder-offset orbit that pulls in to stay out of the hillside, following a placeholder hiker. In first person that hiker still casts your shadow.
 
@@ -157,6 +192,8 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 | `src/map.js` | The map, the destination list, and picking places with mouse, touch or pad |
 | `src/weather.js` | Daily weather schedules, the forecast, and the live weather state (clouds, rain, snow, wind, temperature, wet ground, snow cover, lightning) |
 | `src/precip.js` | Rain and snow particles |
+| `src/calendar.js` | Dates and seasons: sun position, valley climate, snowpack, lake ice, grass curing, leaves, the weather mix |
+| `src/skyview.js` | Baked sky-view (ambient occlusion) from the lidar and canopy |
 | `src/atmosphere.js` | Sunward haze, backlit translucency, cloud shadows, and rain and snow on surfaces |
 
 ## Credits
@@ -165,3 +202,4 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 - **Imagery:** contains modified Copernicus Sentinel data (2023).
 - **Trails, roads, water and names:** © OpenStreetMap contributors, distributed via Overture Maps under the ODbL.
 - **Three.js:** MIT; see `vendor/three/LICENSE`.
+- **Fonts:** Inter and Fraunces, SIL Open Font License; see `fonts/LICENSE.txt`.

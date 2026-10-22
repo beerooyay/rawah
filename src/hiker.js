@@ -74,7 +74,9 @@ export class Hiker {
     const wl = Math.hypot(wx, wz);
     if (wl > 1) { wx /= wl; wz /= wl; }
 
-    const lake = w.lakeAt(p.x, p.z);
+    const lakeHere = w.lakeAt(p.x, p.z);
+    const frozen = lakeHere && lakeHere.level >= w.iceLine;   // winter: walk out on the ice
+    const lake = frozen ? null : lakeHere;
     const groundH = w.height(p.x, p.z);
     const brook = w.nearestStream(p.x, p.z);
     const creekDepth = brook.stream && brook.d < brook.stream.width / 2 + 0.3 ? Math.max(0, brook.y - groundH) : 0;
@@ -128,7 +130,9 @@ export class Hiker {
     const lim = w.half - 40;
     p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim);
     const lift = this.flora.collide(p, 0.32, p.y);
-    const ground = Math.max(w.height(p.x, p.z), lift);
+    const lk2 = w.lakeAt(p.x, p.z);
+    const ice = lk2 && lk2.level >= w.iceLine ? lk2.level : -Infinity;
+    const ground = Math.max(w.height(p.x, p.z), lift, ice);
 
     if (this.mode === 'swim') {
       const lk = w.lakeAt(p.x, p.z);
@@ -172,7 +176,7 @@ export class Hiker {
     if (this.slideDrop > 28) { this.slideDrop = 0; this.events.push({ type: 'fall', severe: true, why: 'You tumbled down the slope.' }); }
 
     if (inp.grab) this.#tryGrab();
-    const surface = depthSurface(depth) || surfaceAt(w, p, this.grounded);
+    const surface = depthSurface(depth) || (ice > -Infinity && p.y - ice < 0.1 ? 'snow' : surfaceAt(w, p, this.grounded));
     this.#strideStep(dt, surface, sprinting ? 1.75 : 1.4);
   }
 

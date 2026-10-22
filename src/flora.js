@@ -32,13 +32,13 @@ function rockGeometries() {
 }
 
 export class Flora {
-  constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096 } = {}) {
+  constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096 } = {}, leaves = 'autumn') {
     this.world = world;
     this.cardR = card;          // full trees inside this radius
     this.radius = radius;       // impostors out to here
     this.thin = thin;           // beyond this, every other impostor
     this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 } };
-    const atlas = paintAtlas();
+    const atlas = paintAtlas(leaves);
     this.species = buildSpecies();
     const foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);

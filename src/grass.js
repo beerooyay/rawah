@@ -4,48 +4,114 @@ import { WIND_GLSL } from './wind.js';
 import { HEIGHT_GLSL } from './cdlod.js';
 import { withAtmosphere } from './atmosphere.js';
 
-// Grass with no CPU-side data at all. One blade mesh is instanced W x W times;
-// each blade derives its own spot from gl_InstanceID on a grid that follows
-// the camera (snapped, so blades never swim), stands on the lidar + relief,
-// grows only where the satellite land cover says meadow or tundra, takes its
-// colour from the satellite pixel it stands in, bends in the shared wind,
-// parts around the hiker's legs, and carries frost at dawn. Each instance is
-// a tuft of three blades of different heights and leans, some still green and
-// most cured gold, as a Rawah meadow is at the end of September.
+// Grass, as clumps rather than blades. A canvas atlas holds four painted
+// clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
+// lush sedge), each a few hundred fine curved blades, and every instance
+// is three crossed cards showing one of them. That reads as thousands of
+// blades for a tenth of the triangles that real blade geometry needs.
+//
+// The atlas stores data instead of colour: R is the blade's brightness, G
+// says when in the season the blade cures from green to gold, and B runs
+// from root to tip. The shader colours each blade from the satellite pixel
+// it stands in and the season (`uCure`), so a meadow turns blade by blade
+// from July green to September gold, not as one uniform fade.
+//
+// As before there is no CPU-side data: each clump takes its spot from
+// gl_InstanceID on a grid that follows the camera (snapped, so nothing swims),
+// grows only where the land cover says meadow or tundra, sways in the shared
+// wind, parts around the hiker, and frosts at dawn.
 
-const TUFT = 3;
+const CELLS = 4, CW = 512, CH = 512;
 
-function bladeGeometry() {
-  // per blade: three segments tapering to a point; x = side, y = 0..1 up the blade, z = blade index
-  const pos = [], idx = [];
-  const rows = [0, 0.38, 0.72];
-  for (let b = 0; b < TUFT; b++) {
-    const o = pos.length / 3;
-    rows.forEach((y) => { const w = 1 - y * 0.85; pos.push(-0.5 * w, y, b, 0.5 * w, y, b); });
-    pos.push(0, 1, b);
-    for (let r = 0; r < rows.length - 1; r++) { const a = o + r * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-    idx.push(o + 4, o + 5, o + 6);
+function rng(seed) {
+  let s = seed >>> 0 || 1;
+  return () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x6d2b79f5 >>> 0) / 4294967296);
+}
+
+function paintGrass() {
+  const cv = document.createElement('canvas');
+  cv.width = CW * CELLS; cv.height = CH;
+  const g = cv.getContext('2d');
+  const R = rng(11);
+  const gauss = () => (R() + R() + R() - 1.5) / 1.5;
+  const kinds = [
+    { n: 150, hMin: 0.5, hMax: 0.98, spread: 0.2, w: [3, 6], lean: 0.32, seeds: 0.28 },   // tall meadow grass
+    { n: 190, hMin: 0.35, hMax: 0.8, spread: 0.26, w: [3, 6.5], lean: 0.42, seeds: 0.12 }, // mixed bunchgrass
+    { n: 240, hMin: 0.14, hMax: 0.42, spread: 0.36, w: [2.5, 5], lean: 0.55, seeds: 0.04 }, // alpine turf and sedge
+    { n: 170, hMin: 0.4, hMax: 0.92, spread: 0.24, w: [4, 8], lean: 0.3, seeds: 0 },       // lush sedge by water
+  ];
+  kinds.forEach((k, ci) => {
+    g.save();
+    g.translate(ci * CW, 0);
+    g.beginPath(); g.rect(0, 0, CW, CH); g.clip();
+    for (let i = 0; i < k.n; i++) {
+      const x0 = CW / 2 + gauss() * CW * k.spread;
+      const h = CH * (k.hMin + (k.hMax - k.hMin) * Math.pow(R(), 0.8));
+      const a = gauss() * k.lean + (x0 - CW / 2) / CW * 0.6;   // outer blades splay out
+      const tipX = x0 + Math.sin(a) * h, tipY = CH - Math.cos(a) * h;
+      const cx = x0 + Math.sin(a * 0.35) * h * 0.55, cy = CH - h * 0.62;
+      const w = k.w[0] + R() * (k.w[1] - k.w[0]);
+      const bright = 120 + R() * 135, cure = R() * 255;
+      const grad = g.createLinearGradient(x0, CH, tipX, tipY);
+      grad.addColorStop(0, `rgb(${bright | 0},${cure | 0},0)`);
+      grad.addColorStop(1, `rgb(${bright | 0},${cure | 0},255)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(x0 - w / 2, CH);
+      g.quadraticCurveTo(cx - w * 0.3, cy, tipX, tipY);
+      g.quadraticCurveTo(cx + w * 0.3, cy, x0 + w / 2, CH);
+      g.fill();
+      if (R() < k.seeds) {
+        // a seed head along the top of the stem: always cured
+        for (let s = 0; s < 7; s++) {
+          const t = 0.84 + s * 0.022;
+          const px = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * tipX;
+          const py = (1 - t) * (1 - t) * CH + 2 * (1 - t) * t * cy + t * t * tipY;
+          g.fillStyle = `rgb(${(bright * 0.85) | 0},0,${(215 + s * 5) | 0})`;
+          g.beginPath(); g.ellipse(px + (R() - 0.5) * 3, py, 2.2, 4.5, a, 0, Math.PI * 2); g.fill();
+        }
+      }
+    }
+    g.restore();
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.anisotropy = 4;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  return tex;
+}
+
+function clumpGeometry() {
+  // three crossed cards at 60 degrees; x = across (-0.5..0.5), y = up (0..1)
+  const pos = [], uv = [], idx = [];
+  for (let q = 0; q < 3; q++) {
+    const a = (q * Math.PI) / 3, c = Math.cos(a), s = Math.sin(a), o = pos.length / 3;
+    for (const [x, y] of [[-0.5, 0], [0.5, 0], [-0.5, 1], [0.5, 1]]) {
+      pos.push(x * c, y, x * s);
+      uv.push(x + 0.5, y);
+    }
+    idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2);
   }
   const g = new THREE.InstancedBufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   g.setIndex(idx);
   return g;
 }
 
 export class Grass {
-  constructor(terrain, { radius = 26, spacing = 0.2 } = {}, uniforms) {
+  constructor(terrain, { radius = 30, spacing = 0.5 } = {}, uniforms) {
     this.spacing = spacing;
     this.W = Math.round((radius * 2) / spacing);
     this.uniforms = {
       ...terrain.uniforms,
       uCenter: { value: new THREE.Vector2() }, uPlayer: { value: new THREE.Vector3() },
       uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
-      uFrost: { value: 0 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
+      uFrost: { value: 0 }, uCure: { value: 0.75 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
     };
-    const geo = bladeGeometry();
+    const geo = clumpGeometry();
     geo.instanceCount = this.W * this.W;
-    const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
+    const mat = new THREE.MeshLambertMaterial({ map: paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       shader.uniforms.uColorMap = { value: terrain.colorMap };
@@ -55,10 +121,12 @@ export class Grass {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           uniform sampler2D uColorMap, uCover;
-          uniform float uExtent, uSpacing, uW, uRadius, uFrost;
+          uniform float uExtent, uSpacing, uW, uRadius;
           uniform vec2 uCenter;
           uniform vec3 uPlayer;
-          varying vec3 vGrass;
+          uniform float uSnow, uSnowLine;
+          varying vec3 vSat, vTone;
+          varying float vLush;
           ${HEIGHT_GLSL}
           ${WIND_GLSL}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
@@ -74,54 +142,63 @@ export class Grass {
           float y0 = baseH(root);
           grow *= smoothstep(3960.0, 3700.0, y0);
           float alpine = smoothstep(3330.0, 3560.0, y0);
-          float fade = 1.0 - smoothstep(uRadius * 0.65, uRadius, r);
-          float tall = mix(0.6, 0.2, alpine) * (0.55 + h3 * 0.9) * fade * step(h1 * 0.85 + h2 * 0.15, grow);
+          vSat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
+          vLush = clamp((vSat.g - vSat.r) * 8.0, 0.0, 1.0);
+          float fade = 1.0 - smoothstep(uRadius * 0.6, uRadius, r);
+          float live = step(h1 * 0.8 + h3 * 0.2, grow * 1.7);
+          // each clump its own shade: some straw-pale, some russet, some dun
+          vTone = mix(vec3(1.08, 0.98, 0.86), vec3(0.88, 0.78, 0.7), h3) * (0.85 + h1 * 0.3);
+          // buried under the snowpack (only the tallest tufts poke through the edges)
+          live *= 1.0 - step(0.5, uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5));
+          float size = mix(0.85, 0.55, alpine) * (0.7 + h3 * 0.6) * fade * live;
+          // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
+          float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
+          vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
+          float ang = h2 * 6.2832, ca = cos(ang), sa = sin(ang);
+          vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
           float t = position.y;
-          // this blade of the tuft: its own spot, height, facing and lean
-          float bi = position.z;
-          ivec2 bc = cell * 3 + ivec2(int(bi) * 7 + 1, int(bi) * 13 + 2);
-          float b1 = ihash(bc), b2 = ihash(bc + ivec2(5, 3)), b3 = ihash(bc + ivec2(11, 29));
-          vec2 base = root + (vec2(b1, b2) - 0.5) * uSpacing * 0.6;
-          tall *= 0.65 + b3 * 0.55;
-          float ang = (h3 + b1) * 6.2832;
-          vec2 face = vec2(cos(ang), sin(ang));
-          vec2 side = face * position.x * 0.045 * (0.6 + tall);
-          vec2 lean = vec2(-face.y, face.x) * (b2 - 0.5) * 0.5 * t * t * tall;
-          vec3 p = vec3(base.x + side.x + lean.x, groundH(root, 0.0) - 0.02 + t * tall, base.y + side.y + lean.y);
+          vec3 p = vec3(root.x + lp.x * size * 1.6, groundH(root, 0.0) - 0.03 + t * size * mix(0.72, 0.42, alpine), root.y + lp.z * size * 1.6);
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared
           float g = gustAt(root);
-          float bend = (0.12 + g * 0.9 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.08) * t * t * tall;
+          float bend = (0.1 + g * 0.8 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size;
           p.xz += WIND_DIR * bend;
-          p.y -= bend * bend * 0.6;
+          p.y -= bend * bend * 0.5;
           // part around the hiker
           vec2 away = root - uPlayer.xz;
-          float near = 1.0 - smoothstep(0.15, 0.85, length(away));
-          p.xz += normalize(away + 1e-4) * near * t * tall * 0.9;
-          p.y -= near * t * tall * 0.35;
-          vec3 transformed = p;
-          // colour: the satellite pixel it grows in, dark at the root, sun-bleached tips, frost at dawn
-          vec3 sat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
-          float green = clamp((sat.g - sat.r) * 6.0 + 0.25, 0.0, 1.0) * step(b2, 0.55);   // a few blades still alive
-          vec3 cured = mix(vec3(0.66, 0.55, 0.33), vec3(0.52, 0.44, 0.3), b3);
-          vec3 tip = mix(mix(sat * 1.3, cured, 0.45 + h2 * 0.2), mix(sat, vec3(0.36, 0.45, 0.2), 0.6), green);
-          vGrass = mix(sat * 0.42, tip, smoothstep(0.0, 0.7, t)) * (0.85 + b1 * 0.3);
-          vGrass = mix(vGrass, vec3(0.85, 0.88, 0.92), uFrost * t * (0.6 + h1 * 0.4));`);
+          float near = 1.0 - smoothstep(0.2, 1.0, length(away));
+          p.xz += normalize(away + 1e-4) * near * t * size * 0.7;
+          p.y -= near * t * size * 0.3;
+          vec3 transformed = p;`);
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vGrass;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = vGrass;')
-        // both faces of a blade catch the sky the same way
+        .replace('#include <common>', `#include <common>
+          uniform float uFrost, uCure;
+          varying vec3 vSat, vTone;
+          varying float vLush;`)
+        .replace('#include <map_fragment>', `
+          vec4 gs = texture2D(map, vMapUv);
+          // gs.r brightness, gs.g when this blade cures, gs.b root to tip
+          float alive = step(uCure - vLush * 0.35, gs.g);
+          vec3 cured = mix(vec3(0.44, 0.34, 0.19), vSat * 1.1, 0.35) * vTone;
+          vec3 green = mix(vec3(0.17, 0.27, 0.08), vSat * vec3(0.75, 1.05, 0.6), 0.3);
+          vec3 col = mix(cured, green, alive) * (0.45 + gs.r * 0.6);
+          col *= mix(0.38, 1.05, smoothstep(0.0, 0.75, gs.b));   // shade at the root
+          col = mix(col, vec3(0.86, 0.89, 0.93), uFrost * smoothstep(0.3, 1.0, gs.b) * 0.85);
+          diffuseColor.rgb = col;
+          diffuseColor.a *= gs.a;`)
+        // both faces of a card catch the sky the same way
         .replace('#include <normal_fragment_begin>', 'float faceDirection = 1.0;\nvec3 normal = normalize(vNormal);\nvec3 nonPerturbedNormal = normal;');
     };
-    mat.customProgramCacheKey = () => 'rawah-grass';
+    mat.customProgramCacheKey = () => 'rawah-grass-clumps';
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = true;
     this.mesh.renderOrder = 0;
   }
 
-  update(camera, hiker, frost) {
+  update(camera, hiker, frost, cure) {
     this.uniforms.uCenter.value.set(camera.position.x, camera.position.z);
     this.uniforms.uPlayer.value.copy(hiker.pos);
     this.uniforms.uFrost.value = frost;
+    if (cure !== undefined) this.uniforms.uCure.value = cure;
   }
 }

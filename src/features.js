@@ -43,22 +43,38 @@ export function buildLakes(world) {
     color: 0x173c48, specular: 0xffffff, shininess: 160, normalMap,
     normalScale: new THREE.Vector2(0.55, 0.55), transparent: true, opacity: 0.9,
   });
-  const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) } };
+  // uIceLine: lakes whose surface is above it are frozen over (the calendar moves it)
+  const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 } };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    withAtmosphere(shader);
+    withAtmosphere(shader, { occlusion: 0.5 });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nvarying float vLevel;\nvarying vec2 vIceUv;')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        float ice = step(uIceLine, vLevel);
+        if (ice > 0.5) {
+          // snow-dusted lake ice: wind-scoured grey-blue patches and pressure cracks
+          normal = normalize(mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), 0.9));
+          float n = texture2D(uCloudTex, vIceUv / 23.0).r * 0.6 + texture2D(uCloudTex, vIceUv / 4.0).r * 0.4;
+          vec3 iceCol = mix(vec3(0.42, 0.52, 0.58), vec3(0.85, 0.88, 0.92), smoothstep(0.38, 0.58, n));
+          iceCol *= 1.0 - smoothstep(0.49, 0.5, abs(fract(n * 9.0) - 0.5)) * 0.3;
+          diffuseColor.rgb = iceCol;
+        }`)
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
         float facing = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
         float fres = pow(1.0 - facing, 3.0);
         gl_FragColor.rgb = mix(mix(uDeep, gl_FragColor.rgb, 0.75), uSky, 0.12 + fres * 0.7);
-        gl_FragColor.a = mix(0.82, 0.98, fres);`);
+        gl_FragColor.a = mix(0.82, 0.98, fres);
+        if (ice > 0.5) gl_FragColor = vec4(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular * 0.12, 1.0);`);
   };
+  // every lake in one mesh: one draw call for all the water
   const group = new THREE.Group();
   const cell = world.cell, half = world.N / 2;
+  const pos = [], uv = [], idx = [];
   for (const lake of world.lakes) {
-    const pos = [], uv = [], idx = [];
     for (const [r, c0, c1] of lake.runs) {
       const x0 = (c0 - half - 0.5) * cell, x1 = (c1 - half + 0.5) * cell;
       const z0 = (r - half - 0.5) * cell, z1 = (r - half + 0.5) * cell;
@@ -67,17 +83,17 @@ export function buildLakes(world) {
       uv.push(x0, -z0, x1, -z0, x1, -z1, x0, -z1);
       idx.push(b, b + 3, b + 2, b, b + 2, b + 1);
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
-    geo.setIndex(idx);
-    geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.renderOrder = 1;
-    mesh.receiveShadow = true;
-    group.add(mesh);
   }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  geo.setIndex(idx);
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 1;
+  mesh.receiveShadow = true;
+  group.add(mesh);
   return {
     group, uniforms,
     update(t) { normalMap.offset.set(t * 0.004, t * 0.0025); },
@@ -141,7 +157,8 @@ function draped(params) {
 export function buildTrails(world) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true });
-  const tones = { road: [0.3, 0.28, 0.24], track: [0.27, 0.22, 0.16], trail: [0.22, 0.165, 0.11] };
+  const geos = [];
+  const tones = { road: [0.2, 0.185, 0.16], track: [0.15, 0.12, 0.085], trail: [0.13, 0.095, 0.06] };
   for (const t of world.trails) {
     if (!t.width) continue;
     const pts = t.dense, half = t.width / 2;
@@ -176,11 +193,13 @@ export function buildTrails(world) {
     geo.setAttribute('aSide', new THREE.BufferAttribute(side, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    geos.push(geo);
   }
+  // all the trails and roads in one draw call
+  const mesh = new THREE.Mesh(mergeGeometries(geos), mat);
+  mesh.geometry.computeBoundingSphere();
+  mesh.receiveShadow = true;
+  group.add(mesh);
   group.add(buildCairns(world));
   return group;
 }
@@ -239,7 +258,11 @@ function signTexture(lines, w = 512, h = 256, big = false) {
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const lh = h / (lines.length + 0.6);
   lines.forEach((ln, i) => {
-    g.font = `${big && i === 0 ? 700 : 600} ${big && i === 0 ? lh * 0.8 : lh * 0.56}px "Trebuchet MS", sans-serif`;
+    let size = big && i === 0 ? lh * 0.8 : lh * 0.56;
+    const font = () => `${big && i === 0 ? 700 : 600} ${size}px Inter, "Trebuchet MS", sans-serif`;
+    g.font = font();
+    const fit = (w - 40) / g.measureText(ln).width;   // shrink long names to fit the board
+    if (fit < 1) { size *= fit; g.font = font(); }
     g.fillText(ln, w / 2, lh * (i + 0.8));
   });
   const tex = new THREE.CanvasTexture(cv);
@@ -254,22 +277,44 @@ function post(h) {
   return g;
 }
 
+const WOOD = new THREE.MeshLambertMaterial({ color: 0x4b3424 });
+
+/** A routed-wood trail sign: the board and posts in plain wood, both faces sharing one lettered texture. */
 function sign(lines, width, height, postH, big) {
   const grp = new THREE.Group();
-  const wood = new THREE.MeshLambertMaterial({ color: 0x4b3424 });
-  const board = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.07), [
-    wood, wood, wood, wood,
-    new THREE.MeshLambertMaterial({ map: signTexture(lines, 512, Math.round(512 * height / width), big) }),
-    new THREE.MeshLambertMaterial({ map: signTexture(lines, 512, Math.round(512 * height / width), big) }),
-  ]);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.07), WOOD);
   board.position.y = postH - height / 2;
   board.castShadow = true;
-  grp.add(board);
-  const p = new THREE.Mesh(post(postH + 0.2), wood);
+  const faces = mergeGeometries([0, Math.PI].map((r) => {
+    const f = new THREE.PlaneGeometry(width - 0.04, height - 0.04);
+    f.rotateY(r);
+    f.translate(0, postH - height / 2, r ? -0.036 : 0.036);
+    return f;
+  }));
+  const face = new THREE.Mesh(faces, new THREE.MeshLambertMaterial({ map: signTexture(lines, 512, Math.round(512 * height / width), big) }));
+  grp.add(board, face);
+  const p = new THREE.Mesh(post(postH + 0.2), WOOD);
   p.position.set(-width / 2 + 0.15, -0.2, -0.08);
   const q = p.clone(); q.position.x = width / 2 - 0.15;
   grp.add(p, q);
   return grp;
+}
+
+/** Bake every plain-wood part of every sign into one mesh (one draw call). */
+function mergeWood(group) {
+  group.updateMatrixWorld(true);
+  const parts = [];
+  group.traverse((o) => { if (o.isMesh && o.material === WOOD) parts.push(o); });
+  if (!parts.length) return;
+  const geo = mergeGeometries(parts.map((o) => {
+    const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal'].includes(k)) g.deleteAttribute(k);
+    return g;
+  }));
+  for (const o of parts) o.removeFromParent();
+  const wood = new THREE.Mesh(geo, WOOD);
+  wood.castShadow = wood.receiveShadow = true;
+  group.add(wood);
 }
 
 const fmtDist = (m) => `${(m / 1609.34).toFixed(1)} mi`;
@@ -343,6 +388,7 @@ export function buildSigns(world) {
       world.startSpot = { x: ex, z: ez, toward: tp };
     }
   }
+  mergeWood(group);
   return group;
 }
 
@@ -353,8 +399,8 @@ export function buildStreams(world) {
     color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
     transparent: true, opacity: 0.86, depthWrite: false,
   });
-  mat.onBeforeCompile = (shader) => withAtmosphere(shader);
-  const group = new THREE.Group();
+  mat.onBeforeCompile = (shader) => withAtmosphere(shader, { occlusion: 0.5 });
+  const group = new THREE.Group(), geos = [];
   for (const st of world.streams) {
     const p = st.pts, half = st.width / 2;
     const pos = new Float32Array(p.length * 6), uv = new Float32Array(p.length * 4);
@@ -378,11 +424,12 @@ export function buildStreams(world) {
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.renderOrder = 1;
-    group.add(mesh);
+    geos.push(geo);
   }
+  const mesh = new THREE.Mesh(mergeGeometries(geos), mat);
+  mesh.geometry.computeBoundingSphere();
+  mesh.renderOrder = 1;
+  group.add(mesh);
   return { group, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
 }
 

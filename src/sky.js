@@ -3,15 +3,18 @@ import { clamp, smoothstep, lerp } from './noise.js';
 import { atmosphere, CLOUD_GLSL, cloudDensityAt } from './atmosphere.js';
 
 // Sky dome, sun, moon, stars, the Milky Way and the clouds, plus the lights
-// and fog that follow them and the weather. The sun runs on a real ephemeris for the trailhead's latitude in
-// late September, so sunrise over the Laramie valley lands just before 7 am.
+// and fog that follow them and the weather. The sun runs on a real ephemeris
+// for the trailhead's latitude; the calendar sets its declination and the
+// clock time of solar noon for the date.
 
 const LAT = 40.65 * Math.PI / 180;
-const DECL = -1.6 * Math.PI / 180;   // ~Sep 26
-const SOLAR_NOON = 12.93;             // MDT at 105.9 W, with the equation of time
+const SUN = { decl: -1.6 * Math.PI / 180, noon: 12.93 };   // late September until the calendar says otherwise
+
+export function setSun({ decl, noon }) { SUN.decl = decl; SUN.noon = noon; }
 
 export function sunDirection(hour, out = new THREE.Vector3()) {
-  const H = (hour - SOLAR_NOON) * 15 * Math.PI / 180;
+  const DECL = SUN.decl;
+  const H = (hour - SUN.noon) * 15 * Math.PI / 180;
   const sinAlt = Math.sin(LAT) * Math.sin(DECL) + Math.cos(LAT) * Math.cos(DECL) * Math.cos(H);
   const alt = Math.asin(sinAlt);
   const cosAz = (Math.sin(DECL) - Math.sin(alt) * Math.sin(LAT)) / (Math.cos(alt) * Math.cos(LAT));
@@ -205,7 +208,7 @@ export class Sky {
     this.hemi.intensity = lerp(0.42, 1.25, day) * (1 - overcast * 0.22) * (1 - wx.precip * 0.2) + wx.flash * 4;
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
     // haze, valley fog, and the grey wall of a squall
-    this.fog.density = 0.000052 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;
+    this.fog.density = 0.00008 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;
     this.light = clamp((day + moonUp * 0.25) * (1 - overcast * 0.35), 0, 1);
   }
 }

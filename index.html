@@ -8,6 +8,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="description" content="Hike, camp and climb the real Rawah Wilderness, built from lidar, satellite imagery and OpenStreetMap." />
   <title>Rawah</title>
+  <link rel="preload" href="./fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./fonts/fraunces.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="./style.css" />
   <script type="importmap">
   {
@@ -24,16 +26,22 @@
   <div id="frost"></div>
   <div id="hurt"></div>
 
+  <!-- ============================================================ HUD -->
   <div id="hud" class="hidden">
     <div id="compass-wrap">
-      <canvas id="compass" width="420" height="34"></canvas>
+      <canvas id="compass" width="840" height="56"></canvas>
       <div id="heading">0°</div>
     </div>
 
     <div id="card">
       <div id="loc-name">Rawah Wilderness</div>
       <div id="loc-sub"></div>
-      <div id="readouts"><span id="elev"></span><span id="clock"></span><span id="temp"></span><span id="wx"></span></div>
+      <div id="readouts">
+        <span id="elev"></span>
+        <span id="clock"></span>
+        <span id="temp"></span>
+        <span id="wx"></span>
+      </div>
       <div id="status"></div>
     </div>
 
@@ -49,73 +57,114 @@
     <div id="dot"></div>
   </div>
 
+  <!-- ============================================================ map -->
   <div id="map" class="hidden">
     <canvas id="map-canvas"></canvas>
-    <div id="map-side">
+    <aside id="map-side" class="glass">
       <h3>Quick travel</h3>
       <div id="map-list"></div>
-    </div>
-    <div id="map-info" class="hidden">
+    </aside>
+    <div id="map-info" class="glass hidden">
       <div class="mi-name"></div>
       <div class="mi-sub"></div>
-      <button id="map-go">Travel here</button>
+      <button id="map-go" class="primary">Travel here</button>
     </div>
-    <div id="map-legend"></div>
-    <div id="map-close">[M] close map</div>
+    <div id="map-legend" class="glass"></div>
+    <button id="map-close" class="ghost" aria-label="Close map"></button>
   </div>
 
   <div id="fade"><div id="fade-text"></div></div>
 
+  <!-- ============================================================ loading -->
   <div id="loading" class="screen">
-    <h1>RAWAH</h1>
-    <div class="load-track"><div id="load-bar"></div></div>
-    <div id="load-text">Starting…</div>
-  </div>
-
-  <div id="title" class="screen hidden">
-    <div class="title-inner">
-      <div class="kicker">Medicine Bow Mountains · Northern Colorado</div>
-      <h1>RAWAH</h1>
-      <p class="lede">A 15 × 15 km slice of the real Rawah Wilderness, built from lidar, satellite imagery and OpenStreetMap.
-        Start at the West Branch Trailhead, follow the real trails to the Rawah lakes, bag the peaks, and make camp before dark.</p>
-      <div class="buttons">
-        <button id="btn-start">Start at West Branch Trailhead</button>
-        <button id="btn-continue" class="secondary hidden">Continue</button>
-      </div>
-      <div class="controls">
-        <span><kbd>W A S D</kbd> walk</span><span><kbd>Shift</kbd> hike fast</span><span><kbd>Space</kbd> hop</span>
-        <span><kbd>E</kbd> grab rock / let go</span><span><kbd>C</kbd> pitch / pack tent</span><span><kbd>F</kbd> campfire</span>
-        <span><kbd>Z</kbd> sleep at tent · hold to rest</span><span><kbd>L</kbd> headlamp</span><span><kbd>V</kbd> first / third person</span><span><kbd>M</kbd> map</span><span><kbd>Esc</kbd> pause</span>
-        <span>Xbox controller: sticks walk and look, <kbd>A</kbd> hop, <kbd>B</kbd> grab, <kbd>X</kbd> tent, <kbd>Y</kbd> camera, <kbd>RB</kbd> fire, <kbd>LB</kbd> lamp, <kbd>LT</kbd> rest, <kbd>RT</kbd> hike fast, <kbd>View</kbd> map, <kbd>Menu</kbd> pause</span>
-      </div>
-      <div class="credit">Elevation: USGS 3DEP lidar · Imagery: Copernicus Sentinel-2, 28 Sep 2023 · Trails &amp; names: © OpenStreetMap contributors via Overture Maps</div>
+    <div class="brand">
+      <div class="wordmark">Rawah</div>
+      <div class="load-track"><div id="load-bar"></div></div>
+      <div id="load-text">Starting…</div>
     </div>
   </div>
 
+  <!-- ============================================================ title -->
+  <div id="title" class="screen hidden">
+    <div class="title-inner">
+      <div class="kicker">Medicine Bow Mountains · Colorado</div>
+      <div class="wordmark">Rawah</div>
+      <p class="lede">Fifteen kilometres of the real Rawah Wilderness, built from lidar, satellite imagery and OpenStreetMap.
+        Follow the real trails to the lakes, stand on the summits, and make camp before dark.</p>
+
+      <div class="field">
+        <div class="field-label">Season</div>
+        <div id="season-chips" class="chips" role="radiogroup" aria-label="Season"></div>
+        <div id="season-note" class="note"></div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-continue" class="primary hidden">Continue</button>
+        <button id="btn-start" class="primary">Start at West Branch Trailhead</button>
+        <button id="btn-controls" class="ghost">Controls</button>
+      </div>
+      <div class="credit">Elevation USGS 3DEP lidar · Imagery Copernicus Sentinel-2 · Trails &amp; names © OpenStreetMap contributors via Overture Maps</div>
+    </div>
+  </div>
+
+  <!-- ============================================================ pause -->
   <div id="pause" class="screen hidden">
-    <div class="pause-inner">
-      <h2>Paused</h2>
-      <div id="journal">
-        <h3>Journal</h3>
-        <div id="journal-forecast"></div>
-        <div id="journal-summary"></div>
+    <div class="sheet glass">
+      <header class="sheet-head">
+        <div>
+          <div class="kicker" id="pause-date"></div>
+          <h2>Paused</h2>
+        </div>
+        <nav class="tabs" role="tablist">
+          <button class="tab on" data-tab="journal" role="tab">Journal</button>
+          <button class="tab" data-tab="settings" role="tab">Settings</button>
+          <button class="tab" data-tab="controls" role="tab">Controls</button>
+        </nav>
+      </header>
+
+      <section class="panel" data-panel="journal">
+        <div id="journal-forecast" class="forecast"></div>
+        <div id="journal-stats" class="stats"></div>
         <ul id="journal-list"></ul>
-      </div>
-      <div id="settings">
-        <h3>Settings</h3>
-        <label>Mouse sensitivity <input type="range" id="set-sens" min="0.3" max="2.5" step="0.05" /></label>
-        <label>Field of view <input type="range" id="set-fov" min="55" max="95" step="1" /></label>
-        <label>Volume <input type="range" id="set-volume" min="0" max="1" step="0.05" /></label>
-        <label>Time speed <input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
-        <label>Quality <select id="set-quality"><option value="auto">Auto</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low (phones)</option></select></label>
-        <label>Weather <select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
-        <label class="check"><input type="checkbox" id="set-shadows" /> Shadows</label>
-      </div>
-      <div class="buttons">
-        <button id="btn-resume">Resume</button>
-        <button id="btn-map" class="secondary">Map &amp; quick travel</button>
-        <button id="btn-restart" class="secondary">Start over</button>
-      </div>
+        <div id="journal-summary" class="hidden"></div>
+      </section>
+
+      <section class="panel hidden" data-panel="settings">
+        <div id="settings">
+          <h4>World</h4>
+          <label class="row"><span>Season</span><select id="set-season"></select></label>
+          <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
+          <label class="row"><span>Time speed</span><input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
+          <h4>Display</h4>
+          <label class="row"><span>Quality</span><select id="set-quality"><option value="auto">Auto</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low · phones</option></select></label>
+          <label class="row"><span>Field of view</span><input type="range" id="set-fov" min="55" max="95" step="1" /></label>
+          <label class="row switch"><span>Shadows</span><input type="checkbox" id="set-shadows" /></label>
+          <h4>Controls &amp; sound</h4>
+          <label class="row"><span>Look sensitivity</span><input type="range" id="set-sens" min="0.3" max="2.5" step="0.05" /></label>
+          <label class="row"><span>Volume</span><input type="range" id="set-volume" min="0" max="1" step="0.05" /></label>
+        </div>
+      </section>
+
+      <section class="panel hidden" data-panel="controls">
+        <div class="controls-grid" id="controls-pause"></div>
+      </section>
+
+      <footer class="sheet-foot">
+        <button id="btn-resume" class="primary">Resume</button>
+        <button id="btn-map">Map &amp; quick travel</button>
+        <button id="btn-restart" class="ghost danger">Start over</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============================================================ controls sheet (title) -->
+  <div id="controls-sheet" class="screen hidden">
+    <div class="sheet glass narrow">
+      <header class="sheet-head">
+        <h2>Controls</h2>
+        <button id="controls-close" class="ghost">Close</button>
+      </header>
+      <div class="controls-grid" id="controls-title"></div>
     </div>
   </div>
 

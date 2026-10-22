@@ -34,10 +34,10 @@ function rng(seed) {
 }
 
 /** One day's weather as [hour, regime] steps. */
-export function daySchedule(seed, day) {
+export function daySchedule(seed, day, climate = { storms: 0.42, fair: 0.24, front: 0.12, clear: 0.12, grey: 0.1 }) {
   const r = rng(seed * 7919 + day * 104729);
   const pick = (opts) => { let x = r(), k; for (k of Object.keys(opts)) { x -= opts[k]; if (x < 0) return k; } return k; };
-  const kind = pick({ storms: 0.42, fair: 0.24, front: 0.12, clear: 0.12, grey: 0.1 });
+  const kind = pick(climate);
   const s = [[0, pick({ clear: 0.75, overcast: 0.25 })]];
   const t = (a, b) => a + r() * (b - a);
   if (kind === 'front') {
@@ -67,6 +67,7 @@ function fmtHour(h) {
 export function forecast(sched) {
   const at = (k) => sched.find(([, r]) => r === k);
   if (at('front')) return `Cold front: snow squalls from about ${fmtHour(at('front')[0])}, snow down to the lakes. Bring the puffy.`;
+  if (at('storm') && !at('building')) return `Thunderstorms around ${fmtHour(at('storm')[0])}.`;
   if (at('storm')) return `Clear early, clouds building by ${fmtHour(at('building')?.[0] ?? at('storm')[0] - 1)}, thunderstorms around ${fmtHour(at('storm')[0])}. Be off the ridges by noon.`;
   if (at('showers')) return `Grey and cool, showers from about ${fmtHour(at('showers')[0])}.`;
   if (at('building')) return 'Fair. Afternoon cumulus over the crest, storms unlikely.';
@@ -77,6 +78,7 @@ export class Weather {
   constructor(seed = (Math.random() * 1e9) | 0) {
     this.seed = seed;
     this.override = null;         // a regime name to hold, or null for the live schedule
+    this.climate = undefined;     // the season's weather mix (calendar.js)
     this.day = -1;
     this.sched = null;
     this.regime = 'clear';
@@ -99,7 +101,7 @@ export class Weather {
   }
 
   #target(day, hour) {
-    if (day !== this.day) { this.day = day; this.sched = daySchedule(this.seed, day); }
+    if (day !== this.day) { this.day = day; this.sched = daySchedule(this.seed, day, this.climate); }
     if (this.override && REGIMES[this.override]) { this.regime = this.override; return REGIMES[this.override]; }
     let cur = this.sched[0][1];
     for (const [h, k] of this.sched) if (hour >= h) cur = k;
@@ -116,7 +118,7 @@ export class Weather {
     return 'Clear';
   }
 
-  get forecast() { return forecast(this.sched || daySchedule(this.seed, this.day)); }
+  get forecast() { return forecast(this.sched || daySchedule(this.seed, this.day, this.climate)); }
 
   /**
    * Advance. `dt` real seconds, `gameMin` game minutes elapsed, `tempC` air

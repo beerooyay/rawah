@@ -60,6 +60,10 @@ export const ALBEDO = /* glsl */ `
         float k = mix(0.3, 0.06, smoothstep(40.0, 700.0, camD));
         albedo *= 1.0 - k * 0.5 + grain * k;
         albedo *= 1.0 + (fine - 0.5) * 0.22 * (1.0 - smoothstep(10.0, 60.0, camD));
+        // the imagery is from late September: green the cured meadows back up for spring and summer
+        float lumA = dot(albedo, vec3(0.3, 0.55, 0.15));
+        float meadow = smoothstep(0.012, 0.06, albedo.r - albedo.b) * (1.0 - smoothstep(0.32, 0.5, lumA));
+        albedo = mix(albedo, vec3(0.33, 0.45, 0.19) * lumA * 1.75, uGreen * meadow * 0.65);
         // from orbit you only see canopy; up close, under the modelled trees, show the floor
         if (uHasCover > 0.5) {
           vec4 cov = texture2D(uCover, vWPos.xz / uExtent + 0.5);
@@ -111,7 +115,8 @@ vec4 worley(vec2 x) {
 // satellite colour takes over. NEAR_NORMAL runs before lighting (expects p,
 // camD, wn), NEAR_COLOR after ALBEDO.
 export const NEAR_NORMAL = /* glsl */ `
-        float nearK = 1.0 - smoothstep(18.0, 60.0, camD);
+        // nothing of this shows through snow cover
+        float nearK = (1.0 - smoothstep(18.0, 60.0, camD)) * (1.0 - uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 40.0, vWPos.y));
         float gStone = 0.0, gId = 0.0, gRing = 0.0, gRocky = 0.0, gForest = 0.0;
         if (nearK > 0.0) {
           vec4 gCov = texture2D(uCover, p / uExtent + 0.5);

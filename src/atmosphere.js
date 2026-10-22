@@ -22,6 +22,10 @@ export const atmosphere = {
   uWet: { value: 0 },
   uSnow: { value: 0 },
   uSnowLine: { value: 4500 },
+  uGreen: { value: 0 },     // how much greener the meadows are than the late-September satellite image
+  // sky view (skyview.js): how much skylight reaches each spot
+  uSkyView: { value: null },
+  uSkyExtent: { value: 1 },
 };
 
 // Cloud density from a tiling noise texture: four octaves for the sky, two for shadows.
@@ -79,7 +83,7 @@ export function updateAtmosphere(sky, camera) {
  * Inject the shared atmosphere into a material (call inside onBeforeCompile).
  * `translucency`: backlit glow; `weather`: how strongly rain and snow mark it (0 = not at all).
  */
-export function withAtmosphere(shader, { translucency = 0, weather = 0 } = {}) {
+export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusion = 1 } = {}) {
   Object.assign(shader.uniforms, atmosphere);
   shader.vertexShader = shader.vertexShader
     .replace('#include <fog_pars_vertex>', '#include <fog_pars_vertex>\nvarying vec3 vFogView;')
@@ -89,7 +93,8 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0 } = {}) {
       varying vec3 vFogView;
       uniform vec3 uSunView, uSunFog, uSunCol, uSunWorld;
       uniform mat4 uViewInv;
-      uniform float uCloudShade, uWet, uSnow, uSnowLine;
+      uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen;
+      uniform sampler2D uSkyView;
       ${CLOUD_GLSL}`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
       {
@@ -98,6 +103,8 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0 } = {}) {
         float shade = 1.0 - uCloudShade * cloudDensity(cp, 2);
         reflectedLight.directDiffuse *= shade;
         reflectedLight.directSpecular *= shade;
+        float skyView = texture2D(uSkyView, wp.xz / uSkyExtent + 0.5).r;
+        reflectedLight.indirectDiffuse *= mix(1.0, 0.25 + 0.95 * skyView, ${occlusion.toFixed(2)});
       }`)
     .replace('#include <fog_fragment>', `
       #ifdef USE_FOG

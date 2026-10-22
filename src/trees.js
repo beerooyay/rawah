@@ -26,7 +26,7 @@ function rng(seed) {
 }
 
 // ------------------------------------------------------------------ painting
-function paintAtlas() {
+function paintAtlas(season = 'autumn') {
   const cv = document.createElement('canvas');
   cv.width = cv.height = ATLAS;
   const g = cv.getContext('2d');
@@ -112,8 +112,31 @@ function paintAtlas() {
     }
     g.restore();
   };
-  leaves('aspenLeaf', [[46, 88, 52], [42, 90, 46], [50, 80, 58], [38, 85, 42], [70, 40, 40]]);
-  leaves('willowLeaf', [[30, 60, 38], [36, 66, 44], [24, 50, 32], [44, 50, 42]]);
+  // the season picks the deciduous palette: fresh spring green, deep summer green, gold, or bare twigs
+  const ASPEN = {
+    spring: [[88, 62, 52], [84, 58, 48], [92, 55, 58], [80, 60, 44]],
+    summer: [[100, 42, 34], [96, 46, 30], [104, 38, 38], [92, 40, 28]],
+    autumn: [[46, 88, 52], [42, 90, 46], [50, 80, 58], [38, 85, 42], [70, 40, 40]],
+  };
+  const WILLOW = {
+    spring: [[80, 50, 46], [74, 46, 40]],
+    summer: [[96, 32, 32], [90, 30, 28], [100, 26, 36]],
+    autumn: [[30, 60, 38], [36, 66, 44], [24, 50, 32], [44, 50, 42]],
+  };
+  const bareTwigs = (name) => {
+    const [ox, oy] = cell(name);
+    g.save(); g.translate(ox, oy);
+    const fork = (x, y, a, len, w, depth) => {
+      const x2 = x + Math.cos(a) * len, y2 = y + Math.sin(a) * len;
+      g.strokeStyle = hsl(30, 8, 46 + R() * 14, 0.95); g.lineWidth = w;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x2, y2); g.stroke();
+      if (depth < 4) for (let k = 0; k < 2; k++) fork(x2, y2, a + (k ? 1 : -1) * (0.3 + R() * 0.4), len * 0.68, w * 0.7, depth + 1);
+    };
+    for (let b = 0; b < 5; b++) fork(CELL / 2, CELL - 10, -Math.PI / 2 + (R() - 0.5) * 1.2, CELL * 0.22, 5, 0);
+    g.restore();
+  };
+  if (ASPEN[season]) leaves('aspenLeaf', ASPEN[season]); else bareTwigs('aspenLeaf');
+  if (WILLOW[season]) leaves('willowLeaf', WILLOW[season]); else bareTwigs('willowLeaf');
 
   // fire-killed twigs: bare grey forks
   {
@@ -413,7 +436,7 @@ export function foliageMaterial(atlas, uniforms) {
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
     tinted(shader);
-    withAtmosphere(shader, { translucency: 0.55, weather: 0.6 });
+    withAtmosphere(shader, { translucency: 0.55, weather: 0.6, occlusion: 0.7 });
   };
   mat.customProgramCacheKey = () => 'rawah-foliage';
   return mat;
@@ -448,7 +471,7 @@ export function bakeImpostors(renderer, species, material, IMP = 4096) {
   const cells = {};
   const prev = { target: renderer.getRenderTarget(), color: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(), shadow: renderer.shadowMap.enabled };
   renderer.setRenderTarget(target);
-  renderer.setClearColor(0x000000, 0);
+  renderer.setClearColor(0x2c3a24, 0);   // foliage-coloured background, so mipmaps fade to green, not black
   renderer.clear();
   renderer.shadowMap.enabled = false;
   let n = 0;
@@ -499,13 +522,20 @@ export function impostorMaterial(texture, uniforms) {
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
     tinted(shader);
-    withAtmosphere(shader, { translucency: 0.35, weather: 0.6 });
+    withAtmosphere(shader, { translucency: 0.35, weather: 0.6, occlusion: 0.7 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec2 aCell;')
       .replace('#include <uv_vertex>', `#include <uv_vertex>
         vMapUv = aCell + vec2(uv.x / 8.0, uv.y / 4.0);`)
       // impostors aren't in the leaf atlas: keep the quake off them
       .replace('float aspen = step(0.75, uv.x) * step(0.75, uv.y);', 'float aspen = 0.0;');
+    // a flat card has no idea which way its crown faces: light it like a rounded crown,
+    // half toward you and half toward the sun, so low sun doesn't turn far forests black
+    shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `
+      float faceDirection = 1.0;
+      vec3 viewUp = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+      vec3 normal = normalize(normalize(-vViewPosition) * 0.55 + uSunView * 0.45 + viewUp * 0.35);
+      vec3 nonPerturbedNormal = normal;`);
   };
   mat.customProgramCacheKey = () => 'rawah-impostor';
   return mat;

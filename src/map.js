@@ -86,6 +86,7 @@ export class GameMap {
   // ---------------------------------------------------------------- open / close
   show(s) {
     this.open = true;
+    this.openedAt = performance.now();
     this.state = s;
     this.zoom = 1;
     this.cx = 0; this.cz = 0;
@@ -266,8 +267,10 @@ export class GameMap {
     cv.addEventListener('pointercancel', (e) => pts.delete(e.pointerId));
     cv.addEventListener('dblclick', (e) => { this.pickAt(...this.#toWorld(...dev(e))); this.travel(); });
     cv.addEventListener('wheel', (e) => { e.preventDefault(); this.#zoomAt(Math.exp(-Math.sign(e.deltaY) * 0.25), ...dev(e)); }, { passive: false });
-    $('map-go').onclick = () => this.travel();
-    $('map-close').onclick = () => this.onClose?.();
+    // a phone's follow-up click from the tap that opened the map lands on these: ignore it
+    const settled = () => performance.now() - this.openedAt > 450;
+    $('map-go').onclick = () => { if (settled()) this.travel(); };
+    $('map-close').onclick = () => { if (settled()) this.onClose?.(); };
     addEventListener('keydown', (e) => {
       if (!this.open) return;
       const k = e.code;
@@ -333,7 +336,7 @@ export class GameMap {
       g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke(); g.setLineDash([]);
     }
 
-    g.font = `${Math.round(11 * dpr)}px system-ui, sans-serif`;
+    g.font = `${Math.round(11 * dpr)}px Inter, system-ui, sans-serif`;
     g.textBaseline = 'middle';
     g.lineJoin = 'round';
     const labelAll = this.zoom >= 1.8;
@@ -351,7 +354,7 @@ export class GameMap {
       if (!labelAll && d.kind === 'lake' && !d.known && !on) continue; // keep the overview uncluttered
       const label = `${d.known ? '✓ ' : ''}${d.name}${d.kind === 'peak' ? ` ${ft(d.elev)}′` : ''}`;
       g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 3 * dpr;
-      g.font = `${on ? 600 : 400} ${Math.round((on ? 13 : 11) * dpr)}px system-ui, sans-serif`;
+      g.font = `${on ? 600 : 400} ${Math.round((on ? 13 : 11) * dpr)}px Inter, system-ui, sans-serif`;
       g.globalAlpha = d.kind === 'lake' && !d.known && !on ? 0.75 : 1;
       g.strokeText(label, x + 8 * dpr, y); g.fillText(label, x + 8 * dpr, y);
       g.globalAlpha = 1;
@@ -383,9 +386,9 @@ export class GameMap {
     const km = this.zoom > 3 ? 0.5 : 1, len = km * 1000 * k;
     g.fillStyle = 'rgba(244,241,234,0.9)';
     g.fillRect(24 * dpr, H - 30 * dpr, len, 3 * dpr);
-    g.font = `${Math.round(11 * dpr)}px system-ui, sans-serif`;
+    g.font = `${Math.round(11 * dpr)}px Inter, system-ui, sans-serif`;
     g.fillText(`${km} km`, 24 * dpr + len + 8 * dpr, H - 28 * dpr);
 
-    $('map-legend').textContent = `${s.lakesFound} / ${s.lakesTotal} lakes · ${s.peaksFound} / ${s.peaksTotal} summits · ${s.km.toFixed(1)} km hiked`;
+    $('map-legend').textContent = `${s.coords} · ${s.lakesFound}/${s.lakesTotal} lakes · ${s.peaksFound}/${s.peaksTotal} summits · ${s.km.toFixed(1)} km hiked`;
   }
 }
