@@ -1,3 +1,4 @@
 tools/
 devserver.py
 AGENTS.md
+assets/**/*.fbx

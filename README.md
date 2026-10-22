@@ -54,6 +54,27 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 
 In menus the D-pad or left stick moves, A selects, left and right change sliders and dropdowns, and B goes back. The pad rumbles when lightning strikes close.
 
+### Blaize and Grant
+
+Pick who you play on the title screen. The other one hikes with you, but they aren't on a leash. They have needs of their own (energy, curiosity, company) and decide what to do every couple of seconds:
+
+- keep pace beside you on the trail
+- wander off to a viewpoint or a lakeshore when you dawdle, then come back
+- sit down when tired or when you stop for a while
+- gather at the fire in the evening
+- catch up after quick travel
+
+They talk too: about lakes and summits you find, the storm building, how cold you look, where you are.
+
+Get close and press **G** (D-pad up on a controller, **Pal** on touch) to do something together:
+
+- hike together
+- let them explore on their own
+- take a break
+- race to the nearest summit or lake
+
+Both characters are Mixamo-rigged glTF models in `assets/characters/`. Any Mixamo clips exported to glTF and listed in `assets/characters/anims/anims.json` play on either of them. Until then, a procedural animator poses the skeleton for walking, running, idling, sitting, swimming and climbing.
+
 ### Map and quick travel
 
 Open the map and pick a trailhead, lake, summit, your camp or your car from the list, or point anywhere on the map. Then travel. The camera lifts off, glides over the real terrain and settles back into your eyes at the spot. You land on dry, walkable ground: on the shore facing the water for a lake, on the summit for a peak.
@@ -184,7 +205,9 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 | `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, clouds, lights and fog |
 | `src/hiker.js` | Movement, stride phase, sliding, swimming, climbing, and the stamina, warmth and grip meters |
 | `src/camera.js` | First- and third-person camera rig |
-| `src/avatar.js` | Placeholder hiker body with procedural walk, climb and swim poses |
+| `src/characters.js` | Blaize and Grant: model loading, Mixamo clips, and a rig-agnostic procedural animator |
+| `src/companion.js` | Your partner's needs, decisions, movement, speech and the together menu commands |
+| `src/avatar.js` | Primitive stand-in body, used if a model is missing |
 | `src/input.js` | Keyboard, mouse, touch and gamepad, including menu navigation and rumble |
 | `src/camp.js` | Tent, fire, and Leave No Trace rules |
 | `src/audio.js` | Synthesized wind, footsteps, creeks, fire, chickadees and elk bugles |

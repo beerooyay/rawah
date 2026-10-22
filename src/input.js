@@ -160,6 +160,7 @@ export class Input {
         <button data-code="KeyZ" data-hold>Rest</button>
       </div>
       <div class="t-top">
+        <button data-code="KeyG">Pal</button>
         <button data-code="KeyL">Lamp</button>
         <button data-code="KeyV">Cam</button>
         <button data-code="KeyM">Map</button>

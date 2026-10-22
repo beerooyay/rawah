@@ -73,6 +73,13 @@
     <button id="map-close" class="ghost" aria-label="Close map"></button>
   </div>
 
+  <div id="bubble" class="hidden"></div>
+
+  <div id="together" class="glass hidden">
+    <div class="tg-head"><div><div class="tg-name"></div><div class="tg-mood"></div></div><button id="together-close" class="ghost">Close</button></div>
+    <div class="tg-list"></div>
+  </div>
+
   <div id="fade"><div id="fade-text"></div></div>
 
   <!-- ============================================================ loading -->
@@ -91,6 +98,12 @@
       <div class="wordmark">Rawah</div>
       <p class="lede">Fifteen kilometres of the real Rawah Wilderness, built from lidar, satellite imagery and OpenStreetMap.
         Follow the real trails to the lakes, stand on the summits, and make camp before dark.</p>
+
+      <div class="field">
+        <div class="field-label">Play as</div>
+        <div id="hero-chips" class="chips"></div>
+        <div id="hero-note" class="note"></div>
+      </div>
 
       <div class="field">
         <div class="field-label">Season</div>
