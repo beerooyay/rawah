@@ -23,6 +23,7 @@ export const atmosphere = {
   uSnow: { value: 0 },
   uSnowLine: { value: 4500 },
   uGreen: { value: 0 },     // how much greener the meadows are than the late-September satellite image
+  uValley: { value: 0.00005 }, // extra haze per metre in low air, thinning with height (heaviest at dawn)
   // sky view (skyview.js): how much skylight reaches each spot
   uSkyView: { value: null },
   uSkyExtent: { value: 1 },
@@ -93,7 +94,7 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
       varying vec3 vFogView;
       uniform vec3 uSunView, uSunFog, uSunCol, uSunWorld;
       uniform mat4 uViewInv;
-      uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen;
+      uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen, uValley;
       uniform sampler2D uSkyView;
       ${CLOUD_GLSL}`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
@@ -109,6 +110,13 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
     .replace('#include <fog_fragment>', `
       #ifdef USE_FOG
         float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+        // valley air: haze pools low and thins with height, so far ridges stack in layers
+        {
+          float reach = length(vFogView);
+          float midY = 0.5 * ((uViewInv * vec4(vFogView, 1.0)).y + uViewInv[3].y);
+          float pool = 1.0 - exp(-uValley * reach * exp(-max(0.0, midY - 2450.0) / 650.0));
+          fogFactor = 1.0 - (1.0 - fogFactor) * (1.0 - pool);
+        }
         float toSun = max(dot(normalize(vFogView), uSunView), 0.0);
         vec3 haze = mix(fogColor, uSunFog, pow(toSun, 7.0) * 0.75);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, haze, fogFactor);

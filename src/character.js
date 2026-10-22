@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Avatar } from './avatar.js';
-import { AnimLibrary, BODY_SCALE, CORE, EXTRA, retarget } from './anims.js';
+import { AnimLibrary, BODY_SCALE, CORE, EXTRA, retarget, straighten } from './anims.js';
+import { buildTool } from './tools.js';
 import { clamp } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
 
@@ -25,12 +26,13 @@ export const CHARACTERS = {
 
 const ACTION_CLIP = {
   jab: 'Punching', cross: 'Punching (1)', combo: 'Punch Combo', hook: 'Hook', stomp: 'Stomp',
+  chop: 'Stable Sword Outward Slash', slash: 'Stable Sword Outward Slash',   // the one swing clip we have serves axe and machete
   hitSide: 'Big Side Hit', hitKidney: 'Kidney Hit', hitHead: 'Light Hit To Head',
   hitUpper: 'Receiving An Uppercut', hitFace: 'Receive Uppercut To The Face',
   climbOut: 'Swimming To Edge',
 };
-// where in the clip an action starts, as a share of its length (the first part is just swimming)
-const ACTION_FROM = { climbOut: 0.25 };
+// the part of the clip an action plays, as shares of its length (climbing out starts with swimming; the slash has a long lead-in and follow-through)
+const ACTION_SPAN = { climbOut: [0.25, 1], chop: [0.12, 0.74], slash: [0.12, 0.74] };
 const FIDGETS = ['Wiping Sweat', 'Searching Pockets', 'Swatting Bugs', 'Looking', 'Happy Idle'];
 const GUARD = 4;   // s the fists stay up after a punch
 /**
@@ -84,6 +86,7 @@ export class Character {
     this.prevStance = 'stand'; this.getup = 0; this.guard = 0; this.yoff = 0;
     this.idleT = 0; this.nextFidget = 7 + Math.random() * 6; this.fidget = null; this.fidgetT = 0;
     this.gait = 'walk';
+    this.hand = null; this.tool = 'fists'; this.toolObj = null; this.grip = null;
     this.target = null; this.fitted = new Map();
     this.head = null; this.neck = null; this.lookYaw = 0; this.lookPitch = 0; this.lookW = 0;
     this.#load(CHARACTERS[name] ? name : 'blaize');
@@ -94,6 +97,8 @@ export class Character {
   async #load(name) {
     try {
       const [gltf] = await Promise.all([new GLTFLoader().loadAsync(CHARACTERS[name]), this.lib.load(CORE)]);
+      // without its clips a rig just stands in its T-pose: better to keep the placeholder than show that
+      if (!this.lib.get('Neutral Idle') || !this.lib.srcRest) throw new Error('animation clips did not load');
       const model = gltf.scene;
       model.scale.setScalar(BODY_SCALE);
       model.traverse((o) => {
@@ -108,9 +113,12 @@ export class Character {
       this.target = this.#measure(model);
       this.mixer = new THREE.AnimationMixer(model);
       this.head = model.getObjectByName('mixamorigHead'); this.neck = model.getObjectByName('mixamorigNeck');
+      this.hand = model.getObjectByName('mixamorigRightHand');
+      this.grip = this.#gripOf();
       if (this.fallback) this.fallback.root.visible = false;
       this.ready = true;
       this.setFirstPerson(this.firstPerson);
+      this.#mountTool();
       this.lib.load(EXTRA);
     } catch (err) {
       console.warn('character failed to load; keeping the placeholder', err);
@@ -123,12 +131,48 @@ export class Character {
     const bones = [];
     model.traverse((o) => { if (o.isBone) bones.push(o); });
     const hips = bones.find((b) => b.name === 'mixamorigHips');
-    const list = bones.map((b) => ({ name: b.name, parent: b.parent?.isBone ? b.parent.name : null, wq: b.getWorldQuaternion(new THREE.Quaternion()) }));
+    const list = bones.map((b) => ({ name: b.name, parent: b.parent?.isBone ? b.parent.name : null, wq: b.getWorldQuaternion(new THREE.Quaternion()), wp: b.getWorldPosition(new THREE.Vector3()) }));
     const up = new THREE.Vector3(), root = new THREE.Quaternion();
     hips.parent.getWorldQuaternion(root);
     const worldY = hips.getWorldPosition(up).y / model.scale.y;   // metres at rest, before BODY_SCALE
     return { bones: list, rootQ: root, hips: worldY * 100 };
   }
+
+  /**
+   * Where a tool sits in the right hand, in the hand bone's own frame. The clips pose
+   * the hand from a straightened rest (see `straighten`), so the grip is worked out
+   * there: handle across the fist (thumb to little finger), head up past the thumb
+   * and angled toward the fingers, cutting edge toward the fingertips.
+   */
+  #gripOf() {
+    if (!this.hand || !this.lib.srcRest) return null;
+    const rest = straighten(this.lib.srcRest, this.target).get('mixamorigRightHand');
+    if (!rest) return null;
+    const bones = new Map(this.target.bones.map((b) => [b.name, b]));
+    const wrist = bones.get('mixamorigRightHand'), knuckle = bones.get('mixamorigRightHandMiddle1');
+    const scale = this.hand.getWorldScale(new THREE.Vector3()).x;      // bone units to metres
+    const finger = new THREE.Vector3(-1, 0, 0), thumb = new THREE.Vector3(0, 0, 1);
+    const head = thumb.clone().multiplyScalar(Math.cos(0.7)).addScaledVector(finger, Math.sin(0.7)).normalize();
+    const edge = finger.clone().addScaledVector(head, -finger.dot(head)).normalize();
+    const across = new THREE.Vector3().crossVectors(edge, head);
+    const world = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(edge, head, across));
+    const inv = rest.clone().invert();
+    const palm = finger.clone().multiplyScalar(wrist.wp.distanceTo(knuckle.wp) * 0.5).applyQuaternion(inv).divideScalar(scale);
+    return { q: inv.multiply(world), pos: palm, scale: 1 / scale };
+  }
+
+  #mountTool() {
+    if (!this.hand) return;
+    if (this.toolObj) { this.hand.remove(this.toolObj); this.toolObj = null; }
+    if (this.tool === 'fists' || !this.grip) return;
+    const t = buildTool(this.tool);
+    t.quaternion.copy(this.grip.q); t.position.copy(this.grip.pos); t.scale.setScalar(this.grip.scale);
+    t.visible = !this.firstPerson;
+    this.hand.add(t);
+    this.toolObj = t;
+  }
+
+  setTool(kind) { this.tool = kind; this.#mountTool(); }
 
   /** A clip fitted to this skeleton, made once. */
   #clip(name) {
@@ -143,6 +187,7 @@ export class Character {
   setFirstPerson(on) {
     this.firstPerson = on;
     this.fallback?.setFirstPerson(on);
+    if (this.toolObj) this.toolObj.visible = !on;
     this.group?.traverse((o) => {
       if (!o.isMesh) return;
       for (const m of [].concat(o.material)) { m.colorWrite = !on; m.depthWrite = !on; }
@@ -171,7 +216,7 @@ export class Character {
    * when the target is behind or the body is busy.
    */
   #look(dt, h) {
-    if (!this.head || !this.neck) return;
+    if (!this.head || !this.neck || !this.cur) return;   // the turn is added on top of a clip's pose; with no clip driving the bones it would pile up every frame
     const t = h.lookAt, busy = h.action || h.mode !== 'walk' || h.stance !== 'stand' || !h.grounded || this.vs > 0.7;
     let yaw = 0, pitch = 0, on = 0;
     if (t && !busy) {
@@ -232,8 +277,8 @@ export class Character {
     if (h.action) {
       const clip = ACTION_CLIP[h.action.kind], src = L.get(clip);
       if (!src) return null;
-      const from = ACTION_FROM[h.action.kind] || 0;
-      return { key: `act${h.action.id}`, clip, loop: false, at: src.duration * from, rate: src.duration * (1 - from) / h.action.dur, fade: h.action.kind.startsWith('hit') ? 0.05 : h.action.kind === 'climbOut' ? 0.3 : 0.1 };
+      const [from, to] = ACTION_SPAN[h.action.kind] || [0, 1];
+      return { key: `act${h.action.id}`, clip, loop: false, at: src.duration * from, rate: src.duration * (to - from) / h.action.dur, fade: h.action.kind.startsWith('hit') ? 0.05 : h.action.kind === 'climbOut' ? 0.3 : 0.1 };
     }
 
     if (air) {
@@ -245,6 +290,9 @@ export class Character {
     }
     if (h.recover > 0) return { key: 'land', clip: 'Falling To Landing', loop: false, at: 0.42, rate: 1.3, fade: 0.06 };
     if (h.sliding) return { key: 'slide', clip: 'Slipping', loop: false, hold: 0.55, fade: 0.2 };
+
+    if (h.load) return { key: 'carry', clip: 'Carrying', rate: v < 0.3 ? 0 : rate('Carrying', 0.6, 1.6), fade: 0.3, live: true };
+    if (h.pushing && v > 0.12) return { key: 'push', clip: 'Pushing', rate: rate('Pushing', 0.5, 1.5), fade: 0.2, live: true };
 
     // getting up from lying down plays the sit-up
     if (this.prevStance === 'prone' && h.stance !== 'prone') this.getup = 1.3;

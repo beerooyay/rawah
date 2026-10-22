@@ -18,7 +18,7 @@ const PAD = {
   8: 'KeyM',       // Back: map
   9: 'Escape',     // Start: pause
   10: 'ShiftLeft', // L3: hike fast
-  11: 'KeyV',      // R3: camera
+  11: 'KeyT',      // R3: tool (hands, axe, machete)
   12: 'KeyG',      // D-pad up: stomp
   13: 'KeyX',      // D-pad down: crouch, then lie down, then stand
   14: 'KeyQ',      // D-pad left: punch
@@ -180,6 +180,7 @@ export class Input {
       <div class="t-top">
         <button data-code="KeyL">Lamp</button>
         <button data-code="KeyV">Cam</button>
+        <button data-code="KeyT">Tool</button>
         <button data-code="KeyM">Map</button>
         <button data-code="Escape">❚❚</button>
       </div>`;

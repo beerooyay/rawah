@@ -20,12 +20,11 @@ import { rockGeometries, rockMaterial } from './rocks.js';
 const TILE_M = 232;        // tile side in metres
 const SPACING = 3.9;       // metres between placement candidates
 const FORM = 5;            // rock formation cells per tile side
-const REFILL_M = 10;       // move this far before refilling instances
+const REFILL_M = 14;       // move this far before refilling instances
 const TREES = ['spruce', 'fir', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
 const ROCKS = ['boulder', 'slab', 'tooth'];
 const KINDS = [...TREES, ...ROCKS, 'log'];
 const CAP = { spruce: 4000, fir: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, log: 4000 };
-const IMP_CAP = 240000;
 const SAPLING = 0.4;       // scale under this is an understory sapling: only drawn close up, never an impostor, no trunk to bump
 // per rock shape, in units of its scale: how far its base sits below the origin, how tall it stands, how wide its footprint
 const BOT = { boulder: 0.4, slab: 0.1, tooth: 1.5 };
@@ -34,14 +33,24 @@ const FOOT = { boulder: 0.85, slab: 1.2, tooth: 0.5 };
 const TILT = { boulder: 1, slab: 2.2, tooth: 0.5 };
 const SEE = [[0.5, 70], [1, 150], [2, 280], [Infinity, 520]];   // [scale up to, metres you can see it from]
 
+export { TREES, ROCKS, SAPLING, BOT, FOOT, TOP };
 const fract = (v) => v - Math.floor(v);
+/** Identity of a placed thing: placement is deterministic, so where it stands names it. */
+export const itemKey = (kind, x, z) => `${kind}:${x.toFixed(2)}:${z.toFixed(2)}`;
+/** The lean, yaw and squash every rock gets from its one random number. */
+export function rockPose(kind, s, r, q = new THREE.Quaternion(), scale = new THREE.Vector3()) {
+  const lean = 0.35 * TILT[kind];
+  q.setFromEuler(_e.set((fract(r * 47.1) - 0.5) * lean, r * Math.PI * 2, (fract(r * 71.9) - 0.5) * lean, 'YXZ'));
+  scale.set(s * (0.85 + fract(r * 13.7) * 0.5), s, s * (0.85 + fract(r * 29.3) * 0.5));
+  return { q, scale };
+}
 const smoothstepFine = (v) => { const t = Math.min(1, Math.max(0, (v - 0.5) / 0.3)); return t * t * (3 - 2 * t); };
 const rngFor = (i, j) => rng(Math.floor(hash2(i, j, 47) * 4294967295));
 const _g = { x: 0, z: 0 };
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 
 export class Flora {
-  constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096 } = {}, leaves = 'autumn') {
+  constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096, cap = 240000 } = {}, leaves = 'autumn') {
     this.world = world;
     this.cardR = card;          // full trees inside this radius
     this.radius = radius;       // impostors out to here
@@ -85,13 +94,17 @@ export class Flora {
     };
     for (const kind of ROCKS) this.meshes[kind] = rocks[kind].map((geo) => make(kind, geo, stone));
     this.meshes.log = [make('log', log, wood)];
-    const ig = impostorGeometry(IMP_CAP);
-    this.imp = new THREE.InstancedMesh(ig, impostorMaterial(this.impostors.texture, this.uniforms), IMP_CAP);
+    this.impCap = cap;
+    const ig = impostorGeometry(cap);
+    this.imp = new THREE.InstancedMesh(ig, impostorMaterial(this.impostors.texture, this.uniforms), cap);
     this.imp.setColorAt(0, new THREE.Color());
     this.imp.count = 0;
     this.imp.frustumCulled = false;
     this.group.add(this.imp);
 
+    this.removed = new Set();   // keys of trees and rocks that were felled, picked up or pushed loose
+    this.props = null;          // props.js, which wants a say in who stands where
+    this.depth = depth;
     this.tile = Math.max(8, Math.round(TILE_M / world.cell));
     this.nt = Math.ceil(world.N / this.tile);
     this.tiles = new Map();
@@ -175,7 +188,7 @@ export class Flora {
         y = e + (BOT[kind] - 0.1 - Math.min(1.1, Math.hypot(g.x, g.z)) * 0.4) * s;
       } else y = base + (BOT[kind] - 0.1) * s;
       if (s >= 0.9) blocks.push(x, z, FOOT[kind] * s);
-      if (inside(x, z) && (base !== null || free(x, z, e, 1.2))) {
+      if (inside(x, z) && (base !== null || free(x, z, e, 1.2)) && !this.#gone(kind, x, z)) {
         items[kind].push(x, y, z, s, r);
         if (s >= 0.6) solids.push(x, z, FOOT[kind] * s * 0.9, y + TOP[kind] * s);
       }
@@ -284,7 +297,7 @@ export class Flora {
           if (!bad) {
             const s = kind === 'krumm' || kind === 'willow' ? 0.7 + hash2(gi, gj, 5) * 0.7
               : 0.62 + hash2(gi, gj, 5) * 0.55 - Math.max(0, e - tl + 120) / 450;
-            if (s >= 0.35) {
+            if (s >= 0.35 && !this.#gone(kind, x, z)) {
               items[kind].push(x, e, z, s, hash2(gi, gj, 6));
               if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.2 : 0.3) * s + 0.1, Infinity);
             }
@@ -295,7 +308,7 @@ export class Flora {
           const sx = x0 + (a + r3) * SPACING, sz = z0 + (b + r2) * SPACING, se = w.height(sx, sz);
           if (free(sx, sz, se, 1) && !crowded(sx, sz, 0.5)) {
             const q = hash2(gi, gj, 10), sk = se < 3040 - fine * 80 ? 'lodgepole' : q < 0.55 ? 'fir' : 'spruce';
-            items[sk].push(sx, se, sz, 0.17 + hash2(gi, gj, 11) * 0.2, hash2(gi, gj, 13));
+            if (!this.#gone(sk, sx, sz)) items[sk].push(sx, se, sz, 0.17 + hash2(gi, gj, 11) * 0.2, hash2(gi, gj, 13));
           }
         }
       }
@@ -329,9 +342,8 @@ export class Flora {
       const k = counts.get(mesh);
       if (k >= mesh.instanceMatrix.count) return;
       counts.set(mesh, k + 1);
-      const lean = 0.35 * TILT[kind];
-      _q.setFromEuler(_e.set((fract(r * 47.1) - 0.5) * lean, r * Math.PI * 2, (fract(r * 71.9) - 0.5) * lean, 'YXZ'));
-      _m.compose(_p.set(x, y, z), _q, _s.set(s * (0.85 + fract(r * 13.7) * 0.5), s, s * (0.85 + fract(r * 29.3) * 0.5)));
+      rockPose(kind, s, r, _q, _s);
+      _m.compose(_p.set(x, y, z), _q, _s);
       _m.toArray(mesh.instanceMatrix.array, k * 16);
       shade(mesh, k, 0.9 + r * 0.2);
     };
@@ -359,7 +371,7 @@ export class Flora {
           if (d < this.cardR) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
           // far forest thins out progressively; the fog hides the difference
           const keep = d < this.thin * 0.5 ? 1 : d < this.thin ? 0.7 : 0.4;
-          if (d > this.radius || fract(r * 3.77) > keep || ni >= IMP_CAP) continue;
+          if (d > this.radius || fract(r * 3.77) > keep || ni >= this.impCap) continue;
           const c = cells[kind][vi];
           writeMatrix(im, ni, x, e - 0.15, z, c.w * s, c.h * s, c.w * s, rot);
           ic[ni * 3] = v; ic[ni * 3 + 1] = v; ic[ni * 3 + 2] = v;
@@ -377,6 +389,91 @@ export class Flora {
     imp.instanceMatrix.needsUpdate = true;
     imp.instanceColor.needsUpdate = true;
     imp.geometry.attributes.aCell.needsUpdate = true;
+  }
+
+  #gone(kind, x, z) { return this.removed.size > 0 && this.removed.has(itemKey(kind, x, z)); }
+
+  /**
+   * The nearest placed thing of `kinds` whose centre is within `reach` of (x, z),
+   * as a handle for `take`. `ok(kind, scale, y, x, z)` can rule candidates out.
+   */
+  find(x, z, reach, kinds, ok = null) {
+    const w = this.world, size = this.tile * w.cell;
+    const ci = Math.floor((x + w.half) / size), cj = Math.floor((z + w.half) / size);
+    let best = null, bd = reach;
+    for (let j = cj - 1; j <= cj + 1; j++) {
+      for (let i = ci - 1; i <= ci + 1; i++) {
+        const tile = this.tiles.get(j * this.nt + i);
+        if (!tile) continue;
+        for (const kind of kinds) {
+          const list = tile.items[kind], variants = this.meshes[kind].length;
+          for (let k = 0; k < list.length; k += 5) {
+            const d = Math.hypot(list[k] - x, list[k + 2] - z);
+            if (d >= bd || (ok && !ok(kind, list[k + 3], list[k + 1], list[k], list[k + 2]))) continue;
+            const r = list[k + 4];
+            bd = d;
+            best = { tile, kind, k, x: list[k], e: list[k + 1], z: list[k + 2], s: list[k + 3], r, d, variant: Math.floor(fract(r * (ROCKS.includes(kind) ? 5.77 : 7.31)) * variants) };
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Remove a thing `find` returned from the world for good (it is remembered in `removed`). */
+  take(h) {
+    h.tile.items[h.kind].splice(h.k, 5);
+    this.removed.add(itemKey(h.kind, h.x, h.z));
+    const s = h.tile.solids;
+    for (let k = 0; k < s.length; k += 4) {
+      if (Math.abs(s[k] - h.x) < 0.01 && Math.abs(s[k + 1] - h.z) < 0.01) {
+        const rest = new Float32Array(s.length - 4);
+        rest.set(s.subarray(0, k)); rest.set(s.subarray(k + 4), k);
+        h.tile.solids = rest;
+        break;
+      }
+    }
+    this.dirty = true;
+  }
+
+  /** Apply `removed` to tiles that were built before it was loaded (a loaded save). */
+  sweep() {
+    for (const tile of this.tiles.values()) {
+      for (const kind of KINDS) {
+        const list = tile.items[kind], keep = [];
+        for (let k = 0; k < list.length; k += 5) if (!this.#gone(kind, list[k], list[k + 2])) keep.push(list[k], list[k + 1], list[k + 2], list[k + 3], list[k + 4]);
+        tile.items[kind] = keep;
+      }
+      const s = tile.solids, keep = [];
+      for (let k = 0; k < s.length; k += 4) {
+        const x = s[k], z = s[k + 1];
+        if (!TREES.concat(ROCKS).some((kind) => this.#gone(kind, x, z))) keep.push(s[k], s[k + 1], s[k + 2], s[k + 3]);
+      }
+      tile.solids = new Float32Array(keep);
+    }
+    this.dirty = true;
+  }
+
+  /** Where a freshly freed rock rests: the sunk-in height populate gave it, or null if it was stacked on another rock. */
+  restY(kind, x, z, s, y) {
+    const g = this.world.gradient(x, z, _g);
+    const y0 = this.world.height(x, z) + (BOT[kind] - 0.1 - Math.min(1.1, Math.hypot(g.x, g.z)) * 0.4) * s;
+    return Math.abs(y - y0) < 0.3 ? y0 : null;
+  }
+
+  /** Geometry and material of a rock variant, for one that moves. */
+  rockParts(kind, vi) { const m = this.meshes[kind][vi]; return { geometry: m.geometry, material: m.material }; }
+
+  /** A single-instance copy of a tree variant, for one that is falling or lying down. Returns the mesh and the tree's height. */
+  treeMesh(kind, vi, shade = 1) {
+    const src = this.meshes[kind][vi];
+    const m = new THREE.InstancedMesh(src.geometry, src.material, 1);
+    m.setColorAt(0, new THREE.Color(shade, shade * 0.99, shade * 0.96));
+    m.frustumCulled = false;
+    m.castShadow = true; m.receiveShadow = true;
+    m.customDepthMaterial = this.depth;
+    if (!src.geometry.boundingBox) src.geometry.computeBoundingBox();
+    return { mesh: m, height: src.geometry.boundingBox.max.y };
   }
 
   /** Push a circle of radius r out of trunks and boulders; returns ground lift from boulder tops. */
@@ -408,6 +505,7 @@ export class Flora {
         }
       }
     }
+    if (this.props) ground = Math.max(ground, this.props.collide(p, r, feetY));
     return ground;
   }
 

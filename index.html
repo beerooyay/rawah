@@ -52,6 +52,7 @@
       <div class="bar hidden" id="bar-grip"><label>Grip</label><b><i></i></b></div>
     </div>
 
+    <div id="keys"></div>
     <div id="hint" class="hidden"></div>
     <div id="toasts"></div>
     <div id="discovery"><div class="d-kicker">Discovered</div><div class="d-title"></div><div class="d-sub"></div></div>
@@ -103,6 +104,11 @@
         Follow the real trails to the lakes, stand on the summits, and make camp before dark.</p>
 
       <div class="field">
+        <div class="field-label">Playing as</div>
+        <div id="char-chips" class="chips" role="radiogroup" aria-label="Playing as"></div>
+      </div>
+
+      <div class="field">
         <div class="field-label">Season</div>
         <div id="season-chips" class="chips" role="radiogroup" aria-label="Season"></div>
         <div id="season-note" class="note"></div>
@@ -142,6 +148,7 @@
       <section class="panel hidden" data-panel="settings">
         <div id="settings">
           <h4>World</h4>
+          <label class="row"><span>Playing as</span><select id="set-character"></select></label>
           <label class="row"><span>Season</span><select id="set-season"></select></label>
           <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
           <label class="row"><span>Time speed</span><input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>

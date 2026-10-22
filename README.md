@@ -27,10 +27,11 @@ Any static server works. ES modules need HTTP, not `file://`.
 | Shift | Hike fast at about 4.5 m/s (uses stamina) |
 | Space | Hop. Hiking fast, it throws a front flip (higher, costs more stamina). Crouched or lying, it stands you up. While climbing, lunge up (uses grip) |
 | X | Crouch, then lie down, then stand. Each is slower and quieter than the last |
-| Q or left click | Punch. Chain three in a row for a combo |
+| Q or left click | Punch. Chain three in a row for a combo. With a tool in hand it swings the tool; carrying a stone it throws it |
 | R or right click | Hook |
 | G | Stomp |
-| E | Grab a rock face too steep to walk, or let go |
+| E | Pick up or put down a small stone; otherwise grab a rock face too steep to walk, or let go |
+| T | Tool: bare hands, axe, machete |
 | C | Pitch the tent (flat ground, 200 ft from lakes, off the trail) or pack it up |
 | F | Light a campfire at camp (below treeline only), or put it out |
 | Z | Sleep at the tent until morning. Hold it elsewhere to sit and rest |
@@ -50,6 +51,7 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 | B | Grab rock or let go |
 | X | Pitch or pack the tent |
 | Y | First or third person |
+| R3 | Tool (hands, axe, machete) |
 | RB | Campfire |
 | LB | Headlamp |
 | LT | Rest (sleep at the tent) |
@@ -58,6 +60,20 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 | Menu | Pause |
 
 In menus the D-pad or left stick moves, A selects, left and right change sliders and dropdowns, and B goes back. The pad rumbles when lightning strikes close.
+
+### Axe, machete and stones
+
+Press **T** to take out an axe or a machete (the small key strip at the bottom right always shows the view, tool, map and menu keys). Click to swing; the hint at the bottom says when a tree is in reach.
+
+- **Trees:** every tree can be cut. An axe takes about twenty swings on a mature tree (more for a fat spruce, fewer for a snag or an aspen). A machete is a long job on a big trunk, but clears saplings, willow and krummholz in a few cuts. A tree that goes over falls away from you, lies where it lands, and leaves a stump. Stand clear when it starts to lean.
+- **Small stones** can be picked up with **E** and put down with **E**, or thrown with a click. Carrying one slows you and stops you running.
+- **Boulders** a little bigger than that can't be lifted but can be pushed: walk into one and it gives way, slower the heavier it is. The biggest rocks are part of the mountain.
+
+Felled trees, stumps and every stone you move are kept in your save.
+
+### Playing as
+
+The title screen and Settings both let you choose Blaize, Grant or Corey; the other two walk with you. Changing it reloads, and Continue picks up your save as the new hiker.
 
 ### Map and quick travel
 
@@ -172,6 +188,10 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
   - Shadows redraw every other frame.
   - Adaptive resolution trades pixels for frame rate, between 60% and 100% of the quality preset.
 - **Sky and weather:** a cloud deck at 4,700 m is drawn from tiling noise. It's lit from the sun's side, with silver linings toward the sun and dark, thick bases in storms. The same density function shades the ground below, along the sun's ray, so cloud shadows are where the clouds are. Rain and snow are GPU particles placed from `gl_InstanceID` in a box that wraps around the camera, in world space.
+- **Distance:**
+  - Tree impostors reach about 1.9 km on high (1.5 km medium), thinning with range.
+  - Beyond them the terrain paints a canopy: crown-sized noise up close, groves and gaps further out, only where the land cover or the satellite colour says forest (`ALBEDO` in `src/terrain.js`). The fine octaves fade out on their own with mipmapping.
+  - Valley haze (`uValley` in `src/atmosphere.js`) adds fog that pools in low air and thins with height, so ridges stack in layers. It is heaviest at dawn and burns off by midmorning.
 - **Camera** has two modes. First person rides a spring over the ground, and the head motion follows the stride: a dip at each footfall, sway from foot to foot, roll into strafes, a lean and wider FOV at speed, a dip when you land, and breathing. Third person is a shoulder-offset orbit that pulls in to stay out of the hillside, following a placeholder hiker. In first person that hiker still casts your shadow.
 
 ## Code map
@@ -186,6 +206,8 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 | `src/trees.js` | Painted foliage atlas, procedural tree meshes, impostor baking, and wind |
 | `src/flora.js` | Placement tiles from satellite land cover (species by elevation, aspect and wet ground; thickets, saplings, rock formations), per-instance LOD refills, and collision |
 | `src/companions.js` | The two friends you are not playing: they follow you and sometimes chat, sit or spar together |
+| `src/props.js` | Tool swings and tree felling (falling and lying trees, stumps, chips), carrying, pushing and throwing rocks, and what a save keeps of it |
+| `src/tools.js` | The axe and machete models |
 | `src/rocks.js` | Faceted granite boulders, slabs and spires with painted banding and lichen |
 | `src/features.js` | Lakes, streams, trail ribbons, cairns, signs, and the car |
 | `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, clouds, lights and fog |

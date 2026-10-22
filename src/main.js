@@ -15,6 +15,8 @@ import { Input } from './input.js';
 import { CameraRig } from './camera.js';
 import { Character, CHARACTERS } from './character.js';
 import { Party } from './companions.js';
+import { Props } from './props.js';
+import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
@@ -129,9 +131,12 @@ const playerName = CHARACTERS[charParam] ? charParam : CHARACTERS[settings.chara
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
 const rig = new CameraRig(camera, world, hiker, avatar);
+const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
 const hud = new Hud(world);
 const map = new GameMap(world);
 const audio = new Audio();
+props.hud = hud; props.audio = audio;
+party.onSwing = (x, y, z, nx, nz) => props.swingFx(x, y, z, nx, nz);
 setLoad(0.85, 'Drawing the map…');
 await frame();
 map.build(world.colorImage);
@@ -161,7 +166,7 @@ function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(),
+    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -175,6 +180,7 @@ function restore() {
   hiker.stamina = s.stamina ?? 100; hiker.warmth = s.warmth ?? 100;
   camp.load(s.camp);
   weather.load(s.weather);
+  props.load(s.props);
   return true;
 }
 
@@ -193,6 +199,7 @@ input.onPress = (code) => {
   if (code === 'Escape' && map.open) { toggleMap(); return; }
   if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
   if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
+  if (code === 'KeyT' && !state.paused && !map.open) props.cycleTool();
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
@@ -302,15 +309,15 @@ function renderControls(el) {
   const col = (title, rows) => `<div><h4>${title}</h4><dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl></div>`;
   el.innerHTML = [
     col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop · flip when hiking fast'],
-      [k('X'), 'Crouch, lie down, stand'], [k('Q') + ' ' + t('Click'), 'Punch (chain three for a combo)'], [k('R') + ' ' + t('Right click'), 'Hook'], [k('G'), 'Stomp'],
-      [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
+      [k('X'), 'Crouch, lie down, stand'], [k('Q') + ' ' + t('Click'), 'Punch (chain three), or swing the tool'], [k('R') + ' ' + t('Right click'), 'Hook'], [k('G'), 'Stomp'],
+      [k('E'), 'Pick up / put down a stone · grab a rock face'], [k('T'), 'Tool: hands, axe, machete'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
       [k('L'), 'Headlamp'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
-    col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
+    col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up stone / grab rock / let go'], [p('R3'), 'Tool'],
       [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('Y', 'y'), 'Camera'],
       [p('D-pad'), 'Down crouch · left punch · right hook · up stomp'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
-    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Duck') + t('Punch'), 'Crouch, punch'], [t('Fast'), 'Toggle hiking fast'],
-      [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
+    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Duck') + t('Punch'), 'Crouch, punch / swing / throw'], [t('Fast'), 'Toggle hiking fast'],
+      [t('Tool'), 'Hands, axe, machete'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
   ].join('');
 }
 function openControls() { renderControls($('controls-title')); $('controls-sheet').classList.remove('hidden'); }
@@ -325,6 +332,7 @@ function begin(fresh) {
     Object.assign(state, { hour: 7.25, day: 1, km: 0 });
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
+    props.reset();
     weather.load({ seed: (Math.random() * 1e9) | 0 });
     spawnAtCar();
   } else restore();
@@ -343,7 +351,7 @@ function begin(fresh) {
   if (fresh) {
     const hello = `${trailhead.name} · ${ft(hiker.pos.y)} ft. Twin Crater Lakes are up the West Branch and Rawah trails.`;
     setTimeout(() => hud.toast(hello), 600);
-    setTimeout(() => hud.toast('[M] map · [C] camp · [F] fire · [Z] sleep · [E] climb'), 5200);
+    setTimeout(() => hud.toast('[V] first / third person · [T] axe · [M] map · [C] camp'), 5200);
   }
 }
 
@@ -380,6 +388,31 @@ for (const [key, sz] of Object.entries(SEASONS)) {
   opt.value = key; opt.textContent = sz.label;
   $('set-season').appendChild(opt);
 }
+// who you play as: the other two walk with you. Changing it reloads (the party is built at boot); Continue picks up your save as the new hiker
+function setCharacter(name) {
+  if (name === playerName) return;
+  settings.character = name;
+  storeJSON('rawah-settings', settings);
+  if (state.started) save();
+  $('loading').classList.remove('hidden');
+  $('load-text').textContent = `Switching to ${cap(name)}…`;
+  const url = new URL(location.href);
+  url.searchParams.delete('char');
+  location.href = url.href;
+}
+const cap = (n) => n[0].toUpperCase() + n.slice(1);
+for (const name of Object.keys(CHARACTERS)) {
+  const chip = document.createElement('button');
+  chip.className = `chip${name === playerName ? ' on' : ''}`;
+  chip.textContent = cap(name);
+  chip.onclick = () => setCharacter(name);
+  $('char-chips').appendChild(chip);
+  const opt = document.createElement('option');
+  opt.value = name; opt.textContent = cap(name);
+  $('set-character').appendChild(opt);
+}
+$('set-character').value = playerName;
+$('set-character').onchange = () => setCharacter($('set-character').value);
 $('season-note').textContent = SEASONS[settings.season].label.split(' · ')[1];
 $('set-season').value = settings.season;
 $('set-season').onchange = () => setSeason($('set-season').value);
@@ -720,6 +753,7 @@ setLoad(1, 'Ready');
 $('loading').classList.add('hidden');
 $('title').classList.remove('hidden');
 
+
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
@@ -741,9 +775,10 @@ function tick(dt, draw = true) {
   if (!live) ctl.move.set(0, 0);
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
-  ctl.grab = live && pressed.has('KeyE');
+  ctl.grab = live && pressed.has('KeyE') && !props.interact();
   ctl.crouch = live && pressed.has('KeyX');
   ctl.punch = live && (pressed.has('KeyQ') || pressed.has('Mouse0'));
+  if (ctl.punch && props.throwStone()) ctl.punch = false;
   ctl.hook = live && (pressed.has('KeyR') || pressed.has('Mouse2'));
   ctl.stomp = live && pressed.has('KeyG');
 
@@ -763,6 +798,7 @@ function tick(dt, draw = true) {
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
       else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); }
       else if (e.type === 'grab') audio.step('rock', 2);
+      else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'fall') {
         if (e.severe) rescue(e.why);
@@ -786,6 +822,7 @@ function tick(dt, draw = true) {
   input.endFrame();
 
   avatar.update(dt, hiker);
+  props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
   const zoom = input.takeWheel();
   let focus = p;
@@ -813,6 +850,8 @@ function tick(dt, draw = true) {
   atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
   atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
   atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
+  // cold air pools in the valleys at dawn and burns off by midmorning
+  atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
   sky.update(state.hour, eye, focus, t, weather);
   // snow underfoot bounces light back up into the shadows
   const onSnow = atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, p.y);
@@ -858,7 +897,7 @@ function tick(dt, draw = true) {
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
       hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '']
       .filter(Boolean).join(' · ');
-    let hint = hiker.hint;
+    let hint = hiker.hint || props.hint;
     if (!hint && camp.near(p, 'tent', 4.5)) hint = state.hour >= 19 || state.hour < 5 ? '[Z] sleep until morning · [F] fire · [C] pack up' : '[Z] nap · [F] fire · [C] pack up';
     if (!hint && sky.light < 0.35 && !camp.tent && hiker.mode === 'walk') hint = 'Getting dark — find flat ground away from water and [C] make camp';
     if (!hint && sky.light < 0.2 && !state.lamp) hint = '[L] headlamp';
@@ -874,7 +913,7 @@ function tick(dt, draw = true) {
       yaw: hiker.yaw, place, sub, elev: p.y, night: sky.sunDir.y < -0.03, coords: latLon(p),
       clock: `${calendar.dateLabel} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
-      hint, injured: hiker.injured > 0, status,
+      hint, injured: hiker.injured > 0, status, tool: hiker.tool === 'fists' ? '' : TOOL_NAME[hiker.tool],
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
       lakesFound: found, lakesTotal: lakeNames.length,
       friends: party.actors.map((a) => ({ name: a.name[0].toUpperCase() + a.name.slice(1), x: a.x, z: a.z })), km: state.km,
@@ -925,7 +964,7 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save, rig, avatar, party, input,
+    begin, tick, save, rig, avatar, party, input, props,
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },

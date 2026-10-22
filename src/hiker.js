@@ -28,6 +28,8 @@ export const ACTIONS = {
   combo: { dur: 1.15, hits: [0.22, 0.5, 0.85], slow: 0.2, cost: 8 },
   hook: { dur: 0.85, hits: [0.4], slow: 0.25, cost: 6 },
   stomp: { dur: 0.9, hits: [0.45], slow: 0.2, cost: 4 },
+  chop: { dur: 1.1, hits: [0.4], slow: 0.12, cost: 3.5 },      // an axe swing; props.js decides what it hits
+  slash: { dur: 0.9, hits: [0.4], slow: 0.2, cost: 2.5 },      // a machete swing
   hitSide: { dur: 1.1, hits: [], slow: 0 },
   hitKidney: { dur: 0.9, hits: [], slow: 0 },
   hitHead: { dur: 0.7, hits: [], slow: 0.1 },
@@ -61,6 +63,9 @@ export class Hiker {
     this.swimT = 0; this.exitCool = 0;   // s spent swimming; s before the next climb-out can play
     this.action = null;               // { id, kind, t, dur, ... } while punching or reeling
     this.lastKind = ''; this.chainT = 0; this.actionId = 0;
+    this.tool = 'fists';              // what is in hand: fists, axe or machete (props.js sets it)
+    this.load = 0;                    // 1 while carrying a stone
+    this.pushing = false;             // shoving a boulder
   }
 
   place(x, z, yaw = this.yaw) {
@@ -133,9 +138,10 @@ export class Hiker {
     this.swimT = this.mode === 'swim' ? this.swimT + dt : 0;
 
     const winded = this.stamina < 2;
-    const sprinting = inp.sprint && this.stance === 'stand' && !this.action && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
+    const sprinting = inp.sprint && !this.load && this.stance === 'stand' && !this.action && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
     let speed = this.mode === 'swim' ? 1.2 : sprinting ? 4.5 : winded ? 1.8 : 2.5;
     if (this.injured > 0) speed *= 0.55;
+    if (this.load) speed *= 0.72;
     if (depth > 0.15 && this.mode === 'walk') speed *= 0.6;
     if (this.mode === 'walk') {
       speed *= STANCE[this.stance].speed * (this.action ? this.action.slow : 1) * (this.recover > 0 ? 0.3 : 1) * (this.stanceLock > 0.3 ? 0.2 : 1);
@@ -363,7 +369,7 @@ export class Hiker {
       }
     } else if (this.chainT > 0) this.chainT -= dt;
 
-    const want = inp.punch ? 'punch' : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
+    const want = this.load ? '' : inp.punch ? (this.tool === 'axe' ? 'chop' : this.tool === 'machete' ? 'slash' : 'punch') : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
     if (!want || this.action || this.mode !== 'walk' || !this.grounded || this.stance !== 'stand' || this.stanceLock > 0 || this.stamina < 4) return;
     let kind = want;
     if (want === 'punch') kind = this.chainT > 0 && this.lastKind === 'jab' ? 'cross' : this.chainT > 0 && this.lastKind === 'cross' ? 'combo' : 'jab';

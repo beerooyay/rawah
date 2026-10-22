@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Character, CHARACTERS } from './character.js';
 import { ACTIONS } from './hiker.js';
 import { clamp } from './noise.js';
+import { TREES } from './flora.js';
 
 // The other two friends. Whoever you are not playing as walks with you, close
 // enough to be company, and every so often the pair stops and does something
@@ -114,6 +115,8 @@ export class Party {
     this.placed = false;
     this.mode = 'follow'; this.t = 0; this.next = between(18, 30);
     this.duo = null;
+    this.work = null;             // one friend with an axe at a tree while the other walks with you
+    this.onSwing = null;          // called with (x, y, z, nx, nz) when a friend's blow lands
   }
 
   /** Put both behind the player, on ground they can stand on. */
@@ -149,6 +152,7 @@ export class Party {
   // ------------------------------------------------------------ walking with you
   follow(dt, pl, speed) {
     this.actors.forEach((a, i) => {
+      if (this.work && this.work.a === a) return;
       const ang = this.dir + Math.PI + (i ? 0.9 : -0.9), r = 4.5 + i * 2.2, [fx, fz] = fwd(ang);
       const tx = pl.pos.x + fx * r, tz = pl.pos.z + fz * r, d = Math.hypot(tx - a.x, tz - a.z);
       const top = d > 25 ? RUN : d > 12 ? JOG : d > 5 ? Math.max(JOG * 0.7, speed) : Math.max(WALK, speed * 0.95);
@@ -162,10 +166,56 @@ export class Party {
       if (a.stuck > 5) { this.rejoin(a, pl, i); a.stuck = 0; }
     });
     this.separate(pl);
+    if (this.work) this.working(dt, pl);
     this.next -= dt;
     const calm = pl.mode === 'walk' && pl.grounded && !pl.action;
     const close = this.actors.every((a) => Math.hypot(a.x - pl.pos.x, a.z - pl.pos.z) < 22);
-    if (this.next <= 0 && calm && close) this.startDuo(pl);
+    if (this.next <= 0 && calm && close && !this.work) {
+      if (Math.random() < 0.4 && this.startWork(pl)) this.next = between(30, 60);
+      else this.startDuo(pl);
+    }
+  }
+
+  /** One friend takes the axe to a tree a little way off, for a dozen swings. */
+  startWork(pl) {
+    const tree = this.flora.find(pl.pos.x, pl.pos.z, 24, TREES, (k, s, y, x, z) => s >= 0.5 && Math.hypot(x - pl.pos.x, z - pl.pos.z) >= 5);
+    if (!tree) return false;
+    const a = pick(this.actors), dx = tree.x - a.x, dz = tree.z - a.z, d = Math.hypot(dx, dz) || 1;
+    const spot = [tree.x - dx / d * 1.25, tree.z - dz / d * 1.25];
+    if (!a.passable(spot[0], spot[1])) return false;
+    this.work = { a, tree, spot, swings: 0, max: 6 + Math.floor(Math.random() * 6), beat: 0.5, hit: 0, armed: false };
+    return true;
+  }
+
+  working(dt, pl) {
+    const w = this.work, a = w.a;
+    if (Math.hypot(w.tree.x - pl.pos.x, w.tree.z - pl.pos.z) > 60 || pl.mode === 'swim') { this.endWork(); return; }
+    a.b.emote = ''; a.b.lookAt = null;
+    if (a.goto(w.spot[0], w.spot[1], JOG, 0.15, dt) > 0.5) { a.b.face = false; return; }
+    a.stop();
+    a.face(w.tree.x, w.tree.z);
+    if (!w.armed) { w.armed = true; a.char.setTool('axe'); }
+    if (w.hit > 0) {
+      w.hit -= dt;
+      if (w.hit <= 0) {
+        const nx = a.x - w.tree.x, nz = a.z - w.tree.z, m = Math.hypot(nx, nz) || 1;
+        this.onSwing?.(w.tree.x + nx / m * 0.3, w.tree.e + 1.1, w.tree.z + nz / m * 0.3, nx / m, nz / m);
+      }
+    }
+    w.beat -= dt;
+    if (w.beat > 0 || a.b.action) return;
+    a.start('chop');
+    w.hit = ACTIONS.chop.hits[0];
+    w.beat = 1.5 + Math.random() * 0.5;
+    if (++w.swings >= w.max) w.beat = 99;
+    if (w.swings >= w.max) setTimeout(() => { if (this.work === w) this.endWork(); }, 1200);
+  }
+
+  endWork() {
+    const w = this.work;
+    if (!w) return;
+    w.a.char.setTool('fists'); w.a.b.face = false; w.a.b.action = null;
+    this.work = null;
   }
 
   /** Put one friend back behind you on ground they can stand on. */
@@ -278,6 +328,7 @@ export class Party {
   }
 
   endDuo() {
+    this.endWork();
     for (const a of this.actors) { a.b.face = false; a.b.emote = ''; a.b.resting = false; a.b.action = null; a.b.lookAt = null; }
     this.duo = null; this.mode = 'follow'; this.t = 0; this.next = between(30, 70);
   }

@@ -24,6 +24,7 @@ export const EXTRA = [
   'Swimming To Edge', 'Wiping Sweat', 'Searching Pockets', 'Swatting Bugs', 'Climbing', 'Slipping',
   'Punching', 'Punching (1)', 'Punch Combo', 'Hook', 'Stomp',
   'Big Side Hit', 'Kidney Hit', 'Light Hit To Head', 'Receiving An Uppercut', 'Receive Uppercut To The Face',
+  'Carrying', 'Pushing', 'Stable Sword Outward Slash',
 ];
 
 // per-clip fixes. `cap` limits hip height so a jump the controller already
@@ -64,12 +65,34 @@ function restOf(group) {
   const rest = new Map();
   group.traverse((o) => {
     if (!o.isBone) return;
-    rest.set(o.name, { parent: o.parent?.isBone ? o.parent.name : null, wq: o.getWorldQuaternion(new THREE.Quaternion()), lq: o.quaternion.clone(), hips: o.position.y });
+    rest.set(o.name, { parent: o.parent?.isBone ? o.parent.name : null, wq: o.getWorldQuaternion(new THREE.Quaternion()), lq: o.quaternion.clone(), hips: o.position.y, wp: o.getWorldPosition(new THREE.Vector3()) });
   });
   return rest;
 }
 
 const _a = new THREE.Quaternion(), _b = new THREE.Quaternion(), _c = new THREE.Quaternion();
+
+// the arm chain, each bone with the one it points at. The clips are authored on a straight T-pose; a rig
+// whose arms rest bent or lowered would carry that bend into every pose, so these bones are first turned
+// (about their own origin) until they point the way the clips' bones do at rest.
+const ARM_CHAIN = [['Shoulder', 'Arm'], ['Arm', 'ForeArm'], ['ForeArm', 'Hand'], ['Hand', 'HandMiddle1']];
+
+/** For each arm bone of the target, its rest orientation with the bone turned to point where the clips' bone does. */
+export function straighten(srcRest, target) {
+  const out = new Map(), pos = new Map(target.bones.map((b) => [b.name, b.wp]));
+  const d1 = new THREE.Vector3(), d2 = new THREE.Vector3();
+  for (const side of ['Left', 'Right']) {
+    for (const [a, b] of ARM_CHAIN) {
+      const na = `mixamorig${side}${a}`, nb = `mixamorig${side}${b}`;
+      const sa = srcRest.get(na)?.wp, sb = srcRest.get(nb)?.wp, ta = pos.get(na), tb = pos.get(nb);
+      const bone = target.bones.find((x) => x.name === na);
+      if (!sa || !sb || !ta || !tb || !bone) continue;
+      d1.copy(tb).sub(ta).normalize(); d2.copy(sb).sub(sa).normalize();
+      out.set(na, new THREE.Quaternion().setFromUnitVectors(d1, d2).multiply(bone.wq));
+    }
+  }
+  return out;
+}
 
 /**
  * Re-aim a clip at another skeleton. The clips store absolute local rotations
@@ -78,7 +101,7 @@ const _a = new THREE.Quaternion(), _b = new THREE.Quaternion(), _c = new THREE.Q
  * ones, which twists the body. So each bone's rotation is carried over as how
  * far it turned from rest in the world, and applied to the target's rest
  * orientation; the hips height scales with the body.
- *   target: { bones: [{ name, parent, wq }] parents first, rootQ (world rotation above the hips), hips (rest height in clip units) }
+ *   target: { bones: [{ name, parent, wq, wp }] parents first, rootQ (world rotation above the hips), hips (rest height in clip units) }
  */
 export function retarget(clip, srcRest, target) {
   const hipsQ = clip.tracks.find((t) => t.name === 'mixamorigHips.quaternion');
@@ -95,6 +118,7 @@ export function retarget(clip, srcRest, target) {
     tracks.set(t.name.slice(0, -11), v);
   }
   const sbones = [...srcRest.keys()];
+  const aligned = straighten(srcRest, target);
   const out = new Map(target.bones.map((b) => [b.name, new Float32Array(n * 4)]));
   const Ws = new Map(), Wt = new Map(), D = new Map();
   for (let i = 0; i < n; i++) {
@@ -109,7 +133,7 @@ export function retarget(clip, srcRest, target) {
     for (const b of target.bones) {
       const d = D.get(b.name) || (b.parent && D.get(b.parent)) || null;
       const pose = (Wt.get(b.name) || Wt.set(b.name, new THREE.Quaternion()).get(b.name));
-      if (d) pose.copy(d).multiply(b.wq); else pose.copy(b.wq);
+      if (d) pose.copy(d).multiply(aligned.get(b.name) || b.wq); else pose.copy(b.wq);
       const parent = b.parent ? Wt.get(b.parent) : target.rootQ;
       _c.copy(parent).invert().multiply(pose).toArray(out.get(b.name), i * 4);
     }

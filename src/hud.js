@@ -9,8 +9,8 @@ const $ = (id) => document.getElementById(id);
 const ft = (m) => Math.round(m * 3.28084).toLocaleString();
 
 // keyboard key -> [pad button, style] and touch label
-const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['Y', 'y'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], Esc: ['Menu'], Enter: ['A', 'a'] };
-const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', M: 'Map', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
+const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['Y', 'y'], T: ['R3'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], Esc: ['Menu'], Enter: ['A', 'a'] };
+const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', T: 'Tool', M: 'Map', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
 const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 /** HTML for one key in the current input mode. */
@@ -72,6 +72,8 @@ export class Hud {
     $('frost').style.opacity = clamp((35 - s.warmth) / 35, 0, 1) * 0.9;
     $('hurt').style.opacity = s.injured ? 0.35 : 0;
     this.#put('status', s.status);
+    const bar = [['V', 'View'], ['T', 'Tool'], ['M', 'Map'], ['Esc', 'Menu']].map(([k, l]) => `<span>${keyCap(k, this.mode)}${l}</span>`).join('');
+    this.#put('keys', bar + (s.tool ? `<span class="tool">${esc(s.tool)}</span>` : '') + `<!--${this.mode}-->`, true);
   }
 
   toast(text, kind = '') {

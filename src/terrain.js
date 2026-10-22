@@ -73,6 +73,17 @@ export const ALBEDO = /* glsl */ `
           albedo = mix(albedo, duff, clamp(cov.r * 1.3, 0.0, 1.0) * nearK * 0.85);
           albedo = mix(albedo, ash, clamp(cov.g * 1.2, 0.0, 1.0) * nearK * 0.6);
         }
+        // far forest: no trees are modelled out here, so paint the canopy: crowns up close, groves and gaps
+        // further out (the finer octaves mip away on their own). It fades in as the tree impostors thin and
+        // out again into the haze
+        float canopyK = smoothstep(450.0, 1500.0, camD) * (1.0 - smoothstep(12000.0, 24000.0, camD));
+        if (canopyK > 0.0) {
+          float forestW = uHasCover > 0.5 ? clamp(texture2D(uCover, vWPos.xz / uExtent + 0.5).r * 1.25, 0.0, 1.0) : smoothstep(0.12, 0.04, lumA);
+          forestW *= smoothstep(0.3, 0.6, wn.y);
+          float crowns = texture2D(uNoise, vWPos.xz / 230.0 + 0.37).r * 0.3 + texture2D(uNoise, vWPos.xz / 700.0 + 0.11).r * 0.4 + texture2D(uNoise, vWPos.xz / 2200.0 + 0.62).r * 0.3;
+          float crown = smoothstep(0.36, 0.64, crowns);
+          albedo = mix(albedo, mix(albedo * vec3(0.5, 0.56, 0.5), albedo * vec3(1.2, 1.28, 0.98), crown), canopyK * forestW * 0.95);
+        }
         // steep faces: granite strata and cracks projected sideways
         float faceK = smoothstep(0.8, 0.55, wn.y) * (1.0 - smoothstep(150.0, 900.0, camD));
         if (faceK > 0.0) {

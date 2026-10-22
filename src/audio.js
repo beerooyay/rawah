@@ -97,6 +97,14 @@ export class Audio {
     this.#burst(big ? 0.45 : 0.2, 160, 0.8, big ? 0.7 : 0.35, 'lowpass', 0, this.noise);
   }
 
+  /** A blade: `hit` false is the swing through air, true bites into wood (`small` for brush and saplings). */
+  chop(hit, small = false) {
+    if (!this.ctx) return;
+    if (!hit) { this.#burst(0.2, 1500, 0.7, 0.09); return; }
+    this.#burst(0.05, 2400, 2.5, 0.34, 'bandpass');
+    this.#burst(small ? 0.12 : 0.3, small ? 720 : 250, 0.9, small ? 0.22 : 0.5, 'lowpass', 0.012, this.noise);
+  }
+
   splash() {
     if (!this.ctx) return;
     this.#burst(0.7, 900, 0.5, 0.5);

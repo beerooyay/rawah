@@ -110,6 +110,12 @@ input[type=checkbox]:checked::after { transform: translateX(18px); background: v
 .bar.low i { background: var(--warn); animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { to { opacity: 0.4; } }
 
+#keys { position: absolute; right: 18px; bottom: 20px; display: flex; align-items: center; gap: 14px; opacity: 0.5; transition: opacity 0.4s;
+  font: 500 11.5px var(--sans); color: var(--dim); letter-spacing: 0.02em; }
+#keys span { display: inline-flex; align-items: center; gap: 6px; }
+#keys .key { font-size: 10px; }
+#keys .tool { color: var(--accent); opacity: 1; }
+@media (pointer: coarse) { #keys { display: none; } }
 #hint { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); padding: 9px 16px; border-radius: 999px;
   background: var(--glass); border: 1px solid var(--edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   font: 500 13px var(--sans); white-space: nowrap; text-shadow: none; display: flex; align-items: center; gap: 6px; }

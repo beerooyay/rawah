@@ -1,4 +1,8 @@
 tools/
 devserver.py
 AGENTS.md
-assets/characters/*/*.fbx
+assets/characters/blaize/*.fbx
+assets/characters/grant/*.fbx
+assets/characters/corey/*.fbx
+rawah-landmarks/
+.git/
