@@ -52,7 +52,9 @@ export class Input {
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
     addEventListener('mousemove', (e) => {
-      if (document.pointerLockElement !== element) return;
+      // pointer lock where the host allows it; otherwise hold a button and drag to look
+      const dragging = e.buttons && document.body.classList.contains('playing') && e.target === element;
+      if (document.pointerLockElement !== element && !dragging) return;
       this.mouse.x += e.movementX; this.mouse.y += e.movementY;
     });
     addEventListener('wheel', (e) => { this.wheel += Math.sign(e.deltaY); }, { passive: true });
