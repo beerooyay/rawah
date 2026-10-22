@@ -6,8 +6,8 @@ import { withAtmosphere } from './atmosphere.js';
 // the cutting edge toward +X, so one transform puts it in a hand (character.js)
 // and another in front of the camera (props.js).
 
-export const TOOLS = ['fists', 'axe', 'machete'];
-export const TOOL_NAME = { fists: 'Bare hands', axe: 'Axe', machete: 'Machete' };
+export const TOOLS = ['fists', 'axe', 'machete', 'mind'];
+export const TOOL_NAME = { fists: 'Bare hands', axe: 'Axe', machete: 'Machete', mind: 'Telekinesis' };
 
 let mats = null;
 function materials() {

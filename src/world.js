@@ -65,11 +65,11 @@ export class World {
     return this.h[r * N + c] * this.hScale + this.hOffset;
   }
 
-  /** Ground height: lidar plus fractal micro-relief, exactly as the terrain shader draws it. */
+  /** Ground height: lidar plus fractal micro-relief plus whatever has been sculpted, exactly as the terrain shader draws it. */
   height(x, z) {
     const base = this.baseHeight(x, z);
     const rock = this.coverAt(x, z, 3);
-    return base + relief(x, z, reliefAmp(rock, this.maskAt(x, z)), rock);
+    return base + relief(x, z, reliefAmp(rock, this.maskAt(x, z)), rock) + (this.sculpt ? this.sculpt.at(x, z) : 0);
   }
 
   /** Lidar height alone, matching the grid triangulation (quad split along the c,r to c+1,r+1 diagonal). */

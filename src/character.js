@@ -24,6 +24,14 @@ export const CHARACTERS = {
   corey: 'assets/characters/corey/corey.glb',
 };
 
+// world-space scale for the torso and arms (see #bulk); Corey has the least to start with
+const BULK = {
+  mixamorigSpine1: 1.04, mixamorigSpine2: 1.1, mixamorigNeck: 1, mixamorigHead: 1,
+  mixamorigLeftArm: 1.14, mixamorigRightArm: 1.14, mixamorigLeftForeArm: 1.1, mixamorigRightForeArm: 1.1,
+  mixamorigLeftHand: 1, mixamorigRightHand: 1,
+};
+const BULK_SCALE = { corey: 1.3, grant: 1, blaize: 1 };
+
 const ACTION_CLIP = {
   jab: 'Punching', cross: 'Punching (1)', combo: 'Punch Combo', hook: 'Hook', stomp: 'Stomp',
   chop: 'Stable Sword Outward Slash', slash: 'Stable Sword Outward Slash',   // the one swing clip we have serves axe and machete
@@ -115,6 +123,7 @@ export class Character {
       this.head = model.getObjectByName('mixamorigHead'); this.neck = model.getObjectByName('mixamorigNeck');
       this.hand = model.getObjectByName('mixamorigRightHand');
       this.grip = this.#gripOf();
+      this.#bulk(model, name);
       if (this.fallback) this.fallback.root.visible = false;
       this.ready = true;
       this.setFirstPerson(this.firstPerson);
@@ -161,10 +170,28 @@ export class Character {
     return { q: inv.multiply(world), pos: palm, scale: 1 / scale };
   }
 
+  /**
+   * A sturdier build. Each listed bone gets the world-space scale it should end
+   * up with (its own turned into a local one by what its parents already apply),
+   * so the chest broadens, the shoulders move out and the arms thicken while the
+   * head, hands and legs keep their size and the feet keep their ground. Done
+   * after the rig is measured, so the retarget still sees the original skeleton.
+   */
+  #bulk(model, name) {
+    const k = BULK_SCALE[name] ?? 1;
+    model.traverse((b) => {
+      if (!b.isBone) return;
+      const parent = b.parent?.userData.bulk ?? 1;
+      const want = BULK[b.name] === undefined ? parent : 1 + (BULK[b.name] - 1) * k;
+      b.userData.bulk = want;
+      if (want !== parent) b.scale.setScalar(want / parent);
+    });
+  }
+
   #mountTool() {
     if (!this.hand) return;
     if (this.toolObj) { this.hand.remove(this.toolObj); this.toolObj = null; }
-    if (this.tool === 'fists' || !this.grip) return;
+    if (this.tool === 'fists' || this.tool === 'mind' || !this.grip) return;
     const t = buildTool(this.tool);
     t.quaternion.copy(this.grip.q); t.position.copy(this.grip.pos); t.scale.setScalar(this.grip.scale);
     t.visible = !this.firstPerson;
@@ -291,7 +318,7 @@ export class Character {
     if (h.recover > 0) return { key: 'land', clip: 'Falling To Landing', loop: false, at: 0.42, rate: 1.3, fade: 0.06 };
     if (h.sliding) return { key: 'slide', clip: 'Slipping', loop: false, hold: 0.55, fade: 0.2 };
 
-    if (h.load) return { key: 'carry', clip: 'Carrying', rate: v < 0.3 ? 0 : rate('Carrying', 0.6, 1.6), fade: 0.3, live: true };
+    if (h.load || h.channel) return { key: 'carry', clip: 'Carrying', rate: v < 0.3 ? 0 : rate('Carrying', 0.6, 1.6), fade: 0.3, live: true };
     if (h.pushing && v > 0.12) return { key: 'push', clip: 'Pushing', rate: rate('Pushing', 0.5, 1.5), fade: 0.2, live: true };
 
     // getting up from lying down plays the sit-up

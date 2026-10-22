@@ -93,7 +93,7 @@ export class Props {
   cycleTool() {
     if (this.carry) { this.hud.toast('Put the stone down first.'); return; }
     this.setTool(TOOLS[(TOOLS.indexOf(this.tool) + 1) % TOOLS.length]);
-    this.hud.toast(`${TOOL_NAME[this.tool]}${this.tool === 'fists' ? '' : ' · [Click] to swing'}`);
+    this.hud.toast(this.tool === 'mind' ? 'Telekinesis · [Click] lift · [R] sink · [E] level · [Wheel] size' : `${TOOL_NAME[this.tool]}${this.tool === 'fists' ? '' : ' · [Click] to swing'}`);
   }
 
   /** A swing connected (the hiker's `strike` event with kind chop or slash). */
@@ -347,6 +347,14 @@ export class Props {
     if (this.tick > 0.1) { this.tick = 0; this.#free(); this.#hint(); }
   }
 
+  /** Ground under this area was reshaped: loose rocks drop onto it or ride it up. */
+  settle({ x0, z0, x1, z1 }) {
+    for (const k of this.rocks) {
+      if (k.x < x0 || k.x > x1 || k.z < z0 || k.z > z1) continue;
+      if (k.y > this.#groundY(k) + 0.05) k.air = true; else k.dirty = true;
+    }
+  }
+
   /** Walking up to a pushable boulder works it loose from the ground. */
   #free() {
     const p = this.hiker.pos;
@@ -365,7 +373,7 @@ export class Props {
     if (this.carry) hint = '[E] put down · [Click] throw';
     else if (h.mode === 'walk' && h.grounded) {
       if (this.#nearStone(p.x + fx * 0.9, p.z + fz * 0.9, 1.3)) hint = '[E] pick up';
-      else if (this.tool !== 'fists' && this.flora.find(p.x + fx * 0.7, p.z + fz * 0.7, 1.35, [...TREES, ...BRUSH])) hint = '[Click] chop';
+      else if ((this.tool === 'axe' || this.tool === 'machete') && this.flora.find(p.x + fx * 0.7, p.z + fz * 0.7, 1.35, [...TREES, ...BRUSH])) hint = '[Click] chop';
     }
     this.hint = hint;
   }
@@ -470,7 +478,7 @@ export class Props {
   // ------------------------------------------------------------------ first-person tool
   #viewmodel(dt) {
     const first = this.rig.mode === 'first', tool = this.tool;
-    this.vm.visible = first && tool !== 'fists';
+    this.vm.visible = first && (tool === 'axe' || tool === 'machete');
     this.vmRock.visible = first;
     if (!this.vm.visible) return;
     const set = VM[tool], a = this.hiker.action;

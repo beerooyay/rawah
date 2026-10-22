@@ -135,6 +135,15 @@ export class Camp {
     });
   }
 
+  /** Ground under this area was reshaped: the tent and fire sit on it again. */
+  settle({ x0, z0, x1, z1 }) {
+    for (const o of [this.tentObj, this.fireObj?.group]) {
+      if (!o?.parent) continue;
+      const { x, z } = o.position;
+      if (x >= x0 && x <= x1 && z >= z0 && z <= z1) o.position.y = this.world.height(x, z);
+    }
+  }
+
   save() {
     return { tent: this.tent, fire: this.fire };
   }

@@ -16,6 +16,7 @@ import { CameraRig } from './camera.js';
 import { Character, CHARACTERS } from './character.js';
 import { Party } from './companions.js';
 import { Props } from './props.js';
+import { Mind } from './mind.js';
 import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
@@ -133,9 +134,12 @@ const party = new Party(world, flora, scene, avatar.lib, playerName);   // the o
 const rig = new CameraRig(camera, world, hiker, avatar);
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
 const hud = new Hud(world);
+const mind = new Mind({ scene, world, hiker, camera, hud, audio: null });
+// ground that was reshaped: trees and rocks that stood on it are replanted at the new height
+const shaped = (rect) => { flora.reground(rect); props.settle(rect); camp.settle(rect); };
 const map = new GameMap(world);
 const audio = new Audio();
-props.hud = hud; props.audio = audio;
+props.hud = hud; props.audio = audio; mind.audio = audio;
 party.onSwing = (x, y, z, nx, nz) => props.swingFx(x, y, z, nx, nz);
 setLoad(0.85, 'Drawing the map…');
 await frame();
@@ -166,7 +170,7 @@ function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(),
+    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -181,6 +185,8 @@ function restore() {
   camp.load(s.camp);
   weather.load(s.weather);
   props.load(s.props);
+  mind.load(s.sculpt);
+  shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
 }
 
@@ -310,14 +316,14 @@ function renderControls(el) {
   el.innerHTML = [
     col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop · flip when hiking fast'],
       [k('X'), 'Crouch, lie down, stand'], [k('Q') + ' ' + t('Click'), 'Punch (chain three), or swing the tool'], [k('R') + ' ' + t('Right click'), 'Hook'], [k('G'), 'Stomp'],
-      [k('E'), 'Pick up / put down a stone · grab a rock face'], [k('T'), 'Tool: hands, axe, machete'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
+      [k('E'), 'Pick up / put down a stone · grab a rock face'], [k('T'), 'Tool: hands, axe, machete, telekinesis'], [k('Q') + ' ' + t('Click'), 'Telekinesis: lift the ground'], [k('R') + ' ' + t('Right click'), 'Telekinesis: sink it'], [k('E') + ' ' + t('Wheel'), 'Telekinesis: level it · brush size'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
       [k('L'), 'Headlamp'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
     col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up stone / grab rock / let go'], [p('R3'), 'Tool'],
       [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('Y', 'y'), 'Camera'],
-      [p('D-pad'), 'Down crouch · left punch · right hook · up stomp'],
+      [p('D-pad'), 'Down crouch · left punch · right hook · up stomp (with telekinesis: left lifts, right sinks, B levels)'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
     col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Duck') + t('Punch'), 'Crouch, punch / swing / throw'], [t('Fast'), 'Toggle hiking fast'],
-      [t('Tool'), 'Hands, axe, machete'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
+      [t('Tool'), 'Hands, axe, machete, telekinesis'], [t('Punch') + t('Grab') + t('Hook'), 'Telekinesis: lift, level, sink'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
   ].join('');
 }
 function openControls() { renderControls($('controls-title')); $('controls-sheet').classList.remove('hidden'); }
@@ -333,6 +339,8 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
+    mind.load([]);
+    shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
     weather.load({ seed: (Math.random() * 1e9) | 0 });
     spawnAtCar();
   } else restore();
@@ -775,11 +783,12 @@ function tick(dt, draw = true) {
   if (!live) ctl.move.set(0, 0);
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
-  ctl.grab = live && pressed.has('KeyE') && !props.interact();
+  const mindOn = hiker.tool === 'mind';
+  ctl.grab = live && !mindOn && pressed.has('KeyE') && !props.interact();
   ctl.crouch = live && pressed.has('KeyX');
-  ctl.punch = live && (pressed.has('KeyQ') || pressed.has('Mouse0'));
+  ctl.punch = live && !mindOn && (pressed.has('KeyQ') || pressed.has('Mouse0'));
   if (ctl.punch && props.throwStone()) ctl.punch = false;
-  ctl.hook = live && (pressed.has('KeyR') || pressed.has('Mouse2'));
+  ctl.hook = live && !mindOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
   ctl.stomp = live && pressed.has('KeyG');
 
   const p = hiker.pos;
@@ -822,9 +831,14 @@ function tick(dt, draw = true) {
   input.endFrame();
 
   avatar.update(dt, hiker);
+  const wheel = input.takeWheel();
+  mind.resize(live && mindOn ? wheel : 0);
+  mind.update(dt, live, {
+    lift: keys.has('KeyQ') || keys.has('Mouse0'), sink: keys.has('KeyR') || keys.has('Mouse2'), level: keys.has('KeyE'),
+  }, shaped);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
-  const zoom = input.takeWheel();
+  const zoom = mindOn ? 0 : wheel;
   let focus = p;
   if (state.travel) {
     // stream trees under the flight first, then around where you'll land
@@ -964,7 +978,7 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save, rig, avatar, party, input, props,
+    begin, tick, save, rig, avatar, party, input, props, mind,
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },

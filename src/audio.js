@@ -105,6 +105,13 @@ export class Audio {
     this.#burst(small ? 0.12 : 0.3, small ? 720 : 250, 0.9, small ? 0.22 : 0.5, 'lowpass', 0.012, this.noise);
   }
 
+  /** Earth shifting under attention: a low grind and a faint rising shimmer. */
+  rumble(level = 0.6) {
+    if (!this.ctx) return;
+    this.#burst(0.3, 90 + level * 60, 0.7, 0.22 * level, 'lowpass', 0, this.noise);
+    this.#whistle(300 + level * 200, 520 + level * 400, 0, 0.25, 0.02 * level);
+  }
+
   splash() {
     if (!this.ctx) return;
     this.#burst(0.7, 900, 0.5, 0.5);

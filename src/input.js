@@ -168,6 +168,7 @@ export class Input {
       <div class="t-col">
         <button data-code="KeyE">Grab</button>
         <button data-code="KeyQ">Punch</button>
+        <button data-code="KeyR">Hook</button>
         <button data-code="KeyX">Duck</button>
         <button data-code="Space" class="big">Hop</button>
       </div>

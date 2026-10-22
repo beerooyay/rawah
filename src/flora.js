@@ -112,6 +112,16 @@ export class Flora {
     this.dirty = true;
   }
 
+  /** Ground under (x0..x1, z0..z1) was reshaped: forget the tiles there so trees and rocks are planted at the new height. */
+  reground({ x0, z0, x1, z1 }) {
+    const w = this.world, size = this.tile * w.cell;
+    for (const key of [...this.tiles.keys()]) {
+      const i = key % this.nt, j = Math.floor(key / this.nt);
+      const tx = i * size - w.half, tz = j * size - w.half;
+      if (tx <= x1 && tx + size >= x0 && tz <= z1 && tz + size >= z0) { this.tiles.delete(key); this.dirty = true; }
+    }
+  }
+
   tileKey(x, z) {
     const w = this.world;
     return [Math.floor((x + w.half) / (this.tile * w.cell)), Math.floor((z + w.half) / (this.tile * w.cell))];

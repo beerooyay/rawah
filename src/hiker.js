@@ -65,6 +65,7 @@ export class Hiker {
     this.lastKind = ''; this.chainT = 0; this.actionId = 0;
     this.tool = 'fists';              // what is in hand: fists, axe or machete (props.js sets it)
     this.load = 0;                    // 1 while carrying a stone
+    this.channel = false;             // true while sculpting the ground (mind.js)
     this.pushing = false;             // shoving a boulder
   }
 
@@ -138,10 +139,11 @@ export class Hiker {
     this.swimT = this.mode === 'swim' ? this.swimT + dt : 0;
 
     const winded = this.stamina < 2;
-    const sprinting = inp.sprint && !this.load && this.stance === 'stand' && !this.action && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
+    const sprinting = inp.sprint && !this.load && !this.channel && this.stance === 'stand' && !this.action && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
     let speed = this.mode === 'swim' ? 1.2 : sprinting ? 4.5 : winded ? 1.8 : 2.5;
     if (this.injured > 0) speed *= 0.55;
     if (this.load) speed *= 0.72;
+    if (this.channel) speed *= 0.6;
     if (depth > 0.15 && this.mode === 'walk') speed *= 0.6;
     if (this.mode === 'walk') {
       speed *= STANCE[this.stance].speed * (this.action ? this.action.slow : 1) * (this.recover > 0 ? 0.3 : 1) * (this.stanceLock > 0.3 ? 0.2 : 1);
@@ -369,7 +371,7 @@ export class Hiker {
       }
     } else if (this.chainT > 0) this.chainT -= dt;
 
-    const want = this.load ? '' : inp.punch ? (this.tool === 'axe' ? 'chop' : this.tool === 'machete' ? 'slash' : 'punch') : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
+    const want = this.load || this.channel ? '' : inp.punch ? (this.tool === 'axe' ? 'chop' : this.tool === 'machete' ? 'slash' : 'punch') : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
     if (!want || this.action || this.mode !== 'walk' || !this.grounded || this.stance !== 'stand' || this.stanceLock > 0 || this.stamina < 4) return;
     let kind = want;
     if (want === 'punch') kind = this.chainT > 0 && this.lastKind === 'jab' ? 'cross' : this.chainT > 0 && this.lastKind === 'cross' ? 'combo' : 'jab';

@@ -31,7 +31,8 @@ Any static server works. ES modules need HTTP, not `file://`.
 | R or right click | Hook |
 | G | Stomp |
 | E | Pick up or put down a small stone; otherwise grab a rock face too steep to walk, or let go |
-| T | Tool: bare hands, axe, machete |
+| T | Tool: bare hands, axe, machete, telekinesis |
+| Q / click, R / right click, E, wheel | With telekinesis: lift, sink, level the ground; wheel sizes the brush |
 | C | Pitch the tent (flat ground, 200 ft from lakes, off the trail) or pack it up |
 | F | Light a campfire at camp (below treeline only), or put it out |
 | Z | Sleep at the tent until morning. Hold it elsewhere to sit and rest |
@@ -51,7 +52,7 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 | B | Grab rock or let go |
 | X | Pitch or pack the tent |
 | Y | First or third person |
-| R3 | Tool (hands, axe, machete) |
+| R3 | Tool (hands, axe, machete, telekinesis) |
 | RB | Campfire |
 | LB | Headlamp |
 | LT | Rest (sleep at the tent) |
@@ -60,6 +61,10 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 | Menu | Pause |
 
 In menus the D-pad or left stick moves, A selects, left and right change sliders and dropdowns, and B goes back. The pad rumbles when lightning strikes close.
+
+### Telekinesis
+
+The fourth tool reshapes the ground you aim at: hold lift to draw the earth up under the ring, sink to push it down, level to press it flat at the height where you began. A pull builds the longer you hold it, and the wheel changes the brush size. Trees, grass and loose rocks follow the new ground, and your work is saved with the game.
 
 ### Axe, machete and stones
 

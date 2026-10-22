@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
 import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR } from './terrain.js';
 import { withAtmosphere } from './atmosphere.js';
+import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
 // A quadtree over the whole map picks, every frame, which nodes to draw and
@@ -66,13 +67,14 @@ float baseH(vec2 xz) {
   float hb = gridH(i + ivec2(0, 1));
   return ha + f.y * (hb - ha) + f.x * (hc - hb);
 }
+${SCULPT_GLSL}
 float maskAt(vec2 xz) { return texture2D(uMask, (xz / uCell + uN * 0.5 + 0.5) / uN).r; }
 float rockAt(vec2 xz) { return texture2D(uCover, xz / uExtent + 0.5).a; }
 ${NOISE_GLSL}
 ${RELIEF_GLSL}
 float groundH(vec2 xz, float spacing) {
   float rock = rockAt(xz);
-  return baseH(xz) + relief(xz, reliefAmp(rock, maskAt(xz)), rock, spacing);
+  return baseH(xz) + relief(xz, reliefAmp(rock, maskAt(xz)), rock, spacing) + editH(xz);
 }
 `;
 
@@ -96,7 +98,9 @@ export class CDLODTerrain {
     maskTex.generateMipmaps = false;
     maskTex.needsUpdate = true;
 
+    this.sculpt = world.sculpt = new Sculpt(world);
     this.uniforms = {
+      ...this.sculpt.uniforms,
       uHeight: { value: heightTex }, uMask: { value: maskTex },
       uN: { value: N }, uCell: { value: world.cell }, uHScale: { value: world.hScale }, uHOffset: { value: world.hOffset },
       uRanges: { value: this.ranges }, uGrid: { value: GRID }, uCam: { value: new THREE.Vector3() },
@@ -151,6 +155,11 @@ export class CDLODTerrain {
             gx += k * (relief(p + vec2(de, 0.0), amp, rock, sp) - relief(p - vec2(de, 0.0), amp, rock, sp)) / (2.0 * de);
             gz += k * (relief(p + vec2(0.0, de), amp, rock, sp) - relief(p - vec2(0.0, de), amp, rock, sp)) / (2.0 * de);
           }
+          if (uEditOn > 0.5) {
+            float ee = max(0.5, camD * 0.0015);
+            gx += (editH(p + vec2(ee, 0.0)) - editH(p - vec2(ee, 0.0))) / (2.0 * ee);
+            gz += (editH(p + vec2(0.0, ee)) - editH(p - vec2(0.0, ee))) / (2.0 * ee);
+          }
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
           #ifdef NEAR_DETAIL
           ${NEAR_NORMAL}
@@ -197,7 +206,7 @@ export class CDLODTerrain {
             if (h < a) a = h; if (h > b) b = h;
           }
         }
-        lo[j * n + i] = a - 2.5; hi[j * n + i] = b + 2.5;
+        lo[j * n + i] = a - 2.5 - LIMIT; hi[j * n + i] = b + 2.5 + LIMIT;
       }
     }
     this.minmax.push([lo, hi, n]);
