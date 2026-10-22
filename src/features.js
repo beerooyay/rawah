@@ -259,7 +259,7 @@ function signTexture(lines, w = 512, h = 256, big = false) {
   const lh = h / (lines.length + 0.6);
   lines.forEach((ln, i) => {
     let size = big && i === 0 ? lh * 0.8 : lh * 0.56;
-    const font = () => `${big && i === 0 ? 700 : 600} ${size}px Inter, "Trebuchet MS", sans-serif`;
+    const font = () => (big && i === 0 ? `400 ${size}px "Paytone One", Gabarito, sans-serif` : `700 ${size}px Gabarito, sans-serif`);
     g.font = font();
     const fit = (w - 40) / g.measureText(ln).width;   // shrink long names to fit the board
     if (fit < 1) { size *= fit; g.font = font(); }

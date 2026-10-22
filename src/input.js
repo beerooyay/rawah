@@ -19,6 +19,10 @@ const PAD = {
   9: 'Escape',     // Start: pause
   10: 'ShiftLeft', // L3: hike fast
   11: 'KeyV',      // R3: camera
+  12: 'KeyG',      // D-pad up: stomp
+  13: 'KeyX',      // D-pad down: crouch, then lie down, then stand
+  14: 'KeyQ',      // D-pad left: punch
+  15: 'KeyR',      // D-pad right: hook
 };
 const NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'L3', 'R3', 'Up', 'Down', 'Left', 'Right', 'Guide'];
 const DEAD = 0.14;
@@ -65,6 +69,18 @@ export class Input {
       if (document.pointerLockElement !== element && !dragging) return;
       this.mouse.x += e.movementX; this.mouse.y += e.movementY;
     });
+    // fighting: left click punches and right click hooks, while the pointer is locked
+    addEventListener('mousedown', (e) => {
+      if (document.pointerLockElement !== element) return;
+      const code = `Mouse${e.button}`;
+      this.usingPad = false;
+      this.mode = 'kbm';
+      this.keys.add(code);
+      this.pressed.add(code);
+      this.onPress(code);
+    });
+    addEventListener('mouseup', (e) => this.keys.delete(`Mouse${e.button}`));
+    element.addEventListener('contextmenu', (e) => e.preventDefault());
     addEventListener('wheel', (e) => { this.wheel += Math.sign(e.deltaY); }, { passive: true });
   }
 
@@ -151,6 +167,8 @@ export class Input {
       <div class="t-stick"><i></i></div>
       <div class="t-col">
         <button data-code="KeyE">Grab</button>
+        <button data-code="KeyQ">Punch</button>
+        <button data-code="KeyX">Duck</button>
         <button data-code="Space" class="big">Hop</button>
       </div>
       <div class="t-row">

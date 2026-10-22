@@ -108,7 +108,7 @@ export class Hud {
       if (dd % 45 === 0) {
         const lab = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' }[dd];
         g.fillStyle = dd === 0 ? '#f2a65a' : '#f3efe6';
-        g.font = `${dd % 90 === 0 ? 600 : 500} ${(dd % 90 === 0 ? 14 : 11) * k}px Inter, system-ui, sans-serif`;
+        g.font = `${dd % 90 === 0 ? 600 : 500} ${(dd % 90 === 0 ? 14 : 11) * k}px Gabarito, system-ui, sans-serif`;
         g.fillText(lab, x, H / 2 + 1 * k);
       } else if (dd % 15 === 0) {
         g.fillStyle = 'rgba(243,239,230,0.55)';

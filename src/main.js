@@ -13,7 +13,8 @@ import { GameMap } from './map.js';
 import { Audio } from './audio.js';
 import { Input } from './input.js';
 import { CameraRig } from './camera.js';
-import { Avatar } from './avatar.js';
+import { Character, CHARACTERS } from './character.js';
+import { Party } from './companions.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
@@ -37,6 +38,24 @@ settings.shadows ??= Q.shadows;
 setRangeK(Q.rangeK);
 
 // ------------------------------------------------------------------ renderer
+// Colour grade, folded into the tone mapper so it costs nothing extra: ACES, then more vibrance where
+// colour is dull, a gentle S-curve, and a split tone (cool shadows, warm highlights). Filmic and dusty
+// like a western, but with the saturated, clean air of a painted sci-fi planet.
+THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars_fragment
+  .replace('vec3 ACESFilmicToneMapping( vec3 color ) {', 'vec3 ACESFilmicBase( vec3 color ) {')
+  + `
+vec3 ACESFilmicToneMapping( vec3 color ) {
+  vec3 c = clamp( ACESFilmicBase( color ), 0.0, 1.0 );
+  float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+  float sat = max( c.r, max( c.g, c.b ) ) - min( c.r, min( c.g, c.b ) );
+  c = vec3( l ) + ( c - vec3( l ) ) * ( 1.12 + 0.42 * ( 1.0 - clamp( sat * 1.6, 0.0, 1.0 ) ) );
+  c = mix( c, c * c * ( 3.0 - 2.0 * c ), 0.12 );
+  l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+  c *= mix( vec3( 0.95, 1.0, 1.06 ), vec3( 1.06, 1.0, 0.92 ), smoothstep( 0.08, 0.75, l ) );
+  return clamp( c, 0.0, 1.0 );
+}
+`;
+
 const renderer = new THREE.WebGLRenderer({ antialias: Q.aa, logarithmicDepthBuffer: Q.logDepth, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
 renderer.setSize(innerWidth, innerHeight);
@@ -69,6 +88,8 @@ const setLoad = (f, text) => {
 };
 const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
+// canvases (compass, map, signposts) draw with these, so they must be ready before anything is painted
+await Promise.all(['400 14px Gabarito', '600 14px Gabarito', '700 14px Gabarito', '400 20px "Paytone One"'].map((f) => document.fonts.load(f).catch(() => {})));
 setLoad(0.02, 'Downloading the Rawah…');
 const world = await World.load('./data', (f) => setLoad(f * 0.6));
 setLoad(0.7, 'Raising the Medicine Bow crest…');
@@ -103,7 +124,10 @@ const grass = new Grass(terrain, Q.grass, flora.uniforms);
 scene.add(grass.mesh);
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
-const avatar = new Avatar(scene);
+const charParam = new URLSearchParams(location.search).get('char');
+const playerName = CHARACTERS[charParam] ? charParam : CHARACTERS[settings.character] ? settings.character : 'blaize';
+const avatar = new Character(scene, playerName);
+const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
 const rig = new CameraRig(camera, world, hiker, avatar);
 const hud = new Hud(world);
 const map = new GameMap(world);
@@ -113,7 +137,9 @@ await frame();
 map.build(world.colorImage);
 
 // ------------------------------------------------------------------ state
-const lakeList = world.lakes.filter((l) => l.name);
+const lakeList = world.lakes.filter((l) => l.name);      // every named pool, for finding them as you walk by
+// a name shared by several pools (Twin Lakes, Camp Lake) counts and lists once
+const lakeNames = [...new Map([...lakeList].sort((a, b) => b.area - a.area).map((l) => [l.label, l])).values()];
 const peaks = world.places.filter((p) => p.kind === 'peak');
 const trailhead = world.mainTrailhead || world.places.find((p) => p.kind === 'trailhead');
 const state = {
@@ -163,6 +189,7 @@ if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
   if (!state.started || state.travel) return;
+  if (document.activeElement?.tagName === 'INPUT' && document.activeElement.type === 'search') return;   // typing in the map's search
   if (code === 'Escape' && map.open) { toggleMap(); return; }
   if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
   if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
@@ -239,10 +266,10 @@ function toggleMap() {
   map.show(hudState);
   document.body.classList.add('map-open');
   const pad = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`;
-  $('map-close').innerHTML = input.mode === 'pad'
-    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('A', 'a')} travel</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
-    : input.mode === 'touch' ? '<span>Tap a place · pinch to zoom</span><span class="key">Close</span>'
-      : `<span>Click to pick · double-click to travel · scroll to zoom</span><span>${keyCap('M', 'kbm')} close</span>`;
+  $('map-hint').innerHTML = input.mode === 'pad'
+    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('LB')}${pad('RB')} filter</span><span>${pad('A', 'a')} travel</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
+    : input.mode === 'touch' ? '<span>Tap a place · drag to pan · pinch to zoom</span>'
+      : `<span>Click a place · drag to pan · scroll to zoom</span><span>${keyCap('/', 'kbm')} search</span><span>${keyCap('Enter', 'kbm')} travel</span><span>${keyCap('M', 'kbm')} close</span>`;
   if (document.pointerLockElement) document.exitPointerLock();
 }
 map.onClose = () => { if (map.open) toggleMap(); };
@@ -274,13 +301,15 @@ function renderControls(el) {
   const k = (c) => keyCap(c, 'kbm'), p = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`, t = (x) => `<span class="key">${x}</span>`;
   const col = (title, rows) => `<div><h4>${title}</h4><dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl></div>`;
   el.innerHTML = [
-    col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'],
+    col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop · flip when hiking fast'],
+      [k('X'), 'Crouch, lie down, stand'], [k('Q') + ' ' + t('Click'), 'Punch (chain three for a combo)'], [k('R') + ' ' + t('Right click'), 'Hook'], [k('G'), 'Stomp'],
       [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
       [k('L'), 'Headlamp'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
     col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
       [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('Y', 'y'), 'Camera'],
+      [p('D-pad'), 'Down crouch · left punch · right hook · up stomp'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
-    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Fast'), 'Toggle hiking fast'],
+    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Duck') + t('Punch'), 'Crouch, punch'], [t('Fast'), 'Toggle hiking fast'],
       [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
   ].join('');
 }
@@ -390,12 +419,12 @@ $('set-shadows').onchange = () => {
 function renderJournal() {
   const list = $('journal-list');
   list.innerHTML = '';
-  const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
+  const found = lakeNames.filter((l) => state.discovered.has(l.label)).length;
   const bagged = peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length;
   $('pause-date').textContent = `Day ${state.day} · ${calendar.dateLabel} · ${clock(state.hour)}`;
   $('journal-forecast').textContent = weather.forecast;
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
-  $('journal-stats').innerHTML = stat(`${found}/${lakeList.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
+  $('journal-stats').innerHTML = stat(`${found}/${lakeNames.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
     + stat(state.km.toFixed(1), 'Km hiked') + stat(state.day, state.day === 1 ? 'Day' : 'Days');
   const add = (text, sub, done, cls = '') => {
     const li = document.createElement('li');
@@ -407,7 +436,7 @@ function renderJournal() {
   add('Summits', '', false, 'head');
   [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(q.name, `${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
   add('Lakes', '', false, 'head');
-  [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(l.label, `${ft(l.level)} ft`, state.discovered.has(l.label)));
+  [...lakeNames].sort((a, b) => b.level - a.level).forEach((l) => add(l.label, `${ft(l.level)} ft`, state.discovered.has(l.label)));
 }
 
 // ------------------------------------------------------------------ actions
@@ -666,8 +695,8 @@ function checkDiscoveries() {
     const r = Math.sqrt(l.area / Math.PI) + 45;
     if (Math.hypot(l.x - p.x, l.z - p.z) < r) {
       state.discovered.add(l.label);
-      const n = lakeList.filter((q) => state.discovered.has(q.label)).length;
-      hud.discovery(l.label, `${ft(l.level)} ft · lake ${n} of ${lakeList.length}`);
+      const n = lakeNames.filter((q) => state.discovered.has(q.label)).length;
+      hud.discovery(l.label, `${ft(l.level)} ft · lake ${n} of ${lakeNames.length}`);
       save();
     }
   }
@@ -683,7 +712,7 @@ function checkDiscoveries() {
 
 // ------------------------------------------------------------------ loop
 const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = new THREE.Color(), _snowBounce = new THREE.Color();
-const ctl = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, lookX: 0, lookY: 0 };
+const ctl = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, crouch: false, punch: false, hook: false, stomp: false, lookX: 0, lookY: 0 };
 let last = performance.now(), saveTimer = 0, floraTimer = 0, t = 0;
 
 while (flora.update(hiker.pos, 8) > 0) { /* fill the first ring of trees */ }
@@ -713,6 +742,10 @@ function tick(dt, draw = true) {
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
   ctl.grab = live && pressed.has('KeyE');
+  ctl.crouch = live && pressed.has('KeyX');
+  ctl.punch = live && (pressed.has('KeyQ') || pressed.has('Mouse0'));
+  ctl.hook = live && (pressed.has('KeyR') || pressed.has('Mouse2'));
+  ctl.stomp = live && pressed.has('KeyG');
 
   const p = hiker.pos;
   const env = {
@@ -753,6 +786,7 @@ function tick(dt, draw = true) {
   input.endFrame();
 
   avatar.update(dt, hiker);
+  if (state.started) party.update(live ? dt : 0, hiker);
   const zoom = input.takeWheel();
   let focus = p;
   if (state.travel) {
@@ -794,7 +828,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure);
+  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.update(t);
@@ -820,7 +854,7 @@ function tick(dt, draw = true) {
 
   if (state.started) {
     const [place, sub] = locate(p, cv);
-    const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
+    const found = lakeNames.filter((l) => state.discovered.has(l.label)).length;
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
       hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '']
       .filter(Boolean).join(' · ');
@@ -842,7 +876,8 @@ function tick(dt, draw = true) {
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
       hint, injured: hiker.injured > 0, status,
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
-      lakesFound: found, lakesTotal: lakeList.length, km: state.km,
+      lakesFound: found, lakesTotal: lakeNames.length,
+      friends: party.actors.map((a) => ({ name: a.name[0].toUpperCase() + a.name.slice(1), x: a.x, z: a.z })), km: state.km,
       peaksFound: peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length, peaksTotal: peaks.length,
     });
   }
@@ -890,7 +925,8 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save, rig, avatar, input,
+    begin, tick, save, rig, avatar, party, input,
+    hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
     goto(name) { const pl = world.places.find((q) => q.name === name); if (pl) this.teleport(pl.x, pl.z); return pl; },

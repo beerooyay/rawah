@@ -22,6 +22,8 @@ import { withAtmosphere } from './atmosphere.js';
 // wind, parts around the hiker, and frosts at dawn.
 
 const CELLS = 4, CW = 512, CH = 512;
+const TRAMPLE = 40;                 // pressed patches remembered at once
+const HOLD = 3, SPRING = 16;        // s a patch stays flat, and the time it's fully sprung back by
 
 function rng(seed) {
   let s = seed >>> 0 || 1;
@@ -107,6 +109,8 @@ export class Grass {
       ...terrain.uniforms,
       uCenter: { value: new THREE.Vector2() }, uPlayer: { value: new THREE.Vector3() },
       uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
+      uTrA: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // x, z, direction x, z
+      uTrB: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // length, radius, power, time pressed
       uFrost: { value: 0 }, uCure: { value: 0.75 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
     };
     const geo = clumpGeometry();
@@ -124,6 +128,7 @@ export class Grass {
           uniform float uExtent, uSpacing, uW, uRadius;
           uniform vec2 uCenter;
           uniform vec3 uPlayer;
+          uniform vec4 uTrA[${TRAMPLE}], uTrB[${TRAMPLE}];
           uniform float uSnow, uSnowLine;
           varying vec3 vSat, vTone;
           varying float vLush;
@@ -150,14 +155,26 @@ export class Grass {
           vTone = mix(vec3(1.08, 0.98, 0.86), vec3(0.88, 0.78, 0.7), h3) * (0.85 + h1 * 0.3);
           // buried under the snowpack (only the tallest tufts poke through the edges)
           live *= 1.0 - step(0.5, uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5));
-          float size = mix(0.85, 0.55, alpine) * (0.7 + h3 * 0.6) * fade * live;
+          float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * live;
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
           float ang = h2 * 6.2832, ca = cos(ang), sa = sin(ang);
           vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
           float t = position.y;
-          vec3 p = vec3(root.x + lp.x * size * 1.6, groundH(root, 0.0) - 0.03 + t * size * mix(0.72, 0.42, alpine), root.y + lp.z * size * 1.6);
+          // pressed down by what has walked or lain here: capsules from the trample ring, springing back with time
+          float press = 0.0; vec2 lean = vec2(0.0);
+          for (int i = 0; i < ${TRAMPLE}; i++) {
+            vec4 a = uTrA[i], b = uTrB[i];
+            if (b.z <= 0.0) continue;
+            vec2 rel = root - a.xy;
+            vec2 off = rel - a.zw * clamp(dot(rel, a.zw), 0.0, b.x);
+            float d = length(off);
+            float k = b.z * (1.0 - smoothstep(b.y * 0.5, b.y, d)) * (1.0 - smoothstep(${HOLD.toFixed(1)}, ${SPRING.toFixed(1)}, uTime - b.w));
+            press = max(press, k);
+            lean += (off / max(d, 0.05) + a.zw * 0.6) * k;
+          }
+          vec3 p = vec3(root.x + lp.x * size * 1.6, groundH(root, 0.0) - 0.03 + t * size * mix(0.72, 0.42, alpine) * (1.0 - press * 0.8), root.y + lp.z * size * 1.6);
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared
           float g = gustAt(root);
           float bend = (0.1 + g * 0.8 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size;
@@ -168,6 +185,7 @@ export class Grass {
           float near = 1.0 - smoothstep(0.2, 1.0, length(away));
           p.xz += normalize(away + 1e-4) * near * t * size * 0.7;
           p.y -= near * t * size * 0.3;
+          p.xz += normalize(lean + vec2(1e-4)) * press * t * size * 0.9;
           vec3 transformed = p;`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
@@ -195,9 +213,35 @@ export class Grass {
     this.mesh.renderOrder = 0;
   }
 
-  update(camera, hiker, frost, cure) {
+  /**
+   * Remember where the hiker has pressed the grass. Walking leaves a light
+   * trail of footprints, crouching a heavier one, and lying or sitting a flat
+   * nest the shape of the body that stays down for as long as you stay on it.
+   * `heading` is the way the body faces.
+   */
+  #trample(h, heading) {
+    if (!h.grounded || h.mode !== 'walk') { this.last = null; return; }
+    const p = h.pos, now = this.uniforms.uTime.value;
+    const sitting = h.resting && h.stance === 'stand' && h.moving < 0.2;
+    const key = h.stance === 'prone' ? 'prone' : sitting ? 'sit' : h.stance;
+    const spec = { stand: [0, 0.6, 0.4, 0.6], crouch: [0, 0.7, 0.55, 0.5], prone: [1.7, 0.6, 1, 0.6], sit: [0, 0.85, 0.9, 9] }[key];
+    const last = this.last;
+    if (last && last.key === key && Math.hypot(p.x - last.x, p.z - last.z) < spec[3]) {
+      // still on the same patch: keep it flat while you're lying or sitting on it
+      if (key === 'prone' || key === 'sit') this.uniforms.uTrB.value[last.i].w = now;
+      return;
+    }
+    const i = this.slot = ((this.slot ?? -1) + 1) % TRAMPLE;
+    const dx = -Math.sin(heading), dz = -Math.cos(heading), back = spec[0] / 2;
+    this.uniforms.uTrA.value[i].set(p.x - dx * back, p.z - dz * back, dx, dz);
+    this.uniforms.uTrB.value[i].set(spec[0], spec[1], spec[2], now);
+    this.last = { key, x: p.x, z: p.z, i };
+  }
+
+  update(camera, hiker, frost, cure, heading = 0) {
     this.uniforms.uCenter.value.set(camera.position.x, camera.position.z);
     this.uniforms.uPlayer.value.copy(hiker.pos);
+    this.#trample(hiker, heading);
     this.uniforms.uFrost.value = frost;
     if (cure !== undefined) this.uniforms.uCure.value = cure;
   }

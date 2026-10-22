@@ -29,10 +29,10 @@ const KEYS = [
   [-0.35, 0x02040a, 0x070b16, 0x000000],
   [-0.18, 0x050a18, 0x121a30, 0x1a1020],
   [-0.08, 0x13203f, 0x4a3d58, 0x6a3a40],
-  [0.0, 0x2a4a7c, 0xe39a6c, 0xff8a4a],
-  [0.09, 0x3a6aa6, 0xdcc3a2, 0xffb070],
-  [0.3, 0x2f6cbf, 0xa8c6e4, 0xfff0d0],
-  [1.0, 0x2a64b8, 0x9fc0e2, 0xffffff],
+  [0.0, 0x2a4a88, 0xee9568, 0xff8244],
+  [0.09, 0x3a6ab0, 0xe6c29a, 0xffac66],
+  [0.3, 0x2a6dc8, 0x9cc8ee, 0xfff0d0],
+  [1.0, 0x2260c4, 0x8ec2ee, 0xffffff],
 ];
 
 const VERT = `varying vec3 vDir;
@@ -53,6 +53,14 @@ float noise(vec3 x) {
   return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
              mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
+// how much cloud one slice of the slab holds at a point: its footprint matches the shadows on the ground,
+// shrinking with height so the tops are smaller than the bases, and eroded so the edges billow
+float slab(vec2 P, float k, float dist) {
+  float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
+  float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
+  float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, (P + uCloudOff) / 2600.0 + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
+  return smoothstep(th, th + 0.085 + far * 0.1, f);
+}
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -60,22 +68,44 @@ void main() {
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
   col += uGlow * (pow(sd, 6.0) * 0.28 + pow(sd, 48.0) * 0.45) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
-  // clouds: a deck at uCloudAlt, lit from the side the sun is on, thick and dark when stormy
+  // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
+  if (h > 0.03) {
+    float ht = 9000.0 - cameraPosition.y;
+    vec2 P = cameraPosition.xz + d.xz * ht / h;
+    vec2 q = (P + uCloudOff * 1.6) / vec2(42000.0, 17000.0);
+    float s = texture2D(uCloudTex, q).r * 0.62 + texture2D(uCloudTex, q * vec2(2.9, 1.8) + 0.4).r * 0.38;
+    float ci = smoothstep(0.6, 0.86, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
+    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 4.0) * 0.5, ci * 0.38 * (1.0 - uNight * 0.85));
+  }
+  // clouds: a slab of cumulus cut into slices. Lower slices are wider and darker (the flat grey base),
+  // higher ones shrink to billowing tops; each slice looks toward the sun to see what shades it
   float cloud = 0.0;
-  vec3 cc = vec3(0.0);
   if (h > 0.0 && uCloudCover > 0.005) {
     float dh = max(uCloudAlt - cameraPosition.y, 350.0);
-    float tt = dh / max(h, 0.015);
-    vec2 P = cameraPosition.xz + d.xz * tt;
-    float dens = cloudDensity(P, 4);
-    vec2 toward = normalize(uSun.xz + 1e-4) * 420.0;
-    float shadow = cloudDensity(P + toward, 2);
-    float body = clamp(shadow * 0.8 + uThick * 0.55 * dens, 0.0, 1.0);
-    cc = mix(uCloudLit, uCloudDark, body);
-    cc += uGlow * pow(sd, 5.0) * (1.0 - dens) * dens * 2.2 * (1.0 - uNight);   // silver lining
-    cc += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dens);
-    cloud = dens * smoothstep(0.0, 0.07, h) * exp(-tt / 90000.0);
-    col = mix(col, cc, cloud);
+    float slabH = 900.0 + 1100.0 * uThick;
+    vec2 sunH = normalize(uSun.xz + 1e-4) * (260.0 / max(uSun.y, 0.12));
+    vec3 acc = vec3(0.0);
+    float trans = 1.0;
+    for (int i = 0; i < 5; i++) {
+      float k = (float(i) + 0.5) / 5.0;
+      float tt = (dh + k * slabH) / max(h, 0.015);
+      vec2 P = cameraPosition.xz + d.xz * tt;
+      float dn = slab(P, k, tt);
+      if (dn > 0.003) {
+        float occ = slab(P + sunH, min(k + 0.2, 1.0), tt) * 0.5 + slab(P + sunH * 2.4, min(k + 0.45, 1.0), tt) * 0.5;
+        float billow = 0.72 + 0.56 * texture2D(uCloudTex, (P + uCloudOff) / 1700.0 + 0.2).r;
+        float lit = clamp((1.0 - occ * (0.5 + 0.4 * uThick)) * (0.38 + 0.62 * k) * billow, 0.0, 1.0);
+        vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
+        c += uGlow * pow(sd, 5.0) * (1.0 - dn) * dn * 2.0 * (1.0 - uNight) * lit;     // silver lining
+        c += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dn);
+        float a = clamp(dn * (0.3 + 0.3 * uThick), 0.0, 1.0);   // each slice thin, so the structure of the ones behind shows through
+        acc += trans * a * c;
+        trans *= 1.0 - a;
+      }
+    }
+    float fade = smoothstep(0.0, 0.07, h) * exp(-(dh / max(h, 0.015)) / 90000.0);
+    col = mix(col, col * trans + acc, fade);
+    cloud = (1.0 - trans) * fade;
   }
   col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0 * (1.0 - cloud);
   if (uNight > 0.0) {
@@ -167,8 +197,8 @@ export class Sky {
     A.uCloudOff.value.copy(wx.offset);
     const overcast = this.overcast = smoothstep(0.45, 0.95, wx.cloud) * (0.4 + 0.6 * wx.thick);
     const grey = (c, k) => { const l = c.r * 0.3 + c.g * 0.55 + c.b * 0.15; return c.lerp(this._b.setRGB(l, l * 1.02, l * 1.06), k); };
-    grey(u.uZenith.value, overcast * 0.85).multiplyScalar(1 - overcast * 0.35);
-    grey(u.uHorizon.value, overcast * 0.8).multiplyScalar(1 - overcast * 0.25);
+    grey(u.uZenith.value, overcast * 0.7).multiplyScalar(1 - overcast * 0.12);
+    grey(u.uHorizon.value, overcast * 0.7).multiplyScalar(1 - overcast * 0.04);
     u.uGlow.value.multiplyScalar(1 - overcast * 0.7);
     u.uThick.value = wx.thick;
     u.uFlash.value = wx.flash;
@@ -205,7 +235,7 @@ export class Sky {
     if (useMoon) this.sun.intensity *= 1 - wx.cloud * 0.85;
     this.hemi.color.copy(u.uZenith.value).lerp(this._a.setRGB(1, 1, 1), 0.35 + overcast * 0.3);
     this.hemi.groundColor.setRGB(0.42, 0.38, 0.32).multiplyScalar(0.25 + day * 0.75);
-    this.hemi.intensity = lerp(0.42, 1.25, day) * (1 - overcast * 0.22) * (1 - wx.precip * 0.2) + wx.flash * 4;
+    this.hemi.intensity = lerp(0.42, 1.25, day) * (1 + overcast * 0.3) * (1 - wx.precip * 0.12) + wx.flash * 4;   // flat light comes from everywhere, so the sky does more of the work
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
     // haze, valley fog, and the grey wall of a squall
     this.fog.density = 0.00008 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;

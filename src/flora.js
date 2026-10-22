@@ -1,35 +1,44 @@
 import * as THREE from 'three';
-import { hash2 } from './noise.js';
-import { buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
+import { hash2, clamp } from './noise.js';
+import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
+import { rockGeometries, rockMaterial } from './rocks.js';
 
-// Trees, burned snags, downed logs, krummholz, willows and boulders around the
+// Trees, burned snags, downed logs, krummholz, willows and rock around the
 // hiker. Placement is a jittered grid driven by World.cover(), which reads the
 // Sentinel-2 land cover, so live forest, the 2020 burn and the aspen groves
 // grow where they really are. Square tiles hold placement data only; a few
 // global instanced meshes are refilled as you move: card-built trees close
 // up (trees.js), crossed-quad impostors out to the horizon of the forest.
+//
+// Species follow elevation and aspect: lodgepole on the lower and sunnier
+// slopes, Engelmann spruce and subalpine fir above and down the cool
+// north-facing and wet ground, thickets and clearings from a slow noise field,
+// and a scatter of saplings underneath. Rock (rocks.js) comes as lone
+// boulders, outcrops, tors on the high ground, talus fans under the steep
+// rock, and the odd glacial erratic.
 
 const TILE_M = 232;        // tile side in metres
-const SPACING = 5.2;       // metres between placement candidates
-const ROCK_R = 240;        // boulders and logs inside this radius
+const SPACING = 3.9;       // metres between placement candidates
+const FORM = 5;            // rock formation cells per tile side
 const REFILL_M = 10;       // move this far before refilling instances
-const TREES = ['spruce', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
-const KINDS = [...TREES, 'boulder', 'log'];
-const CAP = { spruce: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 6000, log: 4000 };
-const IMP_CAP = 140000;
+const TREES = ['spruce', 'fir', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
+const ROCKS = ['boulder', 'slab', 'tooth'];
+const KINDS = [...TREES, ...ROCKS, 'log'];
+const CAP = { spruce: 4000, fir: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, log: 4000 };
+const IMP_CAP = 240000;
+const SAPLING = 0.4;       // scale under this is an understory sapling: only drawn close up, never an impostor, no trunk to bump
+// per rock shape, in units of its scale: how far its base sits below the origin, how tall it stands, how wide its footprint
+const BOT = { boulder: 0.4, slab: 0.1, tooth: 1.5 };
+const TOP = { boulder: 0.65, slab: 0.3, tooth: 1.7 };
+const FOOT = { boulder: 0.85, slab: 1.2, tooth: 0.5 };
+const TILT = { boulder: 1, slab: 2.2, tooth: 0.5 };
+const SEE = [[0.5, 70], [1, 150], [2, 280], [Infinity, 520]];   // [scale up to, metres you can see it from]
 
-function rockGeometries() {
-  const boulder = new THREE.IcosahedronGeometry(1, 1);
-  const p = boulder.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const k = 0.82 + hash2(Math.round(p.getX(i) * 50), Math.round(p.getZ(i) * 50), 11) * 0.32;
-    p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.78, p.getZ(i) * k);
-  }
-  boulder.computeVertexNormals();
-  const log = new THREE.CylinderGeometry(0.16, 0.2, 6, 7, 1);
-  log.rotateZ(Math.PI / 2);
-  return { boulder, log };
-}
+const fract = (v) => v - Math.floor(v);
+const smoothstepFine = (v) => { const t = Math.min(1, Math.max(0, (v - 0.5) / 0.3)); return t * t * (3 - 2 * t); };
+const rngFor = (i, j) => rng(Math.floor(hash2(i, j, 47) * 4294967295));
+const _g = { x: 0, z: 0 };
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 
 export class Flora {
   constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096 } = {}, leaves = 'autumn') {
@@ -61,18 +70,21 @@ export class Flora {
         return m;
       });
     }
-    const rocks = rockGeometries();
-    const stone = new THREE.MeshLambertMaterial({ color: 0x8e8882 });
+    const rocks = rockGeometries(), stone = rockMaterial();
+    const log = new THREE.CylinderGeometry(0.16, 0.2, 6, 7, 1);
+    log.rotateZ(Math.PI / 2);
     const wood = new THREE.MeshLambertMaterial({ color: 0x5d5650 });
-    for (const [kind, geo, mat] of [['boulder', rocks.boulder, stone], ['log', rocks.log, wood]]) {
+    const make = (kind, geo, mat) => {
       const m = new THREE.InstancedMesh(geo, mat, CAP[kind]);
       m.setColorAt(0, new THREE.Color());
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = m.receiveShadow = true;
       this.group.add(m);
-      this.meshes[kind] = [m];
-    }
+      return m;
+    };
+    for (const kind of ROCKS) this.meshes[kind] = rocks[kind].map((geo) => make(kind, geo, stone));
+    this.meshes.log = [make('log', log, wood)];
     const ig = impostorGeometry(IMP_CAP);
     this.imp = new THREE.InstancedMesh(ig, impostorMaterial(this.impostors.texture, this.uniforms), IMP_CAP);
     this.imp.setColorAt(0, new THREE.Color());
@@ -129,6 +141,108 @@ export class Flora {
     const n = Math.floor(size / SPACING);
     const items = Object.fromEntries(KINDS.map((k) => [k, []]));
     const solids = []; // x, z, radius, top
+    const blocks = []; // x, z, radius of the big rocks, so trees leave them room
+
+    // water, trail and brook keep clear of whatever is placed
+    const free = (x, z, e, margin) => {
+      const lake = w.lakeAt(x, z);
+      if (lake && e < lake.level + 0.7) return false;
+      const near = w.nearestTrail(x, z);
+      if (near.trail && near.d < near.trail.width / 2 + margin) return false;
+      const brook = w.nearestStream(x, z);
+      return !(brook.stream && brook.d < brook.stream.width / 2 + 1.5);
+    };
+    const inside = (x, z) => x >= x0 && x < x0 + size && z >= z0 && z < z0 + size;
+    const crowded = (x, z, pad) => {
+      for (let k = 0; k < blocks.length; k += 3) {
+        const dx = x - blocks[k], dz = z - blocks[k + 1], rr = blocks[k + 2] + pad;
+        if (dx * dx + dz * dz < rr * rr) return true;
+      }
+      return false;
+    };
+
+    /**
+     * Set a rock of `kind` and scale `s` at x, z: on the ground sunk in by the
+     * slope, or sitting on `base` (the top of the rock below). Returns the
+     * top height so something can be stacked on it. Only what falls inside this
+     * tile is kept, so neighbouring tiles can build the same formation.
+     */
+    const addRock = (kind, x, z, s, r, base = null) => {
+      const e = w.height(x, z);
+      let y;
+      if (base === null) {
+        const g = w.gradient(x, z, _g);
+        y = e + (BOT[kind] - 0.1 - Math.min(1.1, Math.hypot(g.x, g.z)) * 0.4) * s;
+      } else y = base + (BOT[kind] - 0.1) * s;
+      if (s >= 0.9) blocks.push(x, z, FOOT[kind] * s);
+      if (inside(x, z) && (base !== null || free(x, z, e, 1.2))) {
+        items[kind].push(x, y, z, s, r);
+        if (s >= 0.6) solids.push(x, z, FOOT[kind] * s * 0.9, y + TOP[kind] * s);
+      }
+      return y + TOP[kind] * s;
+    };
+    const rubble = (R, x, z, reach, count) => {
+      for (let j = 0; j < count; j++) {
+        const a = R() * Math.PI * 2, d = reach * (0.35 + R() * 0.65);
+        addRock('boulder', x + Math.cos(a) * d, z + Math.sin(a) * d, 0.25 + R() * R() * 0.7, R());
+      }
+    };
+
+    // formations: one candidate per cell, with the ring of neighbouring cells
+    // so a fan or outcrop that straddles a tile edge is built the same on both sides
+    const cs = size / FORM;
+    for (let b = -1; b <= FORM; b++) {
+      for (let a = -1; a <= FORM; a++) {
+        const fi = ti * FORM + a, fj = tj * FORM + b;
+        const h0 = hash2(fi, fj, 41), h1 = hash2(fi, fj, 42), h2 = hash2(fi, fj, 43), h3 = hash2(fi, fj, 44);
+        const x = x0 + (a + 0.15 + h0 * 0.7) * cs, z = z0 + (b + 0.15 + h1 * 0.7) * cs;
+        const e = w.height(x, z), cv = w.cover(x, z, e);
+        const p = Math.max(cv.rock * 0.55 + cv.alpine * 0.1, 0.045 + cv.forest * 0.03);
+        if (h2 > p) continue;
+        const rock = cv.rock, alpine = cv.alpine, grade = cv.grade, k = 1 + rock * 0.6;
+        const g = w.gradient(x, z, _g), gl = Math.hypot(g.x, g.z) || 1;
+        const R = rngFor(fi, fj);
+        if (rock > 0.3 && grade > 0.35 && h3 < 0.65) {
+          // talus: a fan of broken rock spilling downhill, coarser at the foot
+          const dx = gl > 0.02 ? -g.x / gl : 1, dz = gl > 0.02 ? -g.z / gl : 0;
+          const count = 16 + Math.floor(R() * 18), len = 22 + R() * 30;
+          for (let i = 0; i < count; i++) {
+            const t = R(), lat = (R() - 0.5) * (4 + t * 14);
+            addRock(R() < 0.2 ? 'slab' : 'boulder', x + dx * t * len - dz * lat, z + dz * t * len + dx * lat, (0.25 + R() * R() * 1.1) * (0.6 + t * 0.8), R());
+          }
+        } else if (alpine > 0.35 && h3 < 0.55) {
+          // tor: weathered stacks of blocks, some with a capstone spike
+          const cols = 2 + Math.floor(R() * 3);
+          for (let c = 0; c < cols; c++) {
+            const cx = x + (R() - 0.5) * 7, cz = z + (R() - 0.5) * 7;
+            let s = (1.6 + R() * 1.6) * k, top = addRock('boulder', cx, cz, s, R());
+            for (let l = 1 + Math.floor(R() * 2); l > 0; l--) {
+              s *= 0.7;
+              top = addRock(R() < 0.3 ? 'slab' : 'boulder', cx + (R() - 0.5) * 0.8, cz + (R() - 0.5) * 0.8, s, R(), top);
+            }
+            if (R() < 0.6) addRock('tooth', cx, cz, s * 0.8, R(), top);
+          }
+          rubble(R, x, z, 9, 8 + Math.floor(R() * 8));
+        } else if (rock < 0.3 && h3 < 0.3) {
+          // a lone glacial erratic
+          const s = 2.2 + R() * 2.3;
+          addRock('boulder', x, z, s, R());
+          rubble(R, x, z, s * 1.5, 3 + Math.floor(R() * 4));
+        } else {
+          // outcrop: a ridge of blocks along a strike, biggest in the middle, some stacked
+          const ang = R() * Math.PI * 2, count = 3 + Math.floor(R() * 5), len = 5 + R() * 12, big = (1.3 + R() * 2.4) * k;
+          for (let i = 0; i < count; i++) {
+            const u = i / (count - 1) - 0.5, along = u * len;
+            const px = x + Math.cos(ang) * along + (R() - 0.5) * 2.5, pz = z + Math.sin(ang) * along + (R() - 0.5) * 2.5;
+            const s = big * (1 - Math.abs(u) * 0.8) * (0.7 + R() * 0.6), roll = R();
+            const top = addRock(roll < 0.6 ? 'boulder' : roll < 0.85 ? 'slab' : 'tooth', px, pz, s, R());
+            if (s > 1.2 && R() < 0.55) addRock('boulder', px + (R() - 0.5) * s, pz + (R() - 0.5) * s, s * (0.4 + R() * 0.25), R(), top);
+          }
+          rubble(R, x, z, len * 0.5 + 2, 6 + Math.floor(big * 3));
+        }
+      }
+    }
+
     for (let b = 0; b < n; b++) {
       for (let a = 0; a < n; a++) {
         const gi = ti * n + a, gj = tj * n + b;
@@ -136,29 +250,54 @@ export class Flora {
         const x = x0 + (a + r2) * SPACING, z = z0 + (b + r3) * SPACING;
         const e = w.height(x, z);
         const cv = w.cover(x, z, e);
+        const dens = 0.45 + cv.fine * 1.1;     // thickets and openings, from a slow noise field
         let kind = null;
-        const pf = cv.forest * 0.6, pa = cv.aspen * 0.5, ps = cv.snag * 0.42, pk = cv.krumm * 0.3;
-        if (r1 < pa) kind = 'aspen';
-        else if (r1 < pa + pf) kind = e < 2980 + hash2(gi, gj, 4) * 160 ? 'lodgepole' : 'spruce';
-        else if (r1 < pa + pf + ps) kind = 'snag';
-        else if (r1 < pa + pf + ps + pk) kind = 'krumm';
-        else if (r1 > 1 - (cv.snag * 0.1 + cv.forest * 0.025)) kind = 'log';
-        else if (e < 2780 && cv.meadow > 0.6 && cv.grade < 0.08 && r1 > 0.93) kind = 'willow';
-        else if (r1 > 1 - (cv.rock * 0.05 + cv.alpine * 0.004)) kind = 'boulder';
-        if (!kind) continue;
-        const lake = w.lakeAt(x, z);
-        if (lake && e < lake.level + 0.7) continue;
-        const near = w.nearestTrail(x, z);
-        if (near.trail && near.d < near.trail.width / 2 + (kind === 'boulder' || kind === 'log' ? 1.2 : 2.2)) continue;
+        const pf = cv.forest * 0.5 * dens, pa = cv.aspen * 0.45 * dens, ps = cv.snag * 0.34, pk = cv.krumm * 0.24;
         const brook = w.nearestStream(x, z);
-        if (brook.stream && brook.d < brook.stream.width / 2 + 1.5) continue;
-        const s = kind === 'boulder' ? 0.5 + Math.pow(hash2(gi, gj, 5), 2.2) * (1.3 + cv.rock * 1.4)
-          : kind === 'krumm' || kind === 'willow' ? 0.7 + hash2(gi, gj, 5) * 0.7
-          : 0.62 + hash2(gi, gj, 5) * 0.55 - Math.max(0, e - cv.treeline + 120) / 450;
-        if (s < 0.35) continue;
-        items[kind].push(x, e, z, s, hash2(gi, gj, 6));
-        if (kind === 'boulder') solids.push(x, z, s, e + s * 0.55);
-        else if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.2 : 0.3) * s + 0.1, Infinity);
+        const wet = brook.stream ? brook.d - brook.stream.width / 2 : Infinity;
+        const forest = cv.forest, grade = cv.grade;
+        // sunny slopes hold lodgepole higher; cool north-facing and wet ground drop into spruce-fir early
+        const g = r1 < pa + pf && r1 >= pa ? w.gradient(x, z, _g) : null;
+        const north = g && grade > 0.04 ? clamp(g.z / grade, -1, 1) : 0;
+        if (r1 < pa) kind = 'aspen';
+        else if (r1 < pa + pf) {
+          const lodge = 2890 + hash2(gi, gj, 4) * 200 - north * 120 - (wet < 40 ? 150 : 0);
+          kind = e < lodge ? 'lodgepole' : hash2(gi, gj, 8) < clamp((e - 3000) / 450, 0.15, 0.6) ? 'fir' : 'spruce';
+        } else if (r1 < pa + pf + ps) kind = 'snag';
+        else if (r1 < pa + pf + ps + pk) kind = 'krumm';
+        else if (r1 > 1 - (cv.snag * 0.1 + forest * 0.025)) kind = 'log';
+        else if (cv.meadow > 0.4 && grade < 0.25 && e < 3500 && r1 > 1 - (0.025 + 0.16 * smoothstepFine(cv.fine))) kind = 'willow';   // willow thickets in the meadows, thicker in patches
+        else if (r1 > 1 - (cv.rock * 0.06 + cv.alpine * 0.006)) kind = 'boulder';
+        const rock = cv.rock, tl = cv.treeline, fine = cv.fine;
+        if (kind === 'boulder') {
+          const roll = hash2(gi, gj, 12);
+          addRock(roll < 0.8 ? 'boulder' : roll < 0.93 ? 'slab' : 'tooth', x, z, 0.35 + Math.pow(hash2(gi, gj, 5), 2.2) * (1 + rock * 1.4), hash2(gi, gj, 6));
+          continue;
+        }
+        if (kind) {
+          const lake = w.lakeAt(x, z);
+          const near = w.nearestTrail(x, z);
+          const bad = (lake && e < lake.level + 0.7)
+            || (near.trail && near.d < near.trail.width / 2 + (kind === 'log' ? 1.2 : 2.2))
+            || wet < 1.5
+            || (kind !== 'log' && crowded(x, z, 0.8));
+          if (!bad) {
+            const s = kind === 'krumm' || kind === 'willow' ? 0.7 + hash2(gi, gj, 5) * 0.7
+              : 0.62 + hash2(gi, gj, 5) * 0.55 - Math.max(0, e - tl + 120) / 450;
+            if (s >= 0.35) {
+              items[kind].push(x, e, z, s, hash2(gi, gj, 6));
+              if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.2 : 0.3) * s + 0.1, Infinity);
+            }
+          }
+        }
+        // understory: saplings among the live forest, drawn only up close
+        if (forest > 0.15 && hash2(gi, gj, 9) < Math.min(0.9, forest * dens * 0.8)) {
+          const sx = x0 + (a + r3) * SPACING, sz = z0 + (b + r2) * SPACING, se = w.height(sx, sz);
+          if (free(sx, sz, se, 1) && !crowded(sx, sz, 0.5)) {
+            const q = hash2(gi, gj, 10), sk = se < 3040 - fine * 80 ? 'lodgepole' : q < 0.55 ? 'fir' : 'spruce';
+            items[sk].push(sx, se, sz, 0.17 + hash2(gi, gj, 11) * 0.2, hash2(gi, gj, 13));
+          }
+        }
       }
     }
     return { ti, tj, items, solids: new Float32Array(solids) };
@@ -174,33 +313,53 @@ export class Flora {
     let ni = 0;
     const imp = this.imp, im = imp.instanceMatrix.array, ic = imp.instanceColor.array, cell = imp.geometry.attributes.aCell.array;
     const cells = this.impostors.cells;
+    const shade = (mesh, k, v) => {
+      const c = mesh.instanceColor.array;
+      c[k * 3] = v; c[k * 3 + 1] = v * 0.99; c[k * 3 + 2] = v * 0.96;
+    };
     const put = (mesh, x, y, z, sx, sy, sz, rot, v) => {
       const k = counts.get(mesh);
       if (k >= mesh.instanceMatrix.count) return;
       counts.set(mesh, k + 1);
       writeMatrix(mesh.instanceMatrix.array, k, x, y, z, sx, sy, sz, rot);
-      const c = mesh.instanceColor.array;
-      c[k * 3] = v; c[k * 3 + 1] = v * 0.99; c[k * 3 + 2] = v * 0.96;
+      shade(mesh, k, v);
+    };
+    // rocks are squashed, yawed and leaned a little, each different, all from one number
+    const putRock = (mesh, kind, x, y, z, s, r) => {
+      const k = counts.get(mesh);
+      if (k >= mesh.instanceMatrix.count) return;
+      counts.set(mesh, k + 1);
+      const lean = 0.35 * TILT[kind];
+      _q.setFromEuler(_e.set((fract(r * 47.1) - 0.5) * lean, r * Math.PI * 2, (fract(r * 71.9) - 0.5) * lean, 'YXZ'));
+      _m.compose(_p.set(x, y, z), _q, _s.set(s * (0.85 + fract(r * 13.7) * 0.5), s, s * (0.85 + fract(r * 29.3) * 0.5)));
+      _m.toArray(mesh.instanceMatrix.array, k * 16);
+      shade(mesh, k, 0.9 + r * 0.2);
     };
     for (const tile of this.tiles.values()) {
       for (const kind of KINDS) {
         const list = tile.items[kind];
         const variants = this.meshes[kind];
+        const rocky = ROCKS.includes(kind);
         for (let k = 0; k < list.length; k += 5) {
           const x = list[k], e = list[k + 1], z = list[k + 2], s = list[k + 3], r = list[k + 4];
           const d = Math.hypot(x - pos.x, z - pos.z);
           const rot = r * Math.PI * 2, v = 0.82 + r * 0.3;
-          if (kind === 'boulder') {
-            if (d < ROCK_R) put(variants[0], x, e - s * 0.2, z, s * (0.9 + r * 0.5), s, s * (1.3 - r * 0.4), rot, v);
+          if (rocky) {
+            let see = 520;
+            for (const [m, dist] of SEE) if (s <= m) { see = dist; break; }
+            if (d < see) putRock(variants[Math.floor(fract(r * 5.77) * variants.length)], kind, x, e, z, s, r);
             continue;
           }
           if (kind === 'log') {
-            if (d < ROCK_R) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
+            if (d < 240) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
             continue;
           }
-          const vi = Math.floor(((r * 7.31) % 1) * variants.length);
+          const vi = Math.floor(fract(r * 7.31) * variants.length);
+          if (s < SAPLING) { if (d < 55) put(variants[vi], x, e - 0.1, z, s, s, s, rot, v); continue; }
           if (d < this.cardR) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
-          if (d > this.radius || (d > this.thin && r > 0.5) || ni >= IMP_CAP) continue;
+          // far forest thins out progressively; the fog hides the difference
+          const keep = d < this.thin * 0.5 ? 1 : d < this.thin ? 0.7 : 0.4;
+          if (d > this.radius || fract(r * 3.77) > keep || ni >= IMP_CAP) continue;
           const c = cells[kind][vi];
           writeMatrix(im, ni, x, e - 0.15, z, c.w * s, c.h * s, c.w * s, rot);
           ic[ni * 3] = v; ic[ni * 3 + 1] = v; ic[ni * 3 + 2] = v;

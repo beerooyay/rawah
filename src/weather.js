@@ -4,15 +4,18 @@ import { clamp, smoothstep, lerp } from './noise.js';
 // Weather and climate. Late September on the Medicine Bow crest: cold clear
 // mornings, cumulus that build over the peaks by noon, afternoon thunderstorms
 // on some days, now and then a front that drops the snow line to the lakes,
-// and valley fog after a wet night. Each day gets a schedule from a seeded
-// roll, so the morning forecast in your journal tells you what's coming.
-// Every regime is a handful of numbers; the live state eases toward the
-// current one, and everything else reads that state: clouds, sun and sky,
-// fog, rain and snow, wind, air temperature, wet ground and snow cover.
+// and valley fog after a wet night. The weather is a continuous function of
+// time (`sampleWeather`): slow systems, afternoon heating, instability and
+// drifting cloud banks, seeded per game and tilted by the season. The morning
+// forecast in your journal is read off the same function, so it tells you
+// what is really coming. The named regimes are what the settings menu can
+// hold, and the labels the state is described with. The live state eases
+// toward the sampled one, and everything else reads that state: clouds, sun
+// and sky, fog, rain and snow, wind, air temperature, wet ground and snow.
 
 export const REGIMES = {
   clear: { label: 'Clear', cloud: 0.03, thick: 0.15, precip: 0, fog: 0, wind: 0, temp: 0, storm: 0 },
-  fair: { label: 'Fair-weather cumulus', cloud: 0.34, thick: 0.3, precip: 0, fog: 0, wind: 0.05, temp: 0, storm: 0 },
+  fair: { label: 'Fair-weather cumulus', cloud: 0.44, thick: 0.3, precip: 0, fog: 0, wind: 0.05, temp: 0, storm: 0 },
   building: { label: 'Clouds building', cloud: 0.56, thick: 0.62, precip: 0, fog: 0, wind: 0.2, temp: -1.5, storm: 0 },
   storm: { label: 'Thunderstorm', cloud: 0.94, thick: 1, precip: 0.9, fog: 0.25, wind: 0.75, temp: -5, storm: 1 },
   showers: { label: 'Showers', cloud: 0.86, thick: 0.82, precip: 0.45, fog: 0.3, wind: 0.3, temp: -4, storm: 0 },
@@ -22,40 +25,78 @@ export const REGIMES = {
 };
 const KEYS = ['cloud', 'thick', 'precip', 'fog', 'wind', 'temp', 'storm'];
 
-function rng(seed) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/** Smooth 1-D noise in 0..1: value noise on an integer lattice, hashed from the seed. */
+function lat(seed, i) {
+  let h = Math.imul((i | 0) ^ Math.imul(seed | 0, 0x9e3779b1), 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function n1(seed, t) {
+  const i = Math.floor(t), f = t - i, u = f * f * (3 - 2 * f);
+  return lat(seed, i) * (1 - u) + lat(seed, i + 1) * u;
+}
+const fbm1 = (seed, t, oct = 2) => { let s = 0, a = 0.5, n = 0; for (let k = 0; k < oct; k++) { s += n1(seed + k * 31, t) * a; n += a; t *= 2.17; a *= 0.5; } return s / n; };
+
+/**
+ * The weather at a moment, as continuous numbers rather than a menu of
+ * regimes. Slow systems (a day or two across) bring grey decks, cold fronts
+ * and clearings; the sun builds cumulus through the afternoon and, on the
+ * right days, tips it into thunderstorms; cold, wet, still mornings give
+ * valley fog. The season's climate (calendar.js) tilts all of it, and the
+ * seed makes every game's run of weather its own. T is hours since the start.
+ */
+export function sampleWeather(seed, T, climate = { storms: 0.32, fair: 0.26, front: 0.12, clear: 0.18, grey: 0.12 }) {
+  const h = ((T % 24) + 24) % 24, day = Math.floor(T / 24);
+  const c = climate;
+  const system = fbm1(seed + 11, T / 31, 2);                         // slow pressure pattern
+  const deck = smoothstep(0.6 - c.grey * 1.1 - c.front * 0.5, 0.82, system);   // grey overcast
+  const frontish = smoothstep(0.7 - c.front * 0.9, 0.93, system) * Math.min(1, c.front * 4);
+  const sun = smoothstep(9, 13, h) * (1 - smoothstep(16.5, 20.5, h));            // afternoon heating
+  const mood = fbm1(seed + 23, T / 9, 2);                                        // today's instability
+  const instab = clamp((mood - 0.4) * 1.6 * (0.35 + c.storms * 2.4), 0, 1) * (1 - deck * 0.6);
+  const cumulus = sun * (0.18 + 0.62 * fbm1(seed + 37, T / 5, 2)) * (1 - deck * 0.5) * (0.5 + c.fair + c.storms);
+  const conv = sun * instab;
+  const banks = fbm1(seed + 41, T / 1.7, 2) - 0.5;                              // clouds drifting through
+  const cloud = clamp(0.02 + 0.78 * deck + 0.55 * conv + 0.6 * cumulus + frontish * 0.5 + banks * 0.22 * (0.4 + deck + cumulus), 0, 1);
+  const thick = clamp(0.12 + 0.66 * deck + 0.62 * conv + 0.25 * cumulus + frontish * 0.35 + banks * 0.1, 0, 1);
+  const storm = smoothstep(0.52, 0.82, conv * (0.7 + 0.6 * fbm1(seed + 53, T / 2.3, 2)));
+  const shower = smoothstep(0.58, 0.88, cloud * thick + 0.3 * (fbm1(seed + 67, T / 3.1, 2) - 0.5)) * 0.5;
+  const precip = clamp(Math.max(storm * 0.95, shower, frontish * 0.78), 0, 1);
+  // cold, damp, still dawns: valley fog that burns off by mid-morning
+  const dawn = smoothstep(2, 5, h) * (1 - smoothstep(7.5, 10.5, h));
+  const fogRoll = n1(seed + 79, day * 2.7 + 0.4);
+  const fog = clamp(dawn * smoothstep(0.5, 0.82, fogRoll) * (1 - deck * 0.4) + frontish * 0.55 + shower * 0.25, 0, 1);
+  const wind = clamp(0.03 + 0.28 * deck + 0.65 * frontish + 0.5 * storm + 0.25 * conv + 0.14 * cumulus - fog * 0.3 + (fbm1(seed + 89, T / 2.6) - 0.5) * 0.25, -0.25, 1);
+  const temp = -(2.2 * deck + 4.5 * storm + 9 * frontish + 1.6 * shower * 2 + 1.4 * cloud * thick);
+  return { cloud, thick, precip, fog, wind, temp, storm };
 }
 
-/** One day's weather as [hour, regime] steps. */
-export function daySchedule(seed, day, climate = { storms: 0.42, fair: 0.24, front: 0.12, clear: 0.12, grey: 0.1 }) {
-  const r = rng(seed * 7919 + day * 104729);
-  const pick = (opts) => { let x = r(), k; for (k of Object.keys(opts)) { x -= opts[k]; if (x < 0) return k; } return k; };
-  const kind = pick(climate);
-  const s = [[0, pick({ clear: 0.75, overcast: 0.25 })]];
-  const t = (a, b) => a + r() * (b - a);
-  if (kind === 'front') {
-    s.push([t(2, 6), 'overcast'], [t(7, 9), 'front'], [t(11, 13), 'showers'], [t(14, 15.5), 'front'], [t(17, 19), 'overcast'], [t(21, 23), 'clear']);
-    return s;
+/** The named regime a state is closest to: for labels, the forecast and the journal. */
+export function classify(w) {
+  if (w.storm > 0.5) return 'storm';
+  if (w.precip > 0.55 && w.temp < -6) return 'front';
+  if (w.precip > 0.2) return 'showers';
+  if (w.fog > 0.55) return 'fog';
+  if (w.cloud > 0.78) return 'overcast';
+  if (w.cloud > 0.5 && w.thick > 0.5) return 'building';
+  if (w.cloud > 0.2) return 'fair';
+  return 'clear';
+}
+
+/** One day's weather as [hour, regime] steps, read off the same model the game runs on. */
+export function daySchedule(seed, day, climate) {
+  const out = [];
+  let last = null;
+  for (let q = 0; q < 24 * 4; q++) {
+    const hr = q / 4, k = classify(sampleWeather(seed, (day - 1) * 24 + hr, climate));
+    if (k !== last) { out.push([hr, k]); last = k; }
   }
-  s.push([t(4.5, 6), r() < 0.3 ? 'fog' : 'clear']);
-  if (kind === 'grey') {
-    s.push([t(9, 10.5), 'overcast'], [t(13, 15), 'showers'], [t(16.5, 18), 'overcast'], [t(20, 22), 'fair']);
-  } else if (kind === 'storms') {
-    const build = t(10.5, 12.5), hit = build + t(1.2, 2.6);
-    s.push([t(8.5, 9.5), 'clear'], [build - 1.5, 'fair'], [build, 'building'], [hit, 'storm'], [hit + t(0.8, 1.6), 'showers'], [hit + t(2.4, 3.6), 'fair'], [t(19.5, 21), 'clear']);
-  } else if (kind === 'fair') {
-    s.push([t(8.5, 9.5), 'clear'], [t(10.5, 12), 'fair'], [t(13.5, 15), 'building'], [t(16.5, 18), 'fair'], [t(19, 20.5), 'clear']);
-  } else {
-    s.push([t(8.5, 9.5), 'clear']);
+  // a regime that lasts under 45 minutes is a flicker, not a forecast: fold it into what came before
+  for (let i = out.length - 1; i > 0; i--) {
+    const end = i + 1 < out.length ? out[i + 1][0] : 24;
+    if (end - out[i][0] < 0.75) out.splice(i, 1);
   }
-  return s.sort((a, b) => a[0] - b[0]);
+  return out.filter((e, i) => i === 0 || e[1] !== out[i - 1][1]);
 }
 
 function fmtHour(h) {
@@ -65,10 +106,13 @@ function fmtHour(h) {
 
 /** A one-line forecast for the journal, read off the schedule. */
 export function forecast(sched) {
+  sched = sched.filter(([t]) => t >= 5);   // the day you plan is the daylight one
+  if (!sched.length) return 'Clear and dry. Cold tonight.';
   const at = (k) => sched.find(([, r]) => r === k);
+  const before = (k, h) => [...sched].reverse().find(([t, r]) => r === k && t < h);
   if (at('front')) return `Cold front: snow squalls from about ${fmtHour(at('front')[0])}, snow down to the lakes. Bring the puffy.`;
   if (at('storm') && !at('building')) return `Thunderstorms around ${fmtHour(at('storm')[0])}.`;
-  if (at('storm')) return `Clear early, clouds building by ${fmtHour(at('building')?.[0] ?? at('storm')[0] - 1)}, thunderstorms around ${fmtHour(at('storm')[0])}. Be off the ridges by noon.`;
+  if (at('storm')) return `Clear early, clouds building by ${fmtHour(before('building', at('storm')[0])?.[0] ?? at('storm')[0] - 1)}, thunderstorms around ${fmtHour(at('storm')[0])}. Be off the ridges by noon.`;
   if (at('showers')) return `Grey and cool, showers from about ${fmtHour(at('showers')[0])}.`;
   if (at('building')) return 'Fair. Afternoon cumulus over the crest, storms unlikely.';
   return 'Clear and dry. Cold tonight.';
@@ -103,10 +147,9 @@ export class Weather {
   #target(day, hour) {
     if (day !== this.day) { this.day = day; this.sched = daySchedule(this.seed, day, this.climate); }
     if (this.override && REGIMES[this.override]) { this.regime = this.override; return REGIMES[this.override]; }
-    let cur = this.sched[0][1];
-    for (const [h, k] of this.sched) if (hour >= h) cur = k;
-    this.regime = cur;
-    return REGIMES[cur];
+    const w = sampleWeather(this.seed, (day - 1) * 24 + hour, this.climate);
+    this.regime = classify(w);
+    return w;
   }
 
   get label() {
@@ -128,9 +171,9 @@ export class Weather {
   update(dt, gameMin, day, hour, tempC, sunUp, freezeLine) {
     this.events.length = 0;
     const T = this.#target(day, hour);
-    // fronts and storms roll in over ~20 game minutes; clearing is slower
-    const k = 1 - Math.exp(-gameMin / 22);
-    for (const key of KEYS) this[key] = lerp(this[key], T[key], key === 'cloud' && T.cloud < this.cloud ? k * 0.6 : k);
+    // the sampled weather is already smooth; this only softens jumps (a menu override, waking from a nap)
+    const k = 1 - Math.exp(-gameMin / 7);
+    for (const key of KEYS) this[key] = lerp(this[key], T[key], key === 'cloud' && T.cloud < this.cloud ? k * 0.7 : k);
     this.snowK = smoothstep(2.5, -0.5, tempC + this.temp);
     const rain = this.precip * (1 - this.snowK);
     // ground: soaks in rain, dries under sun and wind; snow piles up and melts

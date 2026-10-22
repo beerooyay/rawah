@@ -12,6 +12,31 @@ const SLIDE = 1.4;        // you lose your footing beyond this (~54 deg)
 const CLIMBABLE = 0.95;   // a face steeper than this can be climbed
 const TOP_OUT = 0.68;
 
+// stances: eye height, and the share of walking pace you keep
+const STANCE = {
+  stand: { eye: EYE, speed: 1 },
+  crouch: { eye: 0.92, speed: 0.5 },
+  prone: { eye: 0.36, speed: 0.14 },
+};
+
+// timed body actions. `hits` are the moments (s into the action) a strike
+// lands; `slow` is the share of pace you keep while it plays. The hit
+// reactions are what other characters' blows do to you.
+export const ACTIONS = {
+  jab: { dur: 0.62, hits: [0.26], slow: 0.35, cost: 3 },
+  cross: { dur: 0.58, hits: [0.24], slow: 0.3, cost: 4 },
+  combo: { dur: 1.15, hits: [0.22, 0.5, 0.85], slow: 0.2, cost: 8 },
+  hook: { dur: 0.85, hits: [0.4], slow: 0.25, cost: 6 },
+  stomp: { dur: 0.9, hits: [0.45], slow: 0.2, cost: 4 },
+  hitSide: { dur: 1.1, hits: [], slow: 0 },
+  hitKidney: { dur: 0.9, hits: [], slow: 0 },
+  hitHead: { dur: 0.7, hits: [], slow: 0.1 },
+  hitUpper: { dur: 1.3, hits: [], slow: 0 },
+  hitFace: { dur: 1.0, hits: [], slow: 0 },
+  climbOut: { dur: 1.7, hits: [], slow: 0.4 },   // hauling out of deep water onto the bank
+};
+const CHAIN = 0.45;   // window after a jab or cross to throw the next punch of the combo
+
 export class Hiker {
   constructor(world, flora) {
     this.world = world;
@@ -29,6 +54,13 @@ export class Hiker {
     this.events = [];
     this.wallUp = new THREE.Vector2(0, -1);
     this._g = { x: 0, z: 0 };
+    this.stance = 'stand'; this.eyeH = EYE;
+    this.stanceLock = 0;              // s left getting up or down
+    this.recover = 0;                 // s left stumbling out of a hard landing
+    this.flip = false; this.resting = false; this.climbSpeed = 0;
+    this.swimT = 0; this.exitCool = 0;   // s spent swimming; s before the next climb-out can play
+    this.action = null;               // { id, kind, t, dur, ... } while punching or reeling
+    this.lastKind = ''; this.chainT = 0; this.actionId = 0;
   }
 
   place(x, z, yaw = this.yaw) {
@@ -37,13 +69,15 @@ export class Hiker {
     this.yaw = yaw; this.pitch = 0;
     this.mode = 'walk'; this.grounded = true;
     this.airTop = this.pos.y; this.slideDrop = 0;
+    this.stance = 'stand'; this.eyeH = EYE; this.stanceLock = 0; this.recover = 0;
+    this.action = null; this.chainT = 0; this.flip = false;
   }
 
   eye(out) {
     if (this.mode === 'climb') {
       return out.set(this.pos.x - this.wallUp.x * 0.55, this.pos.y + 1.45, this.pos.z - this.wallUp.y * 0.55);
     }
-    return out.set(this.pos.x, this.pos.y + (this.mode === 'swim' ? 1.68 : EYE), this.pos.z);
+    return out.set(this.pos.x, this.pos.y + (this.mode === 'swim' ? 1.68 : this.eyeH), this.pos.z);
   }
 
   ground(x, z) {
@@ -56,6 +90,12 @@ export class Hiker {
     this.yaw -= inp.lookX;
     this.pitch = clamp(this.pitch - inp.lookY, -1.5, 1.5);
     this.injured = Math.max(0, this.injured - dt);
+    this.resting = !!env.resting;
+    this.stanceLock = Math.max(0, this.stanceLock - dt);
+    this.recover = Math.max(0, this.recover - dt);
+    this.exitCool = Math.max(0, this.exitCool - dt);
+    if (this.mode === 'climb') { this.stance = 'stand'; this.action = null; this.eyeH = EYE; }
+    else { this.#stance(dt, inp); this.#combat(dt, inp); }
     this.wet = Math.max(0, this.wet - dt * (env.nearFire ? 4 : 1));
     if (this.mode === 'climb') this.#climb(dt, inp);
     else this.#walk(dt, inp);
@@ -85,13 +125,21 @@ export class Hiker {
     if (depth > 1.3) {
       if (this.mode !== 'swim') this.events.push({ type: 'splash', big: true });
       this.mode = 'swim';
-    } else if (this.mode === 'swim') this.mode = 'walk';
+    } else if (this.mode === 'swim') {
+      this.mode = 'walk';
+      // a real swim ends with a haul out, not a sudden stand
+      if (this.swimT > 0.8 && this.exitCool <= 0 && !this.action) { this.#startAction('climbOut'); this.exitCool = 4; this.events.push({ type: 'exit' }); }
+    }
+    this.swimT = this.mode === 'swim' ? this.swimT + dt : 0;
 
     const winded = this.stamina < 2;
-    const sprinting = inp.sprint && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
+    const sprinting = inp.sprint && this.stance === 'stand' && !this.action && !winded && this.injured <= 0 && this.mode === 'walk' && wl > 0.1 && depth < 0.4;
     let speed = this.mode === 'swim' ? 1.2 : sprinting ? 4.5 : winded ? 1.8 : 2.5;
     if (this.injured > 0) speed *= 0.55;
     if (depth > 0.15 && this.mode === 'walk') speed *= 0.6;
+    if (this.mode === 'walk') {
+      speed *= STANCE[this.stance].speed * (this.action ? this.action.slow : 1) * (this.recover > 0 ? 0.3 : 1) * (this.stanceLock > 0.3 ? 0.2 : 1);
+    }
 
     // pace by grade along the direction of travel
     let grade = 0;
@@ -157,11 +205,19 @@ export class Hiker {
         this.airTop = p.y;
       }
     }
-    if (this.grounded && inp.jump && this.stamina > 6 && this.mode === 'walk') {
-      this.vel.y = 5.4;
-      this.grounded = false;
-      this.airTop = p.y;
-      this.stamina -= 6;
+    if (this.grounded && inp.jump && this.mode === 'walk' && !this.action) {
+      if (this.stance !== 'stand') {
+        if (this.stanceLock <= 0) this.#setStance('stand');
+      } else if (this.stamina > 6 && this.recover <= 0) {
+        // sprinting into a jump throws a front flip: higher and longer, and it costs more
+        const flip = sprinting && this.stamina > 22;
+        this.vel.y = flip ? 7.4 : 5.4;
+        this.flip = flip;
+        this.grounded = false;
+        this.airTop = p.y;
+        this.stamina -= flip ? 16 : 6;
+        this.events.push({ type: 'jump', flip });
+      }
     }
     if (!this.grounded) {
       this.vel.y -= GRAVITY * dt;
@@ -181,6 +237,8 @@ export class Hiker {
   }
 
   #landed(fall) {
+    this.flip = false;
+    if (fall > 2.5) this.recover = 0.45;
     if (fall > 17) this.events.push({ type: 'fall', severe: true, why: `You fell ${Math.round(fall)} m.` });
     else if (fall > 6.5) {
       this.injured = 30 + fall * 2;
@@ -248,6 +306,7 @@ export class Hiker {
     this.grip = Math.min(100, this.grip);
     this.stamina = Math.max(0, this.stamina - (moving ? 2.5 : 0.5) * dt);
     this.hint = ledge ? 'Good ledge — catch your breath' : '[W/S] climb · [A/D] traverse · [Space] lunge · [E] let go';
+    this.climbSpeed = moving ? ds / dt : 0;
     this.climbStride = (this.climbStride || 0) + (moving ? ds : 0);
     if (moving) this.phase += ds * 2.2;
     if (this.climbStride > 0.7) { this.climbStride = 0; this.events.push({ type: 'step', surface: 'rock', speed: 1 }); }
@@ -266,6 +325,73 @@ export class Hiker {
       p.y += 0.3;
       if (this.grip <= 0) this.events.push({ type: 'toast', text: 'Lost your grip!', warn: true });
     }
+  }
+
+  // ---------------------------------------------------------------- stance
+  #stance(dt, inp) {
+    if (this.mode !== 'walk') this.stance = 'stand';
+    else if (inp.crouch && this.grounded && this.stanceLock <= 0 && !this.action) {
+      this.#setStance(this.stance === 'stand' ? 'crouch' : this.stance === 'crouch' ? 'prone' : 'stand');
+    }
+    let eye = STANCE[this.stance].eye;
+    if (this.stance === 'crouch' && this.moving > 0.5) eye += 0.2;                       // the crouched walk rides higher than the crouch
+    else if (this.stance === 'stand' && this.resting && this.moving < 0.2) eye = 1.15;   // sitting
+    this.eyeH += (eye - this.eyeH) * (1 - Math.exp(-9 * dt));
+  }
+
+  #setStance(to) {
+    const from = this.stance;
+    this.stance = to;
+    // getting up from lying down takes a moment; the rest are quick
+    this.stanceLock = from === 'prone' ? 1.3 : to === 'prone' ? 1 : 0.25;
+    this.events.push({ type: 'stance', from, to });
+  }
+
+  // ---------------------------------------------------------------- fighting
+  #combat(dt, inp) {
+    const a = this.action;
+    if (a) {
+      const before = a.t;
+      a.t += dt;
+      a.hits.forEach((h, n) => {
+        if (before < h && a.t >= h) this.events.push({ type: 'strike', kind: a.kind, n, last: n === a.hits.length - 1, x: -Math.sin(this.yaw), z: -Math.cos(this.yaw), reach: 1.2 });
+      });
+      if (a.t >= a.dur) {
+        this.chainT = a.kind === 'jab' || a.kind === 'cross' ? CHAIN : 0;
+        this.lastKind = a.kind;
+        this.action = null;
+      }
+    } else if (this.chainT > 0) this.chainT -= dt;
+
+    const want = inp.punch ? 'punch' : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
+    if (!want || this.action || this.mode !== 'walk' || !this.grounded || this.stance !== 'stand' || this.stanceLock > 0 || this.stamina < 4) return;
+    let kind = want;
+    if (want === 'punch') kind = this.chainT > 0 && this.lastKind === 'jab' ? 'cross' : this.chainT > 0 && this.lastKind === 'cross' ? 'combo' : 'jab';
+    this.#startAction(kind);
+  }
+
+  #startAction(kind) {
+    const spec = ACTIONS[kind];
+    this.action = { id: ++this.actionId, kind, t: 0, dur: spec.dur, hits: spec.hits, slow: spec.slow };
+    this.chainT = 0;
+    this.stamina = Math.max(0, this.stamina - (spec.cost || 0));
+  }
+
+  /**
+   * Take a blow: kind is side, kidney, head, upper or face. `from` is an
+   * optional {x, z} for the attacker, which shoves you back a little. Other
+   * characters' fights call this; nothing in the world throws punches yet.
+   */
+  receiveHit(kind = 'side', from = null) {
+    const name = `hit${kind[0].toUpperCase()}${kind.slice(1)}`;
+    if (!ACTIONS[name] || this.mode !== 'walk') return false;
+    this.#startAction(name);
+    this.stanceLock = 0;
+    if (from) {
+      const dx = this.pos.x - from.x, dz = this.pos.z - from.z, d = Math.hypot(dx, dz) || 1;
+      this.vel.x += (dx / d) * 2.2; this.vel.z += (dz / d) * 2.2;
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------- body

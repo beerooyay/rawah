@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+window.convert = async (name) => {
+  const root = await new FBXLoader().loadAsync(`./${name}.fbx`);
+  const tex = await new THREE.TextureLoader().loadAsync(`./${name}_dl.jpg`);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.userData.mimeType = 'image/jpeg';
+  const info = [];
+  root.traverse((o) => {
+    if (o.isSkinnedMesh) {
+      o.material = new THREE.MeshStandardMaterial({ map: tex, metalness: 0, roughness: 0.85 });
+      const before = o.geometry.attributes.position.count;
+      o.geometry = mergeVertices(o.geometry, 1e-4);
+      info.push(`merged ${before} -> ${o.geometry.attributes.position.count}`);
+      o.geometry.computeBoundingBox();
+      info.push(`mesh ${o.name} verts=${o.geometry.attributes.position.count} bbox y ${o.geometry.boundingBox.min.y.toFixed(1)}..${o.geometry.boundingBox.max.y.toFixed(1)} skel bones=${o.skeleton.bones.length}`);
+    }
+  });
+  root.scale.setScalar(0.01);   // centimetres to metres, as the game expects
+  root.rotation.x = -Math.PI / 2;   // these rigs are Z-up; stand them up
+  info.push(`root scale ${root.scale.x} children ${root.children.map((c) => c.name + ':' + c.type).join(',')}`);
+  const buf = await new Promise((res, rej) => new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false, maxTextureSize: 2048 }));
+  let s = ''; const u = new Uint8Array(buf); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return { info, b64: btoa(s) };
+};
+window.ready = true;
+</script>

@@ -20,7 +20,7 @@ const SLOTS = {
 };
 const BARK = { spruce: 0, pine: 1, aspen: 2, snag: 3 };   // 512x1024 strips across the bottom half
 
-function rng(seed) {
+export function rng(seed) {
   let s = seed >>> 0 || 1;
   return () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x6d2b79f5 >>> 0) / 4294967296);
 }
@@ -69,9 +69,9 @@ function paintAtlas(season = 'autumn') {
     for (let k = 0; k < 2; k++) twig(10, CELL * (0.42 + k * 0.08), -0.08 + k * 0.1, CELL * width, 0);
     g.restore();
   };
-  spray('spruce', { hue: 172, sat: 20, light: 27, needle: 24, density: 16, droop: 0.55, width: 0.95 });
-  spray('fir', { hue: 150, sat: 28, light: 22, needle: 20, density: 18, droop: 0.25, width: 0.95 });
-  spray('krumm', { hue: 140, sat: 24, light: 22, needle: 18, density: 20, droop: 0.15, width: 0.9 });
+  spray('spruce', { hue: 160, sat: 30, light: 30, needle: 26, density: 20, droop: 0.55, width: 0.95 });
+  spray('fir', { hue: 148, sat: 36, light: 26, needle: 22, density: 22, droop: 0.25, width: 0.95 });
+  spray('krumm', { hue: 138, sat: 32, light: 26, needle: 20, density: 24, droop: 0.15, width: 0.9 });
 
   // lodgepole: long paired needles bursting from the twig tips
   {
@@ -82,9 +82,9 @@ function paintAtlas(season = 'autumn') {
       const cx = 80 + R() * 360, cy = 90 + R() * 330;
       g.strokeStyle = hsl(28, 30, 25, 0.9); g.lineWidth = 4;
       g.beginPath(); g.moveTo(10, CELL * 0.55); g.quadraticCurveTo(cx * 0.5, cy + 30, cx, cy); g.stroke();
-      for (let k = 0; k < 150; k++) {
+      for (let k = 0; k < 190; k++) {
         const a = R() * Math.PI * 2, l = 38 + R() * 60;
-        g.strokeStyle = hsl(80 + R() * 18, 30, 26 + R() * 14, 0.97); g.lineWidth = 2.8;
+        g.strokeStyle = hsl(84 + R() * 18, 40, 28 + R() * 14, 0.97); g.lineWidth = 3;
         g.beginPath(); g.moveTo(cx, cy); g.quadraticCurveTo(cx + Math.cos(a) * l * 0.5, cy + Math.sin(a) * l * 0.5 - 6, cx + Math.cos(a) * l, cy + Math.sin(a) * l); g.stroke();
       }
     }
@@ -115,12 +115,12 @@ function paintAtlas(season = 'autumn') {
   // the season picks the deciduous palette: fresh spring green, deep summer green, gold, or bare twigs
   const ASPEN = {
     spring: [[88, 62, 52], [84, 58, 48], [92, 55, 58], [80, 60, 44]],
-    summer: [[100, 42, 34], [96, 46, 30], [104, 38, 38], [92, 40, 28]],
+    summer: [[102, 52, 38], [96, 56, 33], [106, 46, 43], [92, 50, 31]],
     autumn: [[46, 88, 52], [42, 90, 46], [50, 80, 58], [38, 85, 42], [70, 40, 40]],
   };
   const WILLOW = {
     spring: [[80, 50, 46], [74, 46, 40]],
-    summer: [[96, 32, 32], [90, 30, 28], [100, 26, 36]],
+    summer: [[98, 44, 34], [92, 42, 30], [104, 38, 40]],
     autumn: [[30, 60, 38], [36, 66, 44], [24, 50, 32], [44, 50, 42]],
   };
   const bareTwigs = (name) => {
@@ -280,10 +280,15 @@ class Builder {
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, bark, shape, rise, density = 1 }) {
+function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, bark, shape, rise, density = 1, stubs = 0 }) {
   const R = rng(seed), b = new Builder();
   b.trunk(height, radius * 0.11, 0.02, bark);
   const centre = V(0, height * 0.45, 0);
+  // shaded-out lower branches: bare dead stubs, so the crown never just starts on a clean trunk
+  for (let y = 1.2; y < clear - 0.2 && stubs; y += 0.7 + R() * 0.8) {
+    const a = R() * Math.PI * 2;
+    b.card(V(0, y, 0), V(Math.cos(a), -0.15 + R() * 0.3, Math.sin(a)), 0.5 + R() * 0.7, 0.4, (R() - 0.5) * 2, 0.1, 'deadTwig', centre, 0.9);
+  }
   for (let y = clear; y < height - 0.4; y += whorl * (0.85 + R() * 0.3)) {
     const t = (y - clear) / (height - clear);
     const L = radius * shape(t) * (0.8 + R() * 0.35);
@@ -292,7 +297,7 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
     for (let k = 0; k < branches; k++) {
       const a = off + (k / branches) * Math.PI * 2 + (R() - 0.5) * 0.6;
       const dir = V(Math.cos(a), rise + (R() - 0.5) * 0.15, Math.sin(a));
-      b.card(V(0, y, 0), dir, L, L * 0.75, (R() - 0.5) * 0.9, droop * (1 - t * 0.6), slot, V(0, y + 0.3, 0), 0.85 + t * 0.2);
+      b.card(V(0, y, 0), dir, L * 1.08, L * 0.9, (R() - 0.5) * 0.9, droop * (1 - t * 0.6), slot, V(0, y + 0.3, 0), 0.85 + t * 0.2);
       // a second, steeper spray fills the silhouette seen from the side
       if (density > 1) b.card(V(0, y + 0.15, 0), V(dir.x, dir.y - 0.35, dir.z), L * 0.8, L * 0.6, Math.PI / 2 + (R() - 0.5) * 0.6, droop * 0.5, slot, V(0, y, 0), 0.8 + t * 0.2);
     }
@@ -305,40 +310,59 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
   return b.geometry();
 }
 
+/**
+ * Lodgepole: a straight bare-ish trunk with a crown that starts at `crown` of
+ * the height (stand-grown trees shed their low branches, open-grown ones keep
+ * them), dead stubs below it, and a ragged, widest-in-the-upper-middle outline.
+ */
+function lodgepole(seed, { H, crown, spread, trunk = 0.26 }) {
+  const R = rng(seed), b = new Builder();
+  b.trunk(H, trunk, 0.04, 'pine');
+  const centre = V(0, H * (0.5 + crown * 0.4), 0), y0 = H * crown;
+  for (let y = 1.0; y < y0 - 0.3; y += 0.8 + R() * 0.9) {
+    const a = R() * 6.28;
+    b.card(V(0, y, 0), V(Math.cos(a), -0.1 + R() * 0.25, Math.sin(a)), 0.5 + R() * 0.6, 0.35, (R() - 0.5) * 2, 0.1, 'deadTwig', centre, 0.9);
+  }
+  for (let y = y0; y < H - 0.5; y += 0.5 * (0.8 + R() * 0.4)) {
+    const t = (y - y0) / (H - 0.5 - y0);
+    // short at the base of the crown, full by a third of the way up, closing to the leader
+    const L = spread * (0.35 + 0.65 * Math.sin(Math.PI * Math.min(1, 0.18 + t * 0.82))) * (0.75 + R() * 0.4);
+    const off = R() * 6.28, n = t < 0.25 ? 5 : 8;
+    for (let k = 0; k < n; k++) {
+      const a = off + k * (6.283 / n) + (R() - 0.5) * 0.7;
+      b.card(V(0, y, 0), V(Math.cos(a), 0.1 + R() * 0.3, Math.sin(a)), L * 1.12, L * 1.1, (R() - 0.5) * 1.4, 0.12, 'pine', centre, 0.9 + t * 0.15);
+    }
+  }
+  b.card(V(0, H - 1.2, 0), V(0.1, 1, 0), 1.6, 1.1, 0, 0, 'pine', centre, 1.05);
+  return b.geometry();
+}
+
+/** Aspen: a pale trunk, a leafy crown in its upper part, and a few low clusters on younger stems. */
+function aspen(seed, { H, crownLow, lowLeaves = 0 }) {
+  const R = rng(seed), b = new Builder();
+  const lean = V((R() - 0.5) * 0.8, 0, (R() - 0.5) * 0.8);
+  b.trunk(H * 0.85, 0.17, 0.05, 'aspen', 7, lean);
+  const centre = V(lean.x, H * (crownLow + 0.25), lean.z);
+  const n = 52 + lowLeaves;
+  for (let k = 0; k < n; k++) {
+    const low = k >= 52;
+    const a = R() * 6.28, y = low ? H * (0.22 + R() * (crownLow - 0.2)) : H * (crownLow + R() * (0.97 - crownLow));
+    const rr = Math.sqrt(R()) * (low ? 1.1 : 2.2), shrink = low ? 1 : 1 - Math.abs(y / H - (crownLow + 0.28)) * 1.4;
+    const c = V(lean.x + Math.cos(a) * rr * shrink, y, lean.z + Math.sin(a) * rr * shrink);
+    const sz = low ? 1.7 : 2.15;
+    b.flat(c, sz, sz, R() * 3.14, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
+    b.flat(c, sz, sz, R() * 3.14 + 1.57, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
+  }
+  return b.geometry();
+}
+
 export function buildSpecies() {
-  const spruce = (s) => conifer(s, { height: 17, radius: 2.4, clear: 0.6, whorl: 0.55, branches: 5, droop: 0.45, slot: 'spruce', bark: 'spruce', rise: -0.18,
-    shape: (t) => Math.pow(1 - t, 0.85), density: 2 });
-  const fir = (s) => conifer(s, { height: 15, radius: 1.5, clear: 0.4, whorl: 0.5, branches: 5, droop: 0.15, slot: 'fir', bark: 'spruce', rise: -0.05,
+  // Engelmann spruce: broad, drooping, dense to well down the trunk
+  const spruce = (s, H, radius, clear) => conifer(s, { height: H, radius, clear, whorl: 0.45, branches: 8, droop: 0.45, slot: 'spruce', bark: 'spruce', rise: -0.18,
+    shape: (t) => Math.pow(1 - t, 0.85), density: 2, stubs: 1 });
+  // subalpine fir: a narrow spire with short upswept branches right to the ground
+  const fir = (s, H, radius, clear) => conifer(s, { height: H, radius, clear, whorl: 0.4, branches: 8, droop: 0.12, slot: 'fir', bark: 'spruce', rise: -0.02,
     shape: (t) => Math.pow(1 - t, 0.75) * (t < 0.1 ? 0.8 + t * 2 : 1), density: 2 });
-  const lodge = (s) => {
-    const R = rng(s), b = new Builder(), H = 19;
-    b.trunk(H, 0.24, 0.04, 'pine');
-    const centre = V(0, H * 0.8, 0);
-    for (let y = H * 0.5; y < H - 0.5; y += 0.55 * (0.8 + R() * 0.4)) {
-      const t = (y - H * 0.5) / (H * 0.5), L = 2.3 * Math.sin(Math.PI * (0.22 + t * 0.78)) * (0.75 + R() * 0.4);
-      const off = R() * 6.28;
-      for (let k = 0; k < 5; k++) {
-        const a = off + k * 1.257 + (R() - 0.5) * 0.7;
-        b.card(V(0, y, 0), V(Math.cos(a), 0.1 + R() * 0.3, Math.sin(a)), L, L * 1.0, (R() - 0.5) * 1.4, 0.12, 'pine', centre, 0.9 + t * 0.15);
-      }
-    }
-    b.card(V(0, H - 1.2, 0), V(0.1, 1, 0), 1.6, 1.1, 0, 0, 'pine', centre, 1.05);
-    return b.geometry();
-  };
-  const aspen = (s) => {
-    const R = rng(s), b = new Builder(), H = 11;
-    const lean = V((R() - 0.5) * 0.8, 0, (R() - 0.5) * 0.8);
-    b.trunk(H * 0.85, 0.17, 0.05, 'aspen', 7, lean);
-    const centre = V(lean.x, H * 0.68, lean.z);
-    for (let k = 0; k < 34; k++) {
-      const a = R() * 6.28, rr = Math.sqrt(R()) * 2.2, y = H * (0.45 + R() * 0.5);
-      const shrink = 1 - Math.abs(y / H - 0.72) * 1.4;
-      const c = V(lean.x + Math.cos(a) * rr * shrink, y, lean.z + Math.sin(a) * rr * shrink);
-      b.flat(c, 1.9, 1.9, R() * 3.14, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
-      b.flat(c, 1.9, 1.9, R() * 3.14 + 1.57, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
-    }
-    return b.geometry();
-  };
   const snag = (s) => {
     const R = rng(s), b = new Builder(), H = 15 + R() * 4;
     b.trunk(H, 0.22, 0.03, 'snag', 6);
@@ -365,17 +389,24 @@ export function buildSpecies() {
   const willow = (s) => {
     const R = rng(s), b = new Builder();
     const centre = V(0, 0.9, 0);
-    for (let k = 0; k < 16; k++) {
-      const a = R() * 6.28, rr = R() * 1.0;
+    for (let k = 0; k < 30; k++) {
+      const a = R() * 6.28, rr = R() * 1.15;
       const c = V(Math.cos(a) * rr, 0.6 + R() * 1.0, Math.sin(a) * rr);
       b.flat(c, 1.3, 1.5, R() * 3.14, 'willowLeaf', centre, 0.9);
     }
     return b.geometry();
   };
   return {
-    spruce: [spruce(11), spruce(23), fir(37)],
-    lodgepole: [lodge(41), lodge(53)],
-    aspen: [aspen(61), aspen(73)],
+    spruce: [spruce(11, 21, 2.9, 1.2), spruce(23, 17, 2.4, 0.6), spruce(29, 24, 3.1, 2.0), spruce(31, 13, 2.2, 0.3)],
+    fir: [fir(37, 15, 1.5, 0.4), fir(43, 18, 1.7, 0.6), fir(47, 12, 1.4, 0.2), fir(59, 20, 1.8, 1.2)],
+    lodgepole: [
+      lodgepole(41, { H: 20, crown: 0.42, spread: 2.3 }),
+      lodgepole(53, { H: 17, crown: 0.34, spread: 2.4 }),
+      lodgepole(67, { H: 23, crown: 0.5, spread: 2.2, trunk: 0.3 }),
+      lodgepole(71, { H: 14, crown: 0.14, spread: 3.0, trunk: 0.24 }),   // open-grown, branched to the ground
+      lodgepole(79, { H: 11, crown: 0.1, spread: 2.2, trunk: 0.18 }),
+    ],
+    aspen: [aspen(61, { H: 12, crownLow: 0.42 }), aspen(73, { H: 14, crownLow: 0.5, lowLeaves: 8 }), aspen(83, { H: 8, crownLow: 0.25, lowLeaves: 10 })],
     snag: [snag(81), snag(97), snag(101)],
     krumm: [krumm(111), krumm(127)],
     willow: [willow(131)],

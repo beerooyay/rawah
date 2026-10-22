@@ -106,6 +106,12 @@ vec4 worley(vec2 x) {
   }
   return vec4(sqrt(d1), id, off);
 }
+// the same cell measured as a rotated, rounded square instead of a circle, so stones read as blocks
+float blocky(vec4 w) {
+  float a = w.y * 6.2832, c = cos(a), s = sin(a);
+  vec2 q = vec2(c * w.z - s * w.w, s * w.z + c * w.w);
+  return mix(w.x, max(abs(q.x), abs(q.y)) * 1.12, 0.7);
+}
 `;
 
 // The ground at your feet, finer than any data: pebbles everywhere, cobbles
@@ -126,17 +132,19 @@ export const NEAR_NORMAL = /* glsl */ `
           float bare = 1.0 - maskAt(p); // no stones on trails, in streams or at the waterline
           vec4 w1 = worley(p / 0.45);
           float r1 = mix(0.2, 0.4, gRocky) * (0.6 + w1.y * 0.6);
-          float keep1 = step(w1.y, mix(0.28, 0.9, gRocky) * (1.0 - gForest * 0.6) * bare);
-          float s1 = smoothstep(r1, r1 * 0.7, w1.x) * keep1;
+          float keep1 = step(w1.y, mix(0.28, 0.62, gRocky) * (1.0 - gForest * 0.6) * bare);
+          float b1 = blocky(w1);
+          float s1 = smoothstep(r1, r1 * 0.7, b1) * keep1;
           vec4 w2 = worley(p / 1.7 + 13.7);
           float r2 = 0.42 * (0.6 + w2.y * 0.6);
           float keep2 = step(w2.y, gRocky * 0.8);
-          float s2 = smoothstep(r2, r2 * 0.8, w2.x) * keep2;
+          float b2 = blocky(w2);
+          float s2 = smoothstep(r2, r2 * 0.8, b2) * keep2;
           vec2 tilt = -w1.zw / r1 * s1 * 0.9 - w2.zw / r2 * s2 * 0.8;
           wn = normalize(wn + vec3(tilt.x, 0.0, tilt.y) * nearK);
           gStone = max(s1, s2);
           gId = s2 > s1 ? w2.y : w1.y;
-          gRing = smoothstep(r1 * 1.35, r1, w1.x) * keep1 * (1.0 - s1) + smoothstep(r2 * 1.25, r2, w2.x) * keep2 * (1.0 - s2);
+          gRing = smoothstep(r1 * 1.35, r1, b1) * keep1 * (1.0 - s1) + smoothstep(r2 * 1.25, r2, b2) * keep2 * (1.0 - s2);
         }`;
 
 export const NEAR_COLOR = /* glsl */ `
@@ -154,7 +162,7 @@ export const NEAR_COLOR = /* glsl */ `
           float lichen = step(fract(gId * 7.3), 0.35) * smoothstep(0.5, 0.65, texture2D(uNoise, p * 1.7).r);
           stoneCol = mix(stoneCol, mix(vec3(0.56, 0.6, 0.36), vec3(0.72, 0.46, 0.2), step(fract(gId * 3.1), 0.3)), lichen * 0.7);
           diffuseColor.rgb = mix(diffuseColor.rgb, stoneCol, gStone * nearK);
-          diffuseColor.rgb *= 1.0 - gRing * 0.4 * nearK;
+          diffuseColor.rgb *= 1.0 - gRing * 0.28 * nearK;
         }`;
 
 export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\n';

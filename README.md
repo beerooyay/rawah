@@ -25,7 +25,11 @@ Any static server works. ES modules need HTTP, not `file://`.
 | --- | --- |
 | W A S D | Walk at about 2.5 m/s. Uphill, backwards and sideways are slower, and you can't walk up past about 46° |
 | Shift | Hike fast at about 4.5 m/s (uses stamina) |
-| Space | Hop. While climbing, lunge up (uses grip) |
+| Space | Hop. Hiking fast, it throws a front flip (higher, costs more stamina). Crouched or lying, it stands you up. While climbing, lunge up (uses grip) |
+| X | Crouch, then lie down, then stand. Each is slower and quieter than the last |
+| Q or left click | Punch. Chain three in a row for a combo |
+| R or right click | Hook |
+| G | Stomp |
 | E | Grab a rock face too steep to walk, or let go |
 | C | Pitch the tent (flat ground, 200 ft from lakes, off the trail) or pack it up |
 | F | Light a campfire at camp (below treeline only), or put it out |
@@ -41,7 +45,8 @@ An Xbox controller (or any pad in the browser's standard layout) works everywher
 | --- | --- |
 | Left stick | Walk. Speed follows how far you push |
 | Right stick | Look |
-| A | Hop / lunge |
+| A | Hop / lunge / flip |
+| D-pad | Down crouch, left punch, right hook, up stomp |
 | B | Grab rock or let go |
 | X | Pitch or pack the tent |
 | Y | First or third person |
@@ -156,7 +161,7 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
   - alpine turf
   - lush sedge by the water
 
-  Each clump has a few hundred curved blades and is drawn on three crossed cards. The atlas stores data instead of colour: brightness, the point in the season when each blade cures, and position from root to tip. The shader colours every blade from the satellite pixel under it and the calendar. The result reads as thousands of blades for about a tenth of the triangles blade geometry needed.
+  Each clump has a few hundred curved blades and is drawn on three crossed cards. Grass remembers you: footsteps press a light trail, crouching a heavier one, and lying or sitting flattens a patch the shape of your body that stays down while you're on it. Patches hold for about 3 seconds and spring back over roughly 16. The atlas stores data instead of colour: brightness, the point in the season when each blade cures, and position from root to tip. The shader colours every blade from the satellite pixel under it and the calendar. The result reads as thousands of blades for about a tenth of the triangles blade geometry needed.
 - **Light:**
   - **Sky view:** the lidar is scanned once at load for how much sky each spot can see (horizon angles in eight directions out to about 2 km, with tree canopy on top). That scales the ambient light everywhere, so cirque floors, gullies and forest floors sit in cooler, dimmer shade while ridges stay open.
   - **Eye adaptation:** exposure eases up in flat grey light and at dusk.
@@ -179,12 +184,16 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 | `src/detail.js` | Fractal micro-relief, in matching JS and GLSL |
 | `src/terrain.js` | Texture helpers, the shared albedo shader, and the far horizon mesh |
 | `src/trees.js` | Painted foliage atlas, procedural tree meshes, impostor baking, and wind |
-| `src/flora.js` | Placement tiles from satellite land cover, per-instance LOD refills, and collision |
+| `src/flora.js` | Placement tiles from satellite land cover (species by elevation, aspect and wet ground; thickets, saplings, rock formations), per-instance LOD refills, and collision |
+| `src/companions.js` | The two friends you are not playing: they follow you and sometimes chat, sit or spar together |
+| `src/rocks.js` | Faceted granite boulders, slabs and spires with painted banding and lichen |
 | `src/features.js` | Lakes, streams, trail ribbons, cairns, signs, and the car |
 | `src/sky.js` | Real sun ephemeris, moon, stars, Milky Way, clouds, lights and fog |
 | `src/hiker.js` | Movement, stride phase, sliding, swimming, climbing, and the stamina, warmth and grip meters |
 | `src/camera.js` | First- and third-person camera rig |
-| `src/avatar.js` | Placeholder hiker body with procedural walk, climb and swim poses |
+| `src/character.js` | The player's body: a Mixamo-rigged model posed by the animation library from the hiker's mode, stance, action and speed. Falls back to `avatar.js` while loading |
+| `src/anims.js` | Loads the Mixamo FBX clips on demand and makes them in-place so the controller moves the body |
+| `src/avatar.js` | Placeholder hiker body with procedural walk, climb and swim poses, used until the character loads |
 | `src/input.js` | Keyboard, mouse, touch and gamepad, including menu navigation and rumble |
 | `src/camp.js` | Tent, fire, and Leave No Trace rules |
 | `src/audio.js` | Synthesized wind, footsteps, creeks, fire, chickadees and elk bugles |
@@ -202,4 +211,4 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
 - **Imagery:** contains modified Copernicus Sentinel data (2023).
 - **Trails, roads, water and names:** © OpenStreetMap contributors, distributed via Overture Maps under the ODbL.
 - **Three.js:** MIT; see `vendor/three/LICENSE`.
-- **Fonts:** Inter and Fraunces, SIL Open Font License; see `fonts/LICENSE.txt`.
+- **Fonts:** Gabarito and Paytone One, SIL Open Font License; see `fonts/LICENSE.txt`.
