@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { withAtmosphere } from './atmosphere.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
 // and the distant horizon mesh. The near terrain itself is cdlod.js.
@@ -98,6 +99,7 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
   const mat = new THREE.MeshLambertMaterial();
   mat.onBeforeCompile = (shader) => {
     albedoUniforms(shader, colorMap, extent, noise, coverMap);
+    withAtmosphere(shader);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNrm = mat3(modelMatrix) * objectNormal;');

@@ -11,10 +11,7 @@ import { buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors,
 
 const TILE_M = 232;        // tile side in metres
 const SPACING = 5.2;       // metres between placement candidates
-const CARD_R = 85;         // full trees inside this radius
 const ROCK_R = 240;        // boulders and logs inside this radius
-const THIN = 700;          // beyond this, every other impostor
-const RADIUS = 1250;
 const REFILL_M = 10;       // move this far before refilling instances
 const TREES = ['spruce', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
 const KINDS = [...TREES, 'boulder', 'log'];
@@ -35,14 +32,17 @@ function rockGeometries() {
 }
 
 export class Flora {
-  constructor(world, scene, renderer) {
+  constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096 } = {}) {
     this.world = world;
-    this.uniforms = { uTime: { value: 0 } };
+    this.cardR = card;          // full trees inside this radius
+    this.radius = radius;       // impostors out to here
+    this.thin = thin;           // beyond this, every other impostor
+    this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 } };
     const atlas = paintAtlas();
     this.species = buildSpecies();
     const foliage = foliageMaterial(atlas, this.uniforms);
-    const depth = foliageDepth(atlas);
-    this.impostors = bakeImpostors(renderer, this.species, foliage);
+    const depth = foliageDepth(atlas, this.uniforms);
+    this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);
 
     this.group = new THREE.Group();
     scene.add(this.group);
@@ -97,7 +97,7 @@ export class Flora {
     this.uniforms.uTime.value += dt;
     const w = this.world, size = this.tile * w.cell;
     const want = new Set();
-    const span = Math.ceil(RADIUS / size) + 1;
+    const span = Math.ceil(this.radius / size) + 1;
     const [ti, tj] = this.tileKey(pos.x, pos.z);
     const todo = [];
     for (let j = tj - span; j <= tj + span; j++) {
@@ -105,7 +105,7 @@ export class Flora {
         if (i < 0 || j < 0 || i >= this.nt || j >= this.nt) continue;
         const cx = (i + 0.5) * size - w.half, cz = (j + 0.5) * size - w.half;
         const d = Math.max(0, Math.hypot(cx - pos.x, cz - pos.z) - size * 0.71);
-        if (d > RADIUS) continue;
+        if (d > this.radius) continue;
         const key = j * this.nt + i;
         want.add(key);
         if (!this.tiles.has(key)) todo.push([d, key, i, j]);
@@ -199,8 +199,8 @@ export class Flora {
             continue;
           }
           const vi = Math.floor(((r * 7.31) % 1) * variants.length);
-          if (d < CARD_R) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
-          if (d > RADIUS || (d > THIN && r > 0.5) || ni >= IMP_CAP) continue;
+          if (d < this.cardR) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
+          if (d > this.radius || (d > this.thin && r > 0.5) || ni >= IMP_CAP) continue;
           const c = cells[kind][vi];
           writeMatrix(im, ni, x, e - 0.15, z, c.w * s, c.h * s, c.w * s, rot);
           ic[ni * 3] = v; ic[ni * 3 + 1] = v; ic[ni * 3 + 2] = v;

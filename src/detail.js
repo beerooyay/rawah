@@ -23,7 +23,7 @@ export function ihash(x, y) {
   return (h >>> 0) / 4294967296;
 }
 
-function vnoise(x, z) {
+export function vnoise(x, z) {
   const xi = Math.floor(x), zi = Math.floor(z);
   const fx = x - xi, fz = z - zi;
   const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
@@ -55,7 +55,8 @@ function smooth(a, b, v) {
   return t * t * (3 - 2 * t);
 }
 
-export const GLSL = /* glsl */ `
+// value noise shared by every shader that needs it (relief, wind, grass)
+export const NOISE_GLSL = /* glsl */ `
 float ihash(ivec2 p) {
   uint x = uint(p.x), y = uint(p.y);
   uint h = (x * 0x27d4eb2du) ^ (y * 0x165667b1u);
@@ -70,6 +71,10 @@ float vnoise(vec2 p) {
   float a = ihash(c), b = ihash(c + ivec2(1, 0)), d = ihash(c + ivec2(0, 1)), e = ihash(c + ivec2(1, 1));
   return a + (b - a) * u.x + (d - a) * u.y + (a - b - d + e) * u.x * u.y;
 }
+`;
+
+// micro-relief; needs NOISE_GLSL before it
+export const RELIEF_GLSL = /* glsl */ `
 float relief(vec2 xz, float amp, float rock, float spacing) {
   if (amp <= 0.0) return 0.0;
   float sum = 0.0;

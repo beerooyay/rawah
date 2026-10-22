@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
+import { withAtmosphere } from './atmosphere.js';
 
 // Lakes, trail ribbons, cairns, trail signs and the car at the trailhead.
 
@@ -43,6 +44,7 @@ export function buildLakes(world) {
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) } };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
+    withAtmosphere(shader);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;')
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
@@ -311,6 +313,7 @@ export function buildStreams(world) {
     color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
     transparent: true, opacity: 0.86, depthWrite: false,
   });
+  mat.onBeforeCompile = (shader) => withAtmosphere(shader);
   const group = new THREE.Group();
   for (const st of world.streams) {
     const p = st.pts, half = st.width / 2;

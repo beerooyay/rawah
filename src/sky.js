@@ -73,6 +73,7 @@ void main() {
     col += vec3(0.95, 0.93, 0.85) * smoothstep(0.99975, 0.99985, md) * 1.8 * uNight;
     col += vec3(0.2, 0.25, 0.35) * pow(max(md, 0.0), 30.0) * 0.25 * uNight;
   }
+  col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0; // dither away gradient banding
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -109,6 +110,7 @@ export class Sky {
     this.moonDir = new THREE.Vector3();
     this.light = 1; // 0 = deep night, 1 = full day (for gameplay)
     this._a = new THREE.Color(); this._b = new THREE.Color();
+    this._r = new THREE.Vector3(); this._u = new THREE.Vector3(); this._f = new THREE.Vector3(); this._up = new THREE.Vector3();
   }
 
   #palette(s, i) {
@@ -140,8 +142,14 @@ export class Sky {
     const moonUp = smoothstep(-0.02, 0.1, this.moonDir.y) * u.uNight.value;
     const useMoon = s < -0.03;
     const dir = useMoon ? this.moonDir : this.sunDir;
-    this.sun.position.copy(focus).addScaledVector(dir, 500);
-    this.sun.target.position.copy(focus);
+    // snap the shadow camera to its own texel grid so shadows don't shimmer as you walk
+    const sc = this.sun.shadow.camera, texel = (sc.right - sc.left) / this.sun.shadow.mapSize.x;
+    this._r.crossVectors(this._up.set(0, 1, 0), dir).normalize();
+    this._u.crossVectors(dir, this._r);
+    const pr = focus.dot(this._r), pu = focus.dot(this._u);
+    this._f.copy(focus).addScaledVector(this._r, Math.round(pr / texel) * texel - pr).addScaledVector(this._u, Math.round(pu / texel) * texel - pu);
+    this.sun.position.copy(this._f).addScaledVector(dir, 500);
+    this.sun.target.position.copy(this._f);
     const warm = smoothstep(0.0, 0.35, s);
     if (useMoon) {
       this.sun.color.setRGB(0.62, 0.72, 1.0);

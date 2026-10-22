@@ -119,3 +119,46 @@ button:hover { filter: brightness(1.08); }
   #journal-list { columns: 1; }
   #settings label { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------ touch */
+body.touch { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#touch { display: none; }
+body.touch.playing #touch { display: block; }
+body.touch #dot { display: none; }
+#touch button { pointer-events: auto; font: 600 12px inherit; font-family: inherit; color: var(--ink);
+  background: rgba(18, 20, 18, 0.42); border: 1px solid var(--edge); border-radius: 999px; padding: 0; width: 54px; height: 54px;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); touch-action: none; }
+#touch button:active, #touch button.on { background: rgba(255, 177, 90, 0.45); }
+#touch .big { width: 74px; height: 74px; font-size: 14px; }
+.t-col { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(22px, env(safe-area-inset-bottom)); display: flex; align-items: flex-end; gap: 12px; }
+.t-row { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: calc(max(22px, env(safe-area-inset-bottom)) + 92px); display: flex; gap: 8px; }
+.t-row button, .t-top button { width: 46px !important; height: 46px !important; font-size: 11px !important; }
+.t-top { position: fixed; right: max(14px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); display: flex; gap: 8px; }
+.t-stick { position: fixed; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; left: 22%; top: 72%;
+  border: 1px solid var(--edge); background: rgba(18, 20, 18, 0.25); opacity: 0.35; pointer-events: none; transition: opacity 0.2s; }
+.t-stick.on { opacity: 1; transition: none; }
+.t-stick i { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px; border-radius: 50%; background: rgba(244, 241, 234, 0.55); }
+body.touch #bars { bottom: auto; top: 108px; width: 170px; }
+body.touch #hint { bottom: auto; top: 64px; left: 50%; font-size: 12px; white-space: normal; max-width: 60vw; text-align: center; }
+
+@media (max-width: 900px), (max-height: 500px) {
+  #card { padding: 8px 10px; min-width: 0; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); }
+  #loc-name { font-size: 14px; }
+  #readouts { gap: 8px; font-size: 11px; margin-top: 4px; }
+  #compass-wrap { top: max(8px, env(safe-area-inset-top)); padding: 2px 6px 0; }
+  #compass { width: 240px; height: 26px; }
+  #discovery .d-title { font-size: 28px; }
+  .controls { display: none; }
+}
+@media (orientation: portrait) {
+  body.touch.playing::after { content: 'Turn your phone sideways for the full view'; position: fixed; left: 50%; bottom: 40%;
+    transform: translateX(-50%); padding: 8px 14px; border-radius: 10px; background: var(--panel); font-size: 13px; pointer-events: none; }
+}
+#settings select { font: inherit; color: var(--ink); background: rgba(255,255,255,0.08); border: 1px solid var(--edge); border-radius: 6px; padding: 4px; }
+@media (max-height: 500px) {
+  #title h1, #loading h1 { font-size: 48px; }
+  .lede { font-size: 13px; margin: 4px auto 12px; }
+  .kicker { font-size: 10px; }
+  .credit { margin-top: 10px; }
+  .pause-inner { padding: 14px; gap: 10px; }
+}

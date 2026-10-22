@@ -12,17 +12,26 @@ import { Audio } from './audio.js';
 import { Input } from './input.js';
 import { CameraRig } from './camera.js';
 import { Avatar } from './avatar.js';
-import { clamp, smoothstep, valueNoise } from './noise.js';
+import { clamp, smoothstep } from './noise.js';
+import { Grass } from './grass.js';
+import { updateAtmosphere } from './atmosphere.js';
+import { gustAt } from './wind.js';
+import { PRESETS, resolveQuality, isTouch } from './quality.js';
+import { setRangeK } from './cdlod.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
-const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, shadows: true, volume: 0.8, timeScale: 1 });
+const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto' });
+const QUALITY = resolveQuality(settings.quality);
+const Q = PRESETS[QUALITY];
+settings.shadows ??= Q.shadows;
+setRangeK(Q.rangeK);
 
 // ------------------------------------------------------------------ renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: Q.aa, logarithmicDepthBuffer: Q.logDepth, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -32,7 +41,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.1, 90000);
+const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, Q.logDepth ? 0.1 : 0.4, Q.logDepth ? 90000 : 40000);
 camera.rotation.order = 'YXZ';
 const headlamp = new THREE.SpotLight(0xfff1dc, 0, 70, 0.42, 0.55, 1.4);
 headlamp.position.set(0.15, 0.05, 0);
@@ -65,13 +74,16 @@ const terrain = new CDLODTerrain(world, { colorMap: colorTexture(world.colorImag
 scene.add(terrain.group);
 scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene);
+sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const lakes = buildLakes(world);
 scene.add(lakes.group);
 scene.add(buildTrails(world));
 scene.add(buildSigns(world));
 const streams = buildStreams(world);
 scene.add(streams.group);
-const flora = new Flora(world, scene, renderer);
+const flora = new Flora(world, scene, renderer, Q.flora);
+const grass = new Grass(terrain, Q.grass, flora.uniforms);
+scene.add(grass.mesh);
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
 const avatar = new Avatar(scene);
@@ -127,11 +139,13 @@ $('btn-continue').classList.toggle('hidden', !hasSave);
 // ------------------------------------------------------------------ input
 const input = new Input(renderer.domElement);
 const { keys, pressed } = input;
+if (isTouch) input.enableTouch(document.body);
+document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
   if (!state.started) return;
   if (code === 'KeyM' || code === 'Tab') toggleMap();
   if (code === 'KeyV' && !state.paused) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
-  if (code === 'Escape' && input.usingPad) pause(!state.paused); // keyboard Escape releases pointer lock instead
+  if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
@@ -139,6 +153,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function lockPointer() {
+  if (isTouch) return;
   try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch { /* headless */ }
 }
 
@@ -149,6 +164,7 @@ function toggleMap() {
 
 function pause(on) {
   state.paused = on;
+  document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
   if (on) { renderJournal(); keys.clear(); }
   else lockPointer();
@@ -164,6 +180,10 @@ function begin(fresh) {
     spawnAtCar();
   } else restore();
   state.started = true;
+  if (isTouch) {
+    try { document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* not allowed */ }
+    try { screen.orientation?.lock?.('landscape')?.catch?.(() => {}); } catch { /* not supported */ }
+  }
   $('title').classList.add('hidden');
   $('hud').classList.remove('hidden');
   audio.start();
@@ -191,6 +211,13 @@ bindRange('set-sens', 'sens');
 bindRange('set-fov', 'fov', () => rig.setFov(settings.fov));
 bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume));
 bindRange('set-time', 'timeScale');
+$('set-quality').value = settings.quality || 'auto';
+$('set-quality').onchange = () => {
+  settings.quality = $('set-quality').value;
+  storeJSON('rawah-settings', settings);
+  if (state.started) save();
+  location.reload();
+};
 $('set-shadows').checked = settings.shadows;
 $('set-shadows').onchange = () => {
   settings.shadows = $('set-shadows').checked;
@@ -431,6 +458,12 @@ function tick(dt, draw = true) {
   flora.update(p, floraTimer > 0.12 ? 1 : 0, dt);
   if (floraTimer > 0.12) floraTimer = 0;
   sky.update(state.hour, eye, p, t);
+  updateAtmosphere(sky, camera);
+  // the day's breeze: still at dawn, gusty through the afternoon, settling at dusk
+  const h = state.hour;
+  flora.uniforms.uCalm.value = 0.3 + 0.55 * smoothstep(9, 14, h) * (1 - smoothstep(18.5, 21.5, h)) + 0.15 * smoothstep(3200, 3700, p.y);
+  const tC = tempC(h, p.y);
+  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0));
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.update(t);
@@ -444,7 +477,7 @@ function tick(dt, draw = true) {
     state.inBurn = true;
     hud.toast('Burn scar — the Cameron Peak Fire swept through here in 2020.');
   } else if (cv.snag < 0.1) state.inBurn = false;
-  const gust = valueNoise(t * 0.15, 3.7) ** 2;
+  const gust = gustAt(p.x, p.z, flora.uniforms.uTime.value, flora.uniforms.uCalm.value); // the gust you see in the grass
   const exposure = smoothstep(cv.treeline - 120, cv.treeline + 200, p.y);
   audio.update(dt, {
     exposure, gust, forest: cv.forest, daylight: sky.light,

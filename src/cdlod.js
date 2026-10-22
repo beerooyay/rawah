@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { GLSL as RELIEF_GLSL } from './detail.js';
+import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
 import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms } from './terrain.js';
+import { withAtmosphere } from './atmosphere.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
 // A quadtree over the whole map picks, every frame, which nodes to draw and
@@ -13,7 +14,8 @@ import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms } from './terrain.js';
 
 const GRID = 32;           // quads per node side
 const LEVELS = 10;         // leaf nodes are extent / 2^9 (~29 m, ~0.9 m vertex spacing)
-const RANGE_K = 2.3;       // a level-l node is used out to RANGE_K * its size
+let RANGE_K = 2.3;         // a level-l node is used out to RANGE_K * its size (quality sets it)
+export function setRangeK(k) { RANGE_K = k; }
 const MAX_NODES = 3000;
 
 function quadrantGeometries() {
@@ -47,7 +49,7 @@ function quadrantGeometries() {
   });
 }
 
-const HEIGHT_GLSL = /* glsl */ `
+export const HEIGHT_GLSL = /* glsl */ `
 uniform highp usampler2D uHeight;
 uniform sampler2D uMask;
 uniform float uN, uCell, uHScale, uHOffset;
@@ -66,6 +68,7 @@ float baseH(vec2 xz) {
 }
 float maskAt(vec2 xz) { return texture2D(uMask, (xz / uCell + uN * 0.5 + 0.5) / uN).r; }
 float rockAt(vec2 xz) { return texture2D(uCover, xz / uExtent + 0.5).a; }
+${NOISE_GLSL}
 ${RELIEF_GLSL}
 float groundH(vec2 xz, float spacing) {
   float rock = rockAt(xz);
@@ -76,6 +79,8 @@ float groundH(vec2 xz, float spacing) {
 export class CDLODTerrain {
   constructor(world, { colorMap, coverMap, noise }) {
     this.world = world;
+    this.colorMap = colorMap;
+    this.coverMap = coverMap;
     const N = world.N;
     this.extent = world.extent;
     this.leaf = world.extent / 2 ** (LEVELS - 1);
@@ -100,6 +105,7 @@ export class CDLODTerrain {
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       albedoUniforms(shader, colorMap, world.extent, noise, coverMap);
+      withAtmosphere(shader);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           attribute vec4 nodeA;

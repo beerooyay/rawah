@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { NOISE_GLSL } from './detail.js';
+import { WIND_GLSL } from './wind.js';
+import { withAtmosphere } from './atmosphere.js';
 
 // Procedural trees. Everything is generated at startup: an atlas of painted
 // foliage sprays and bark strips, card-based tree meshes built from them
@@ -357,39 +360,63 @@ export function buildSpecies() {
 }
 
 // ------------------------------------------------------------------ materials
-/** Foliage material: alpha-tested atlas, vertex shade, gentle wind sway. */
+// World-space sway driven by the shared wind field: the whole tree leans
+// downwind as gusts pass, oscillates gently around that lean, branches flutter,
+// and aspen leaves quake on their own (their atlas cell is the top-right one).
+const SWAY = /* glsl */ `
+  vec4 mvPosition = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    mvPosition = instanceMatrix * mvPosition;
+    vec3 ip = instanceMatrix[3].xyz;
+    float hgt = max(mvPosition.y - ip.y, 0.0);
+    float g = gustAt(ip.xz);
+    float lean = (0.15 + g * 1.3) * hgt * hgt * 0.0011;
+    float osc = sin(uTime * (1.7 - min(hgt, 20.0) * 0.03) + ip.x * 0.13 + ip.z * 0.07) * (0.25 + g) * hgt * hgt * 0.0006;
+    mvPosition.xz += WIND_DIR * (lean + osc);
+    float flutter = sin(uTime * 4.3 + dot(transformed, vec3(1.7, 2.3, 1.1)) + ip.x) * 0.035 * (0.25 + g) * min(hgt * 0.15, 1.0);
+    mvPosition.xyz += vec3(flutter, flutter * 0.4, -flutter);
+    float aspen = step(0.75, uv.x) * step(0.75, uv.y);
+    mvPosition.y += aspen * sin(uTime * 14.0 + dot(transformed.xz, vec2(9.1, 7.3))) * 0.045 * (0.35 + g);
+  #endif
+  mvPosition = modelViewMatrix * mvPosition;
+  gl_Position = projectionMatrix * mvPosition;`;
+
+function windy(shader, uniforms) {
+  shader.uniforms.uTime = uniforms.uTime;
+  shader.uniforms.uCalm = uniforms.uCalm;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${NOISE_GLSL}\n${WIND_GLSL}`)
+    .replace('#include <project_vertex>', SWAY);
+}
+
+/** Foliage material: alpha-tested atlas, vertex shade, wind, light through the leaves. */
 export function foliageMaterial(atlas, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: atlas, alphaTest: 0.35, alphaToCoverage: true, side: THREE.DoubleSide, vertexColors: true });
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = uniforms.uTime;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime;')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        #ifdef USE_INSTANCING
-          vec3 ip = instanceMatrix[3].xyz;
-          float sway = sin(uTime * 1.3 + ip.x * 0.11 + ip.z * 0.07) * 0.6 + sin(uTime * 2.9 + ip.z * 0.3) * 0.25;
-          float k = transformed.y * transformed.y * 0.0009;
-          transformed.x += sway * k;
-          transformed.z += sway * k * 0.6;
-        #endif`);
+    windy(shader, uniforms);
+    withAtmosphere(shader, { translucency: 0.55 });
   };
   mat.customProgramCacheKey = () => 'rawah-foliage';
   return mat;
 }
 
-/** Depth material so cards cast leafy, not solid, shadows. */
-export function foliageDepth(atlas) {
-  return new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlas, alphaTest: 0.42, side: THREE.DoubleSide });
+/** Depth material so cards cast leafy, not solid, shadows that sway with the trees. */
+export function foliageDepth(atlas, uniforms) {
+  const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlas, alphaTest: 0.42, side: THREE.DoubleSide });
+  mat.onBeforeCompile = (shader) => windy(shader, uniforms);
+  mat.customProgramCacheKey = () => 'rawah-foliage-depth';
+  return mat;
 }
 
 // ------------------------------------------------------------------ impostors
-const IMP = 4096, IMP_W = 512, IMP_H = 1024; // 8 x 4 cells
+// 8 x 4 cells
 
 /**
  * Render every species variant once into an impostor atlas. Returns the
  * texture plus, per variant, its atlas cell and world-space width/height.
  */
-export function bakeImpostors(renderer, species, material) {
+export function bakeImpostors(renderer, species, material, IMP = 4096) {
+  const IMP_W = IMP / 8, IMP_H = IMP / 4;
   const target = new THREE.WebGLRenderTarget(IMP, IMP, { samples: 0 });
   target.texture.generateMipmaps = true;
   target.texture.minFilter = THREE.LinearMipmapLinearFilter;
@@ -451,14 +478,14 @@ export function impostorGeometry(max) {
 export function impostorMaterial(texture, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: texture, alphaTest: 0.3, alphaToCoverage: true, side: THREE.DoubleSide });
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = uniforms.uTime;
+    windy(shader, uniforms);
+    withAtmosphere(shader, { translucency: 0.35 });
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec2 aCell;\nuniform float uTime;')
+      .replace('#include <common>', '#include <common>\nattribute vec2 aCell;')
       .replace('#include <uv_vertex>', `#include <uv_vertex>
         vMapUv = aCell + vec2(uv.x / 8.0, uv.y / 4.0);`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vec3 ip = instanceMatrix[3].xyz;
-        transformed.x += sin(uTime * 1.3 + ip.x * 0.11 + ip.z * 0.07) * 0.02 * transformed.y * transformed.y;`);
+      // impostors aren't in the leaf atlas: keep the quake off them
+      .replace('float aspen = step(0.75, uv.x) * step(0.75, uv.y);', 'float aspen = 0.0;');
   };
   mat.customProgramCacheKey = () => 'rawah-impostor';
   return mat;
