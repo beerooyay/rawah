@@ -79,6 +79,8 @@ function skinLight(m) {
 const RETARGET = globalThis.RAWAH_RETARGET ?? true;   // fit each clip to the rig it plays on (the rigs and the clips disagree about up and about bone frames)
 const Y_AXIS = new THREE.Vector3(0, 1, 0), X_AXIS = new THREE.Vector3(1, 0, 0);
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
+const UPRIGHT_SKIP = /sit|lie|lying|fall|prone|climb|swim|hang|crawl|kneel|crouch|down|knock|flip|stomp/i;
+const UPRIGHT_WEIGHT = 0.85;
 const FLIP_AIR = 2 * 7.4 / 18;   // seconds a flip jump spends in the air (launch speed over gravity)
 
 export class Character {
@@ -123,6 +125,7 @@ export class Character {
       this.mixer = new THREE.AnimationMixer(model);
       this.head = model.getObjectByName('mixamorigHead'); this.neck = model.getObjectByName('mixamorigNeck');
       this.hand = model.getObjectByName('mixamorigRightHand');
+      this.hips = model.getObjectByName('mixamorigHips');
       this.arms = [['Left', -1], ['Right', 1]].map(([side, sx]) => ({ sx, bones: ['Arm', 'ForeArm', 'Hand'].map((n) => model.getObjectByName(`mixamorig${side}${n}`)) })).filter((a) => a.bones.every(Boolean));
       this.grip = this.#gripOf();
       this.#bulk(model, name);
@@ -234,6 +237,7 @@ export class Character {
     const w = this.#want(dt, h, this.vs);
     if (w) this.#apply(w);
     this.mixer.update(dt);
+    this.#upright(h);
     this.#look(dt, h);
     this.#reach(dt, h);
     // a held pose: freeze a one-shot partway through
@@ -245,6 +249,27 @@ export class Character {
    * is doing: eased in and out, split between neck and head, and let go of
    * when the target is behind or the body is busy.
    */
+  /**
+   * Stand up straight. The retargeted clips carry a few degrees of forward and
+   * sideways lean into the spine (about 10 degrees in idle on every rig), so the
+   * hips are turned back until the spine runs along world up. Only while on
+   * their feet: lying, sitting, climbing and swimming keep their own lean.
+   */
+  #upright(h) {
+    const hips = this.hips, neck = this.neck;
+    if (!hips || !neck || !this.group || UPRIGHT_SKIP.test(this.key)) return;
+    this.group.updateMatrixWorld(true);
+    const spine = _v3.subVectors(neck.getWorldPosition(_v2), hips.getWorldPosition(_v1)).normalize();
+    if (spine.y > 0.99995) return;
+    // a part of the turn to world up, so a walk keeps a little of its natural forward lean
+    const turn = new THREE.Quaternion().setFromUnitVectors(spine, Y_AXIS);
+    const part = new THREE.Quaternion().slerp(turn, UPRIGHT_WEIGHT);
+    const world = hips.getWorldQuaternion(new THREE.Quaternion());
+    const parentInv = hips.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    hips.quaternion.copy(parentInv.multiply(part.multiply(world)));
+    hips.updateMatrixWorld(true);
+  }
+
   /**
    * Telekinesis: both arms lift forward and a little outward, over whatever clip
    * is playing. Each bone is turned in the world so its child points where

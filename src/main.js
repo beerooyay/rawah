@@ -940,6 +940,7 @@ function tick(dt, draw = true) {
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
   for (const e of weather.events) if (e.type === 'bolt') { audio.thunder?.(e.dist); if (e.dist < 1500) input.rumble(0.6 * (1 - e.dist / 1500), 0.3, 400); }
   atmosphere.uWet.value = weather.wet;
+  atmosphere.uTime.value = flora.uniforms.uTime.value;   // the clock the footprints spring back on
   // fresh snow from the weather on top of the season's snowpack
   const packLine = calendar.snowLine, fresh = weather.snowCover > 0.02;
   atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { NOISE_GLSL } from './detail.js';
 import { WIND_GLSL } from './wind.js';
 import { HEIGHT_GLSL } from './cdlod.js';
-import { withAtmosphere } from './atmosphere.js';
+import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING } from './atmosphere.js';
 
 // Grass, as clumps rather than blades. A canvas atlas holds four painted
 // clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
@@ -22,8 +22,6 @@ import { withAtmosphere } from './atmosphere.js';
 // wind, parts around the hiker, and frosts at dawn.
 
 const CELLS = 4, CW = 512, CH = 512;
-const TRAMPLE = 40;                 // pressed patches remembered at once
-const HOLD = 3, SPRING = 16;        // s a patch stays flat, and the time it's fully sprung back by
 
 function rng(seed) {
   let s = seed >>> 0 || 1;
@@ -109,8 +107,7 @@ export class Grass {
       ...terrain.uniforms,
       uCenter: { value: new THREE.Vector2() }, uPlayer: { value: new THREE.Vector3() },
       uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
-      uTrA: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // x, z, direction x, z
-      uTrB: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // length, radius, power, time pressed
+      uTrA: atmosphere.uTrA, uTrB: atmosphere.uTrB,   // the shared ring of pressings (atmosphere.js)
       uFrost: { value: 0 }, uCure: { value: 0.75 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
     };
     const geo = clumpGeometry();
@@ -154,8 +151,10 @@ export class Grass {
           // each clump its own shade: some straw-pale, some russet, some dun
           vTone = mix(vec3(1.08, 0.98, 0.86), vec3(0.88, 0.78, 0.7), h3) * (0.85 + h1 * 0.3);
           // buried under the snowpack (only the tallest tufts poke through the edges)
-          live *= 1.0 - step(0.5, uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5));
-          float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * live;
+          // snow buries the tufts gradually: they shrink under it, and only the deepest vanish
+          float buried = uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5);
+          live *= 1.0 - step(1.25, buried);
+          float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);

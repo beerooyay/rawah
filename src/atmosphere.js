@@ -6,7 +6,15 @@ import * as THREE from 'three';
 // drifting across the ground, and the weather's mark on surfaces: ground
 // darkened by rain, and fresh snow on whatever faces the sky above the snow line.
 
+// Footprints and pressed grass: a ring of recent pressings (the hiker's walk, a lying body) shared by
+// the grass and by the snow on the ground, so the snow is pushed aside where something has stood.
+export const TRAMPLE = 40;            // pressed patches remembered at once
+export const HOLD = 3, SPRING = 16;   // s a patch stays flat, and the time it's fully sprung back by
+
 export const atmosphere = {
+  uTime: { value: 0 },
+  uTrA: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // x, z, direction x, z
+  uTrB: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // length, radius, power, time pressed
   uSunView: { value: new THREE.Vector3(0, 1, 0) },  // sun direction in view space
   uSunFog: { value: new THREE.Color() },            // haze colour looking into the sun
   uSunCol: { value: new THREE.Color() },            // sunlight for translucency (0 at night)
@@ -28,6 +36,26 @@ export const atmosphere = {
   uSkyView: { value: null },
   uSkyExtent: { value: 1 },
 };
+
+// how much a point on the ground is pressed down right now (0 untouched, 1 flat)
+const PRESS_GLSL = /* glsl */ `
+uniform vec4 uTrA[${TRAMPLE}];
+uniform vec4 uTrB[${TRAMPLE}];
+uniform float uTime;
+float pressAt(vec2 p) {
+  float press = 0.0;
+  for (int i = 0; i < ${TRAMPLE}; i++) {
+    vec4 a = uTrA[i], b = uTrB[i];
+    if (b.z <= 0.0) continue;
+    vec2 rel = p - a.xy;
+    vec2 off = rel - a.zw * clamp(dot(rel, a.zw), 0.0, b.x);
+    float d = length(off);
+    float k = b.z * (1.0 - smoothstep(b.y * 0.5, b.y, d)) * (1.0 - smoothstep(${HOLD.toFixed(1)}, ${SPRING.toFixed(1)}, uTime - b.w));
+    press = max(press, k);
+  }
+  return press;
+}
+`;
 
 // Cloud density from a tiling noise texture: four octaves for the sky, two for shadows.
 export const CLOUD_GLSL = /* glsl */ `
@@ -108,7 +136,8 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
       uniform mat4 uViewInv;
       uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen, uValley;
       uniform sampler2D uSkyView;
-      ${CLOUD_GLSL}`)
+      ${CLOUD_GLSL}
+      ${PRESS_GLSL}`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
       {
         vec3 wp = (uViewInv * vec4(vFogView, 1.0)).xyz;
@@ -144,6 +173,10 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
           float drift = texture2D(uCloudTex, wp.xz / 37.0).r * 0.6 + texture2D(uCloudTex, wp.xz / 4.1).r * 0.4;
           float line = smoothstep(uSnowLine - 90.0, uSnowLine + 60.0, wp.y + (drift - 0.5) * 120.0);
           float cover = clamp(uSnow * 1.6 - (1.0 - drift) * 0.7, 0.0, 1.0) * line * smoothstep(0.3, 0.75, wn.y);
+          // where something has stood the snow is pushed off: the ground under it shows, pressed darker
+          float tp = length(vFogView) < 110.0 ? pressAt(wp.xz) : 0.0;
+          cover *= 1.0 - tp * 0.95;
+          diffuseColor.rgb *= 1.0 - tp * 0.4;
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.86, 0.92), cover * ${weather.toFixed(2)});
         }
       }`);
