@@ -29,7 +29,6 @@ class Swarm {
     this.vel = new Float32Array(n * 3);
     this.life = new Float32Array(n);
     this.alive = 0;
-    this.max = new Float32Array(n).fill(1);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
@@ -45,7 +44,7 @@ class Swarm {
     const k = this.i; this.i = (this.i + 1) % this.n;
     this.pos[k * 3] = x; this.pos[k * 3 + 1] = y; this.pos[k * 3 + 2] = z;
     this.vel[k * 3] = vx; this.vel[k * 3 + 1] = vy; this.vel[k * 3 + 2] = vz;
-    this.life[k] = this.max[k] = life;
+    this.life[k] = life;
     this.alive = this.n;
   }
 

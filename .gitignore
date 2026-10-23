@@ -1,2 +1,6 @@
 .DS_Store
 .vercel
+rawah-landmarks/
+assets/characters/blaize/*.fbx
+assets/characters/grant/*.fbx
+assets/characters/corey/*.fbx
