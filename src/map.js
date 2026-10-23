@@ -1,55 +1,51 @@
 import { clamp } from './noise.js';
 
-// The map and quick travel. The base is the satellite image with hillshade
-// and 40 m contours, plus the lakes, streams and trails; on top go the places,
-// your tent and car, your friends, you, and a travel cursor. Pick any named
-// place from the list (search it, or filter by kind), or point anywhere on the
-// map, and you fly there (main.js runs the flight). Each named water appears
-// once, however many pools it is made of.
-//
-// Mouse: wheel zooms at the pointer, drag pans, click picks, double-click or
-// the button travels, / searches. Touch: tap picks, drag pans, pinch zooms.
-// Gamepad: the left stick drives the cursor, the right stick pans, the
-// triggers zoom, the D-pad steps through the list, the bumpers change the
-// filter, A travels, Y finds you, and B closes.
+// The map and the field guide, one window. The map is the satellite image of
+// the Rawah with hillshade and contours, tinted to the brand (navy land, peach
+// trails), with the places you can travel to as markers. Click or tap one and
+// a card shows it with a Travel button; the list and search are only there when
+// you ask for them. The field guide (the other tab) shows what you have found:
+// lakes and summits from the journal, wildlife and plants from guide.js, and
+// the easter eggs. Mouse, touch, keyboard and gamepad all drive the same state.
 
 const $ = (id) => document.getElementById(id);
 const ft = (m) => Math.round(m * 3.28084).toLocaleString();
-const SNAP = 22;          // CSS px: how close the pointer must be to a place to pick it
-const MAX_ZOOM = 6;
-const FONT = (w, px) => `${w} ${Math.round(px)}px Gabarito, system-ui, sans-serif`;
-const FILTERS = [['all', 'All'], ['places', 'Places'], ['summit', 'Summits'], ['lake', 'Lakes']];
-const GROUP_OF = { tent: 'places', car: 'places', trailhead: 'places', friend: 'places', peak: 'summit', lake: 'lake' };
-const KIND = { tent: 'Camp', car: 'Trailhead parking', trailhead: 'Trailhead', peak: 'Summit', lake: 'Lake', friend: 'Friend', point: 'Waypoint' };
 const dist = (m) => (m < 950 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
+const KIND = { tent: 'Your camp', car: 'Your car', trailhead: 'Trailhead', peak: 'Summit', lake: 'Lake', friend: 'Friend' };
+const FILTERS = [['all', 'All'], ['places', 'Places'], ['summits', 'Summits'], ['lakes', 'Lakes']];
+const GROUP_OF = { tent: 'places', car: 'places', trailhead: 'places', friend: 'places', peak: 'summits', lake: 'lakes' };
+const MAX_ZOOM = 12;
+// brand: peach #f6d3bd, navy #37587b, black and white neutrals
+const C = { land: '#0d1117', peach: '#f6d3bd', navy: '#37587b', navyLight: '#8fb1d6', white: '#ffffff', ink: '#0a0d12' };
+const MARK = { tent: C.peach, car: C.peach, trailhead: C.peach, friend: C.white, peak: C.white, lake: C.navyLight };
 
 export class GameMap {
-  constructor(world) {
+  constructor(world, guide) {
     this.world = world;
+    this.guide = guide;
     this.open = false;
+    this.mode = 'map';            // 'map' | 'guide'
     this.base = null;
-    this.zoom = 1;
-    this.cx = 0; this.cz = 0;          // world point at the centre of the view
-    this.cursor = null;                // [x, z] world point under the pad cursor or last pick
-    this.sel = null;                   // the picked destination
-    this.list = [];
-    this.index = -1;
-    this.filter = 'all';
+    this.view = { cx: 0, cz: 0, zoom: 1 };
+    this.list = [];               // every place you can travel to
+    this.sel = null;              // the picked place
     this.hover = null;
-    this.visible = [];
+    this.filter = 'all';
+    this.query = '';
+    this.state = null;
     this.onTravel = () => {};
-    this.state = null;                 // last HUD state (discovered, tent, player)
+    this.onClose = () => {};
     this.#bind();
   }
 
   // ---------------------------------------------------------------- base image
+  /** The satellite picture, tinted to the brand, with hillshade, 40 m contours, lakes, streams and trails. */
   build(image) {
     const w = this.world, M = 2048;
     const cv = document.createElement('canvas');
     cv.width = cv.height = M;
     const g = cv.getContext('2d');
     g.drawImage(image, 0, 0, M, M);
-    // hillshade and 40 m contours over the satellite image
     const img = g.getImageData(0, 0, M, M);
     const k = w.N / M;
     for (let r = 0; r < M; r++) {
@@ -58,19 +54,23 @@ export class GameMap {
         const d = Math.max(1, Math.round(k));
         const gx = (w.gridH(sc + d, sr) - w.gridH(sc - d, sr)) / (2 * d * w.cell);
         const gz = (w.gridH(sc, sr + d) - w.gridH(sc, sr - d)) / (2 * d * w.cell);
-        const shade = clamp(0.9 + (-gx * 0.7 - gz * 0.7) * 0.5, 0.6, 1.2);
+        const shade = clamp(0.92 + (-gx * 0.7 - gz * 0.7) * 0.5, 0.65, 1.15);
         const e = w.gridH(sc, sr);
         const contour = Math.floor(e / 40) !== Math.floor(w.gridH(sc + d, sr) / 40) || Math.floor(e / 40) !== Math.floor(w.gridH(sc, sr + d) / 40);
-        const m = shade * (contour ? (Math.floor(e / 40) % 5 === 4 ? 0.62 : 0.8) : 1);
+        const m = shade * (contour ? (Math.floor(e / 40) % 5 === 4 ? 0.55 : 0.75) : 1);
         const i = (r * M + c) * 4;
-        img.data[i] = clamp(img.data[i] * m * 1.1, 0, 255);
-        img.data[i + 1] = clamp(img.data[i + 1] * m * 1.1, 0, 255);
-        img.data[i + 2] = clamp(img.data[i + 2] * m * 1.1, 0, 255);
+        // desaturate toward the land colour, so the map reads as one navy-black surface with the terrain showing through
+        const R = img.data[i], G = img.data[i + 1], B = img.data[i + 2], L = R * 0.3 + G * 0.55 + B * 0.15;
+        const mix = (v, t) => v + (t - v) * 0.6;
+        const Q = mix(R, L) * 0.85 + mix(R, L) * 0.15;
+        img.data[i] = clamp(mix(R, L) * m * 0.42 + 5, 0, 255);
+        img.data[i + 1] = clamp(mix(G, L) * m * 0.54 + 12, 0, 255);
+        img.data[i + 2] = clamp(mix(B, L) * m * 0.78 + 28, 0, 255);
       }
     }
     g.putImageData(img, 0, 0);
     const S = M / w.N;
-    g.fillStyle = '#3f6f8f';
+    g.fillStyle = C.navy;
     for (const lake of w.lakes) for (const [r, c0, c1] of lake.runs) g.fillRect(c0 * S, r * S, (c1 - c0 + 1) * S, S + 0.5);
     const path = (pts) => {
       g.beginPath();
@@ -80,14 +80,15 @@ export class GameMap {
       });
       g.stroke();
     };
-    g.strokeStyle = '#5d95c4';
-    for (const st of w.streams) { g.lineWidth = Math.max(1.2, st.width * S * 0.6); path(st.pts); }
     g.lineJoin = g.lineCap = 'round';
-    for (const t of w.trails) { g.strokeStyle = 'rgba(20,16,12,0.42)'; g.lineWidth = t.kind === 'road' ? 6.5 : 4.2; g.setLineDash([]); path(t.pts); }
+    g.strokeStyle = C.navyLight; g.globalAlpha = 0.7;
+    for (const st of w.streams) { g.lineWidth = Math.max(1.4, st.width * S * 0.6); path(st.pts); }
+    g.globalAlpha = 1;
+    for (const t of w.trails) { g.strokeStyle = 'rgba(10,13,18,0.7)'; g.lineWidth = t.kind === 'road' ? 7 : 5; g.setLineDash([]); path(t.pts); }
     for (const t of w.trails) {
-      g.strokeStyle = t.kind === 'road' ? '#efe3c6' : t.kind === 'track' ? '#d8b98a' : 'rgba(246,211,189,0.95)';
-      g.lineWidth = t.kind === 'road' ? 4 : 2.4;
-      g.setLineDash(t.kind === 'trail' ? [10, 6] : t.kind === 'track' ? [5, 5] : []);
+      g.strokeStyle = t.kind === 'road' ? 'rgba(255,255,255,0.85)' : t.kind === 'track' ? 'rgba(246,211,189,0.7)' : C.peach;
+      g.lineWidth = t.kind === 'road' ? 4 : 3;
+      g.setLineDash(t.kind === 'trail' ? [9, 6] : t.kind === 'track' ? [5, 5] : []);
       path(t.pts);
     }
     g.setLineDash([]);
@@ -97,154 +98,67 @@ export class GameMap {
   // ---------------------------------------------------------------- open / close
   show(s) {
     this.open = true;
-    this.openedAt = performance.now();
     this.state = s;
-    this.zoom = 1;
-    this.cx = 0; this.cz = 0;
-    this.cursor = null;
+    this.mode = 'map';
+    this.view = { cx: s.x ?? 0, cz: s.z ?? 0, zoom: 1.4 };
+    this.sel = null; this.hover = null;
+    this.query = ''; this.filter = 'all';
+    $('map-search').value = '';
     this.#buildList(s);
-    this.sel = null; this.index = -1;
     $('map').classList.remove('hidden');
-    this.#renderInfo();
+    this.#setMode('map');
+    this.#renderCard();
+    this.#renderFilters();
+    this.#renderResults();
   }
+
+  /** Open straight onto the field guide tab. */
+  guideTab() { this.#setMode('guide'); }
 
   hide() {
     this.open = false;
     $('map').classList.add('hidden');
+    $('tip').classList.add('hidden');
   }
 
   // ---------------------------------------------------------------- destinations
   #buildList(s) {
     const w = this.world, out = [];
     const known = (p) => (p.kind === 'lake' ? s.discovered.has(p.name) : p.kind === 'peak' ? s.discovered.has(`peak:${p.name}`) : false);
-    if (s.tent) out.push({ kind: 'tent', name: 'Your camp', x: s.tent.x, z: s.tent.z, group: 'Places' });
-    if (w.carSpot) out.push({ kind: 'car', name: 'Your car', x: w.carSpot.x, z: w.carSpot.z, group: 'Places' });
-    for (const f of s.friends || []) out.push({ kind: 'friend', name: f.name, x: f.x, z: f.z, group: 'Places' });
-    const by = (k) => w.places.filter((p) => p.kind === k);
-    for (const p of by('trailhead')) out.push({ kind: 'trailhead', name: p.name, x: p.x, z: p.z, place: p, group: 'Places' });
-    for (const p of by('peak')) out.push({ kind: 'peak', name: p.name, x: p.x, z: p.z, elev: p.elev, place: p, group: 'Summits', known: known(p) });
+    if (s.tent) out.push({ kind: 'tent', name: 'Your camp', x: s.tent.x, z: s.tent.z, group: 'places' });
+    if (w.carSpot) out.push({ kind: 'car', name: 'Your car', x: w.carSpot.x, z: w.carSpot.z, group: 'places' });
+    for (const f of s.friends || []) out.push({ kind: 'friend', name: f.name, x: f.x, z: f.z, group: 'places' });
+    for (const p of w.places.filter((q) => q.kind === 'trailhead')) out.push({ kind: 'trailhead', name: p.name, x: p.x, z: p.z, group: 'places' });
+    for (const p of w.places.filter((q) => q.kind === 'peak')) out.push({ kind: 'peak', name: p.name, x: p.x, z: p.z, elev: p.elev, group: 'summits', known: known(p) });
     // one entry per named water: where a name belongs to several pools (Twin Lakes, Camp Lake) keep the biggest
     const lakes = new Map();
-    for (const p of by('lake')) {
+    for (const p of w.places.filter((q) => q.kind === 'lake')) {
       const lake = w.lakeAt(p.x, p.z) || w.lakes.filter((l) => l.name === p.name).sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0];
-      const d = { kind: 'lake', name: p.name, x: p.x, z: p.z, elev: lake ? lake.level : p.elev, place: p, lake, group: 'Lakes', known: known(p) };
+      const d = { kind: 'lake', name: p.name, x: p.x, z: p.z, elev: lake ? lake.level : p.elev, lake, group: 'lakes', known: known(p) };
       const prev = lakes.get(p.name);
       if (!prev || (lake?.area || 0) > (prev.lake?.area || 0)) lakes.set(p.name, d);
     }
     out.push(...lakes.values());
     for (const d of out) d.away = Math.hypot(d.x - s.x, d.z - s.z);
-    // places first, then summits, then lakes; nearest first within each
-    const order = { Places: 0, Summits: 1, Lakes: 2 };
-    out.sort((a, b) => order[a.group] - order[b.group] || a.away - b.away);
-    this.list = out;
-
-    const el = $('map-list');
-    el.innerHTML = '';
-    this.groups = new Map();
-    out.forEach((d, i) => {
-      if (!this.groups.has(d.group)) {
-        const h = document.createElement('h4');
-        h.textContent = d.group;
-        el.appendChild(h);
-        this.groups.set(d.group, h);
-      }
-      const b = document.createElement('button');
-      b.className = `dest ${d.kind}${d.known ? ' known' : ''}`;
-      b.innerHTML = '<i class="ico"></i><span class="name"></span><small></small>';
-      b.firstChild.classList.add(d.kind);
-      b.querySelector('.name').textContent = d.name;
-      b.querySelector('small').textContent = dist(d.away);
-      b.onclick = (e) => { e.stopPropagation(); this.pick(i, true); };
-      b.ondblclick = (e) => { e.stopPropagation(); this.pick(i, true); this.travel(); };
-      d.el = b;
-      el.appendChild(b);
-    });
-    this.empty = document.createElement('div');
-    this.empty.className = 'empty hidden';
-    this.empty.textContent = 'Nothing by that name.';
-    el.appendChild(this.empty);
-
-    const seg = $('map-filters');
-    seg.innerHTML = '';
-    for (const [id, label] of FILTERS) {
-      const b = document.createElement('button');
-      b.textContent = label; b.dataset.f = id; b.setAttribute('role', 'tab');
-      b.onclick = () => this.setFilter(id);
-      seg.appendChild(b);
-    }
-    this.filter = 'all';
-    $('map-search').value = '';
-    this.#applyFilter();
+    this.list = out.filter((d) => d.name);
   }
 
-  setFilter(id) {
-    this.filter = id;
-    this.#applyFilter();
+  #visible() {
+    const q = this.query.trim().toLowerCase();
+    return this.list
+      .filter((d) => this.filter === 'all' || GROUP_OF[d.kind] === this.filter || (this.filter === 'places' && GROUP_OF[d.kind] === 'places'))
+      .filter((d) => !q || d.name.toLowerCase().includes(q))
+      .sort((a, b) => a.away - b.away);
   }
 
-  cycleFilter(dir) {
-    const i = FILTERS.findIndex(([id]) => id === this.filter);
-    this.setFilter(FILTERS[(i + dir + FILTERS.length) % FILTERS.length][0]);
-  }
-
-  #applyFilter() {
-    const q = $('map-search').value.trim().toLowerCase();
-    this.visible = [];
-    const seen = new Set();
-    this.list.forEach((d, i) => {
-      const show = (this.filter === 'all' || GROUP_OF[d.kind] === this.filter) && (!q || d.name.toLowerCase().includes(q));
-      d.el.classList.toggle('hidden', !show);
-      if (show) { this.visible.push(i); seen.add(d.group); }
-    });
-    for (const [g, h] of this.groups) h.classList.toggle('hidden', !seen.has(g));
-    this.empty.classList.toggle('hidden', this.visible.length > 0);
-    for (const b of $('map-filters').children) b.classList.toggle('on', b.dataset.f === this.filter);
-    $('map-count').textContent = this.visible.length === this.list.length ? `${this.list.length} places` : `${this.visible.length} of ${this.list.length}`;
-  }
-
-  /** Step the selection through what the list currently shows. */
-  step(dir) {
-    if (!this.visible.length) return;
-    const at = this.visible.indexOf(this.index);
-    const next = at < 0 ? (dir > 0 ? 0 : this.visible.length - 1) : (at + dir + this.visible.length) % this.visible.length;
-    this.pick(this.visible[next], true);
-  }
-
-  /** Select list entry i (and optionally centre the view on it). */
+  /** Pick a destination by its index in the list, optionally centring the view on it. */
   pick(i, center = false) {
-    this.index = (i + this.list.length) % this.list.length;
-    const d = this.list[this.index];
+    const d = this.list[i];
+    if (!d) return;
     this.sel = d;
-    this.cursor = [d.x, d.z];
-    if (center) this.#centerOn(d.x, d.z, Math.max(this.zoom, 2.2));
-    for (const o of this.list) o.el.classList.toggle('on', o === d);
-    d.el.scrollIntoView({ block: 'nearest' });
-    this.#renderInfo();
-  }
-
-  /** Pick whatever is under a world point: a place nearby on screen, a lake, or open ground. */
-  pickAt(x, z) {
-    const k = this.#scale() / devicePixelRatio;
-    let best = -1, bd = SNAP;
-    this.list.forEach((d, i) => {
-      const dd = Math.hypot(d.x - x, d.z - z) * k;
-      if (dd < bd) { bd = dd; best = i; }
-    });
-    this.cursor = [x, z];
-    if (best >= 0) { this.pick(best); this.cursor = [x, z]; return; }
-    const w = this.world;
-    const lake = w.lakeAt(x, z);
-    if (lake && lake.name) {
-      const i = this.list.findIndex((d) => d.lake === lake);
-      if (i >= 0) { this.pick(i); this.cursor = [x, z]; return; }
-    }
-    this.index = -1;
-    for (const o of this.list) o.el.classList.remove('on');
-    const e = w.height(x, z);
-    const near = w.nearestTrail(x, z);
-    const sub = lake ? 'Open water' : near.trail && near.d < 20 ? `On the ${near.trail.name}` : e > w.treeline(x, z) + 40 ? 'Alpine tundra' : 'Off trail';
-    this.sel = { kind: 'point', name: sub, x, z, elev: lake ? lake.level : e, lake };
-    this.#renderInfo();
+    if (center) this.#centerOn(d.x, d.z, Math.max(this.view.zoom, 2.4));
+    this.#renderCard();
+    this.#renderResults();
   }
 
   travel() {
@@ -255,268 +169,372 @@ export class GameMap {
     this.onTravel(d);
   }
 
-  #renderInfo() {
-    const d = this.sel, info = $('map-info');
-    info.classList.toggle('hidden', !d);
+  #renderCard() {
+    const d = this.sel, card = $('map-card');
+    card.classList.toggle('hidden', !d);
     if (!d) return;
-    const away = Math.hypot(d.x - this.state.x, d.z - this.state.z);
-    info.querySelector('.mi-kind').textContent = KIND[d.kind];
-    info.querySelector('.mi-name').textContent = d.name;
-    info.querySelector('.mi-sub').textContent = `${d.elev ? `${ft(d.elev)} ft · ` : ''}${dist(away)} away${d.known ? ' · visited' : ''}`;
-    $('map-go').textContent = d.kind === 'point' ? 'Travel to this spot' : `Travel to ${d.kind === 'friend' ? d.name : 'here'}`;
+    const s = this.state;
+    $('mc-kind').textContent = KIND[d.kind] || 'Place';
+    $('mc-name').textContent = d.name;
+    const sub = [d.elev ? `${ft(d.elev)} ft` : '', `${dist(Math.hypot(d.x - s.x, d.z - s.z))} away`].filter(Boolean).join(' · ');
+    $('mc-sub').textContent = sub;
+    $('mc-go').disabled = d.kind === 'car';
+    $('mc-go').textContent = d.kind === 'friend' ? 'Meet up' : 'Travel here';
+  }
+
+  // ---------------------------------------------------------------- DOM: filters, results, mode
+  #renderFilters() {
+    const seg = $('map-filters');
+    seg.innerHTML = '';
+    for (const [id, label] of FILTERS) {
+      const b = document.createElement('button');
+      b.textContent = label; b.dataset.f = id;
+      b.classList.toggle('on', id === this.filter);
+      b.onclick = () => { this.filter = id; this.#renderFilters(); this.#renderResults(); };
+      seg.appendChild(b);
+    }
+  }
+
+  #renderResults() {
+    const el = $('map-results');
+    const active = this.query.trim() || this.filter !== 'all';
+    el.classList.toggle('hidden', !active);
+    if (!active) return;
+    const rows = this.#visible();
+    el.innerHTML = '';
+    if (!rows.length) { el.innerHTML = '<div class="empty">Nothing by that name.</div>'; return; }
+    for (const d of rows.slice(0, 40)) {
+      const b = document.createElement('button');
+      b.className = `row${this.sel === d ? ' on' : ''}`;
+      b.innerHTML = `<i class="dot ${d.kind}"></i><span class="nm"></span><small></small>`;
+      b.querySelector('.nm').textContent = d.name;
+      b.querySelector('small').textContent = dist(d.away);
+      b.onclick = () => { this.sel = d; this.#renderCard(); this.#renderResults(); this.#centerOn(d.x, d.z, Math.max(this.view.zoom, 2.4)); };
+      b.ondblclick = () => { this.sel = d; this.travel(); };
+      el.appendChild(b);
+    }
+  }
+
+  #setMode(mode) {
+    this.mode = mode;
+    $('map-canvas').classList.toggle('hidden', mode !== 'map');
+    $('map-tools').classList.toggle('hidden', mode !== 'map');
+    $('map-stats').classList.toggle('hidden', mode !== 'map');
+    $('map-top').classList.toggle('guide-on', mode === 'guide');
+    for (const b of $('map-modes').querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === mode);
+    $('guide').classList.toggle('hidden', mode !== 'guide');
+    if (mode === 'guide') this.#renderGuide();
+    $('map-card').classList.toggle('hidden', mode !== 'map' || !this.sel);
+    if (mode === 'map') this.#renderCard();
+  }
+
+  // ---------------------------------------------------------------- the field guide
+  #renderGuide() {
+    const s = this.state, g = this.guide, el = $('guide');
+    const lakes = this.list.filter((d) => d.kind === 'lake'), peaks = this.list.filter((d) => d.kind === 'peak');
+    const cats = [
+      { name: 'Summits', items: peaks.map((p) => ({ name: p.name, note: `${ft(p.elev)} ft · the summit`, found: !!p.known })) },
+      { name: 'Lakes', items: lakes.map((p) => ({ name: p.name, note: `${ft(p.elev)} ft · a tarn or lake of the Rawah`, found: !!p.known })) },
+    ];
+    for (const grp of ['Wildlife', 'Flora', 'Checkpoints', 'Easter eggs']) {
+      cats.push({ name: grp, items: g.entries.filter((e) => e.group === grp).map((e) => ({ name: e.name, note: e.note, hint: e.hint, found: g.found.has(e.id) })) });
+    }
+    this.cat = this.cat && cats.some((c) => c.name === this.cat) ? this.cat : cats[0].name;
+    const total = cats.reduce((n, c) => n + c.items.length, 0), got = cats.reduce((n, c) => n + c.items.filter((i) => i.found).length, 0);
+    const cur = cats.find((c) => c.name === this.cat);
+    el.innerHTML = `
+      <div class="gd-head"><div><div class="kicker">Field guide</div><div class="gd-total">${got} of ${total} found</div></div>
+        <div class="gd-bar"><i style="width:${Math.round(got / total * 100)}%"></i></div></div>
+      <div class="gd-cats">${cats.map((c) => `<button data-cat="${c.name}" class="${c.name === this.cat ? 'on' : ''}">${c.name}<small>${c.items.filter((i) => i.found).length}/${c.items.length}</small></button>`).join('')}</div>
+      <div class="gd-grid">${cur.items.map((i) => `<article class="gd-card${i.found ? '' : ' locked'}">
+          <div class="gd-name">${i.found ? esc(i.name) : '???'}</div>
+          <div class="gd-note">${i.found ? esc(i.note) : (i.hint ? `To find: ${esc(i.hint)}` : 'Not seen yet. Keep your eyes open.')}</div>
+        </article>`).join('')}</div>`;
+    for (const b of el.querySelectorAll('[data-cat]')) b.onclick = () => { this.cat = b.dataset.cat; this.#renderGuide(); };
   }
 
   // ---------------------------------------------------------------- view
-  #scale() {
-    const cv = $('map-canvas');
-    const side = Math.min(cv.width, cv.height);
-    return (side / this.world.extent) * this.zoom;
-  }
+  /** Pixels per metre at zoom 1 for the current canvas: the whole Rawah fits its short side. */
+  #fit(cv) { return Math.min(cv.clientWidth, cv.clientHeight) / (this.world.extent * 1.02); }
+  #scale(cv) { return this.#fit(cv) * this.view.zoom; }   // CSS px per metre
 
-  /** Screen x of the view centre: the middle of the part of the screen the list panel leaves free. */
-  #mx() {
-    const cv = $('map-canvas');
-    return cv.width / 2 + (cv.clientWidth > 900 ? 158 : 113) * devicePixelRatio;
-  }
-
-  #centerOn(x, z, zoom = this.zoom) {
-    this.zoom = clamp(zoom, 1, MAX_ZOOM);
-    this.cx = x; this.cz = z;
+  #centerOn(x, z, zoom = this.view.zoom) {
+    this.view.cx = x; this.view.cz = z; this.view.zoom = clamp(zoom, 1, MAX_ZOOM);
     this.#clampView();
   }
 
   #clampView() {
-    const lim = (this.world.extent / 2) * (1 - 1 / this.zoom);
-    this.cx = clamp(this.cx, -lim, lim);
-    this.cz = clamp(this.cz, -lim, lim);
-  }
-
-  /** Screen (device px) to world. */
-  #toWorld(px, py) {
-    const cv = $('map-canvas'), k = this.#scale();
-    return [this.cx + (px - this.#mx()) / k, this.cz + (py - cv.height / 2) / k];
+    const h = this.world.half;
+    this.view.cx = clamp(this.view.cx, -h, h);
+    this.view.cz = clamp(this.view.cz, -h, h);
   }
 
   #zoomAt(f, px, py) {
-    const [x0, z0] = this.#toWorld(px, py);
-    this.zoom = clamp(this.zoom * f, 1, MAX_ZOOM);
-    const cv = $('map-canvas'), k = this.#scale();
-    this.cx = x0 - (px - this.#mx()) / k;
-    this.cz = z0 - (py - cv.height / 2) / k;
+    const cv = $('map-canvas'), k = this.#scale(cv), w = this.#toWorld(px, py);
+    this.view.zoom = clamp(this.view.zoom * f, 1, MAX_ZOOM);
+    const k2 = this.#scale(cv);
+    // keep the point under the pointer where it was
+    this.view.cx = w[0] - (px - cv.clientWidth / 2) / k2;
+    this.view.cz = w[1] - (py - cv.clientHeight / 2) / k2;
     this.#clampView();
+    void k;
+  }
+
+  /** CSS pixel on the canvas to world metres. */
+  #toWorld(px, py) {
+    const cv = $('map-canvas'), k = this.#scale(cv);
+    return [this.view.cx + (px - cv.clientWidth / 2) / k, this.view.cz + (py - cv.clientHeight / 2) / k];
+  }
+
+  /** The nearest place to a canvas point, within `snap` CSS pixels. */
+  #placeAt(px, py, snap = 18) {
+    const cv = $('map-canvas'), k = this.#scale(cv);
+    let best = null, bd = snap;
+    for (const d of this.#visible()) {
+      const x = cv.clientWidth / 2 + (d.x - this.view.cx) * k, y = cv.clientHeight / 2 + (d.z - this.view.cz) * k;
+      const dd = Math.hypot(x - px, y - py);
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    return best;
   }
 
   // ---------------------------------------------------------------- input
   #bind() {
     const cv = $('map-canvas');
     const pts = new Map();
-    let drag = 0, pinch = 0;
-    const dev = (e) => [e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio];
+    let drag = null, pinch = 0, moved = 0;
+    const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     cv.addEventListener('pointerdown', (e) => {
       cv.setPointerCapture(e.pointerId);
-      pts.set(e.pointerId, dev(e));
-      drag = 0;
+      pts.set(e.pointerId, at(e));
+      drag = at(e); moved = 0;
       if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); }
     });
     cv.addEventListener('pointermove', (e) => {
+      const [px, py] = at(e);
       if (!pts.has(e.pointerId)) {
-        // hovering: light up the place under the pointer
         if (e.pointerType !== 'mouse') return;
-        const [wx, wz] = this.#toWorld(...dev(e)), k = this.#scale() / devicePixelRatio;
-        let best = null, bd = SNAP;
-        for (const d of this.list) { const dd = Math.hypot(d.x - wx, d.z - wz) * k; if (dd < bd) { bd = dd; best = d; } }
-        this.hover = best;
-        cv.classList.toggle('over', !!best);
+        this.#hover(px, py, e);
         return;
       }
-      const [x, y] = dev(e), [x0, y0] = pts.get(e.pointerId);
-      pts.set(e.pointerId, [x, y]);
+      pts.set(e.pointerId, [px, py]);
       if (pts.size === 2) {
-        const [a, b] = [...pts.values()];
-        const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
         if (pinch) this.#zoomAt(d / pinch, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
-        pinch = d; drag = 99;
+        pinch = d; moved = 99;
+        this.#draw();
         return;
       }
-      drag += Math.hypot(x - x0, y - y0);
-      if (drag > 8 * devicePixelRatio) {
-        cv.classList.add('drag');
-        const k = this.#scale();
-        this.cx -= (x - x0) / k; this.cz -= (y - y0) / k;
+      const k = this.#scale(cv), dx = px - drag[0], dy = py - drag[1];
+      moved += Math.abs(dx) + Math.abs(dy);
+      if (moved > 4) {
+        this.view.cx -= dx / k; this.view.cz -= dy / k;
         this.#clampView();
+        drag = [px, py];
+        cv.classList.add('drag');
+        this.#draw();
       }
     });
     const up = (e) => {
-      if (!pts.has(e.pointerId)) return;
-      const [x, y] = pts.get(e.pointerId);
+      const was = pts.size;
       pts.delete(e.pointerId);
-      cv.classList.remove('drag');
-      if (pts.size < 2) pinch = 0;
-      if (drag <= 8 * devicePixelRatio && pts.size === 0) this.pickAt(...this.#toWorld(x, y));
+      if (pts.size === 0) {
+        cv.classList.remove('drag');
+        // a click without a drag picks what is under the pointer
+        if (was === 1 && moved <= 4) {
+          const [px, py] = at(e), d = this.#placeAt(px, py, 22);
+          if (d) { this.sel = d; this.#renderCard(); this.#renderResults(); }
+          else { this.sel = null; this.#renderCard(); }
+          this.#draw();
+        }
+        pinch = 0;
+      }
     };
     cv.addEventListener('pointerup', up);
-    cv.addEventListener('pointercancel', (e) => pts.delete(e.pointerId));
-    cv.addEventListener('dblclick', (e) => { this.pickAt(...this.#toWorld(...dev(e))); this.travel(); });
-    cv.addEventListener('wheel', (e) => { e.preventDefault(); this.#zoomAt(Math.exp(-Math.sign(e.deltaY) * 0.25), ...dev(e)); }, { passive: false });
-    // a phone's follow-up click from the tap that opened the map lands on these: ignore it
-    const settled = () => performance.now() - this.openedAt > 450;
-    $('map-go').onclick = () => { if (settled()) this.travel(); };
-    $('map-close').onclick = () => { if (settled()) this.onClose?.(); };
-    $('map-zin').onclick = () => this.#zoomAt(1.5, this.#mx(), cv.height / 2);
-    $('map-zout').onclick = () => this.#zoomAt(1 / 1.5, this.#mx(), cv.height / 2);
-    $('map-find').onclick = () => this.#centerOn(this.state.x, this.state.z, Math.max(this.zoom, 2.5));
-    const search = $('map-search');
-    search.addEventListener('input', () => this.#applyFilter());
-    search.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape') { search.value = ''; this.#applyFilter(); search.blur(); e.stopPropagation(); return; }
-      if (e.code === 'ArrowDown' || e.code === 'ArrowUp') { e.preventDefault(); this.step(e.code === 'ArrowDown' ? 1 : -1); }
-      else if (e.code === 'Enter') { e.preventDefault(); if (this.index < 0) this.step(1); this.travel(); search.blur(); }
-      e.stopPropagation();   // typing is typing: none of these are game keys
+    cv.addEventListener('pointercancel', up);
+    cv.addEventListener('pointerleave', () => { $('tip').classList.add('hidden'); this.hover = null; this.#draw(); });
+    cv.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const [px, py] = at(e);
+      this.#zoomAt(Math.exp(-e.deltaY * 0.0015), px, py);
+      this.#draw();
+    }, { passive: false });
+    cv.addEventListener('dblclick', (e) => {
+      const [px, py] = at(e), d = this.#placeAt(px, py, 22);
+      if (d) { this.sel = d; this.travel(); }
     });
+
+    $('map-zin').onclick = () => { this.#zoomAt(1.6, cv.clientWidth / 2, cv.clientHeight / 2); this.#draw(); };
+    $('map-zout').onclick = () => { this.#zoomAt(1 / 1.6, cv.clientWidth / 2, cv.clientHeight / 2); this.#draw(); };
+    $('map-find').onclick = () => { if (this.state) { this.#centerOn(this.state.x, this.state.z, Math.max(this.view.zoom, 2.4)); this.#draw(); } };
+    $('map-close').onclick = () => this.onClose();
+    $('mc-go').onclick = () => this.travel();
+    $('mc-clear').onclick = () => { this.sel = null; this.#renderCard(); this.#renderResults(); this.#draw(); };
+    $('map-modes').querySelectorAll('button').forEach((b) => { b.onclick = () => { this.#setMode(b.dataset.mode); this.#draw(); }; });
+    const search = $('map-search');
+    search.addEventListener('input', () => { this.query = search.value; this.#renderResults(); });
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const first = this.#visible()[0]; if (first) { this.sel = first; this.#renderCard(); this.#centerOn(first.x, first.z, Math.max(this.view.zoom, 2.4)); } } if (e.key === 'Escape') search.blur(); });
     addEventListener('keydown', (e) => {
-      if (!this.open || e.target === search) return;
-      const k = e.code;
-      if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); this.step(k === 'ArrowDown' ? 1 : -1); }
-      else if (k === 'ArrowRight' || k === 'ArrowLeft') this.cycleFilter(k === 'ArrowRight' ? 1 : -1);
-      else if (k === 'Enter' || k === 'KeyF') this.travel();
-      else if (k === 'Slash') { e.preventDefault(); search.focus(); }
-      else if (k === 'Equal' || k === 'NumpadAdd') this.#zoomAt(1.3, this.#mx(), cv.height / 2);
-      else if (k === 'Minus' || k === 'NumpadSubtract') this.#zoomAt(1 / 1.3, this.#mx(), cv.height / 2);
-      else if (k === 'KeyY' || k === 'Space') { e.preventDefault(); this.#centerOn(this.state.x, this.state.z, Math.max(this.zoom, 2.5)); }
+      if (!this.open || search === document.activeElement) return;
+      if (e.key === '/') { e.preventDefault(); search.focus(); return; }
+      if (e.key === '+' || e.key === '=') this.#zoomAt(1.4, cv.clientWidth / 2, cv.clientHeight / 2);
+      else if (e.key === '-') this.#zoomAt(1 / 1.4, cv.clientWidth / 2, cv.clientHeight / 2);
+      else if (e.key === 'Enter') this.travel();
+      else if (/^Arrow/.test(e.key)) {
+        const s = e.shiftKey ? 500 : 160 / this.view.zoom;
+        const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        this.view.cx += d[0] * s; this.view.cz += d[1] * s; this.#clampView();
+      } else return;
+      e.preventDefault();
+      this.#draw();
     });
   }
 
-  /** Gamepad buttons while the map is open. Returns true if it used the press. */
+  #hover(px, py, e) {
+    const d = this.#placeAt(px, py, 16);
+    this.hover = d;
+    const cv = $('map-canvas');
+    cv.classList.toggle('over', !!d);
+    const tip = $('tip');
+    if (!d) { tip.classList.add('hidden'); this.#draw(); return; }
+    tip.textContent = `${d.name}${d.elev ? ` · ${ft(d.elev)} ft` : ''}`;
+    tip.style.left = `${px + 14}px`; tip.style.top = `${py + 14}px`;
+    tip.classList.remove('hidden');
+    this.#draw();
+  }
+
+  /** Gamepad: D-pad or left stick steps through what is shown; A travels; B closes; LB/RB change the filter. */
   pad(name, stickOnly) {
-    if (stickOnly) return true; // the left stick is the cursor here, not the list
-    if (name === 'Down' || name === 'Right') this.step(1);
-    else if (name === 'Up' || name === 'Left') this.step(-1);
-    else if (name === 'RB') this.cycleFilter(1);
-    else if (name === 'LB') this.cycleFilter(-1);
+    if (stickOnly) return true;
+    if (this.mode === 'guide') { if (name === 'B') this.#setMode('map'); return true; }
+    if (name === 'Down' || name === 'Right') this.#step(1);
+    else if (name === 'Up' || name === 'Left') this.#step(-1);
+    else if (name === 'RB') this.#cycleFilter(1);
+    else if (name === 'LB') this.#cycleFilter(-1);
     else if (name === 'A') this.travel();
-    else if (name === 'Y') this.#centerOn(this.state.x, this.state.z, Math.max(this.zoom, 2.5));
+    else if (name === 'Y') this.#centerOn(this.state.x, this.state.z, Math.max(this.view.zoom, 2.4));
+    else if (name === 'X') this.#setMode('guide');
     else return false;
+    this.#draw();
     return true;
   }
 
-  /** Per-frame analog input: left stick moves the cursor, right stick pans, triggers zoom. */
+  #step(dir) {
+    const rows = this.#visible();
+    if (!rows.length) return;
+    const i = rows.indexOf(this.sel);
+    const next = rows[(i + dir + rows.length) % rows.length];
+    this.sel = next;
+    this.#centerOn(next.x, next.z, Math.max(this.view.zoom, 2.4));
+    this.#renderCard(); this.#renderResults();
+  }
+
+  #cycleFilter(dir) {
+    const i = FILTERS.findIndex(([id]) => id === this.filter);
+    this.filter = FILTERS[(i + dir + FILTERS.length) % FILTERS.length][0];
+    this.#renderFilters(); this.#renderResults();
+  }
+
+  /** Per-frame analog input: the left stick pans, the right stick pans faster, the triggers zoom. */
   analog(dt, move, look, lt, rt) {
-    const cv = $('map-canvas'), k = this.#scale();
-    if (lt > 0.05 || rt > 0.05) this.#zoomAt(Math.exp((rt - lt) * dt * 2.2), this.#mx(), cv.height / 2);
-    if (Math.hypot(...look) > 0) {
-      this.cx += look[0] * dt * 900 / k * devicePixelRatio;
-      this.cz += look[1] * dt * 900 / k * devicePixelRatio;
-      this.#clampView();
-    }
-    if (Math.hypot(...move) > 0) {
-      const c = this.cursor || [this.cx, this.cz];
-      const speed = 520 / k * devicePixelRatio;
-      const x = clamp(c[0] + move[0] * dt * speed, -this.world.half, this.world.half);
-      const z = clamp(c[1] + move[1] * dt * speed, -this.world.half, this.world.half);
-      // keep the cursor on screen by pushing the view
-      const mx = (cv.width - this.#mx() - 40 * devicePixelRatio) / k, mz = (cv.height / 2 - 40 * devicePixelRatio) / k;
-      if (x < this.cx - mx) this.cx = x + mx; else if (x > this.cx + mx) this.cx = x - mx;
-      if (z < this.cz - mz) this.cz = z + mz; else if (z > this.cz + mz) this.cz = z - mz;
-      this.#clampView();
-      this.pickAt(x, z);
-    }
+    const cv = $('map-canvas'), k = this.#scale(cv);
+    if (lt > 0.05 || rt > 0.05) this.#zoomAt(Math.exp((rt - lt) * dt * 2.2), cv.clientWidth / 2, cv.clientHeight / 2);
+    const pan = (vx, vy, sp) => { this.view.cx += vx * sp * dt / k; this.view.cz += vy * sp * dt / k; this.#clampView(); };
+    pan(move[0], move[1], 520);
+    pan(look[0], look[1], 900);
+    this.#draw();
   }
 
   // ---------------------------------------------------------------- draw
   draw(s) {
     this.state = s;
+    this.#draw();
+  }
+
+  #draw() {
+    if (!this.open || this.mode !== 'map') return;
     const cv = $('map-canvas'), g = cv.getContext('2d');
-    const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = cv.clientHeight * devicePixelRatio;
-    const w = this.world, k = this.#scale(), dpr = devicePixelRatio;
-    const P = (x, z) => [this.#mx() + (x - this.cx) * k, H / 2 + (z - this.cz) * k];
-    g.fillStyle = '#14120f';
+    const dpr = devicePixelRatio, W = cv.clientWidth, H = cv.clientHeight;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const w = this.world, k = this.#scale(cv), s = this.state;
+    const P = (x, z) => [W / 2 + (x - this.view.cx) * k, H / 2 + (z - this.view.cz) * k];
+    g.fillStyle = C.land;
     g.fillRect(0, 0, W, H);
     const [x0, y0] = P(-w.half, -w.half);
     g.imageSmoothingQuality = 'high';
-    g.drawImage(this.base, x0, y0, w.extent * k, w.extent * k);
+    if (this.base) g.drawImage(this.base, x0, y0, w.extent * k, w.extent * k);
 
     // a dashed line from you to the pick
-    if (this.sel) {
+    if (this.sel && s) {
       const [ax, ay] = P(s.x, s.z), [bx, by] = P(this.sel.x, this.sel.z);
-      g.strokeStyle = 'rgba(255,177,90,0.8)'; g.lineWidth = 1.6 * dpr; g.setLineDash([6 * dpr, 6 * dpr]);
+      g.strokeStyle = C.peach; g.lineWidth = 1.6; g.setLineDash([6, 6]);
       g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke(); g.setLineDash([]);
     }
 
-    // markers, then labels by priority so a crowded map shows the ones that matter and never overlaps
-    g.textBaseline = 'middle';
-    g.lineJoin = 'round';
-    const zoomLabels = this.zoom >= 1.7;
+    // markers, then labels by priority, skipping any that would overlap
+    const labels = this.view.zoom >= 2.2;
     const marks = [];
-    for (const d of this.list) {
+    for (const d of this.#visible()) {
       const [x, y] = P(d.x, d.z);
-      if (x < -60 || y < -60 || x > W + 60 || y > H + 60) continue;
+      if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
       marks.push({ d, x, y, on: d === this.sel, hot: d === this.hover });
     }
-    for (const m of marks) this.#marker(g, m, dpr);
-
-    const placed = [];
-    const prio = (m) => (m.on ? 100 : m.hot ? 90 : { tent: 80, car: 78, friend: 76, trailhead: 70, peak: 60, lake: m.d.known ? 40 : 20 }[m.d.kind]);
-    for (const m of marks.sort((a, b) => prio(b) - prio(a))) {
-      const { d, x, y, on, hot } = m;
-      if (d.kind === 'lake' && !d.known && !on && !hot && !zoomLabels) continue;   // the overview stays calm
-      const label = d.kind === 'peak' ? `${d.name}  ${ft(d.elev)}′` : d.name;
-      const px = (on || hot ? 14 : 12.5) * dpr;
-      g.font = FONT(on || hot ? 700 : 600, px / dpr * dpr);
-      const tw = g.measureText(label).width, pad = 3 * dpr;
-      const rect = [x + 9 * dpr - pad, y - px * 0.7 - pad, tw + pad * 2, px * 1.4 + pad * 2];
-      if (!on && !hot && placed.some((r) => rect[0] < r[0] + r[2] && rect[0] + rect[2] > r[0] && rect[1] < r[1] + r[3] && rect[1] + rect[3] > r[1])) continue;
-      placed.push(rect);
-      g.strokeStyle = 'rgba(8,8,6,0.78)'; g.lineWidth = 3.4 * dpr;
-      g.fillStyle = d.kind === 'lake' && !d.known && !on ? 'rgba(226,238,250,0.82)' : '#fbf7ee';
-      g.strokeText(label, x + 9 * dpr, y); g.fillText(label, x + 9 * dpr, y);
-    }
-
-    // the cursor / pick
-    const c = this.cursor;
-    if (c) {
-      const [x, y] = P(c[0], c[1]);
-      const t = (performance.now() % 1600) / 1600;
-      g.strokeStyle = '#f6d3bd'; g.lineWidth = 2 * dpr;
-      g.beginPath(); g.arc(x, y, 12 * dpr, 0, Math.PI * 2); g.stroke();
-      g.globalAlpha = 1 - t; g.lineWidth = 1.4 * dpr;
-      g.beginPath(); g.arc(x, y, (12 + t * 14) * dpr, 0, Math.PI * 2); g.stroke();
-      g.globalAlpha = 1;
-    }
+    for (const m of marks) this.#marker(g, m);
 
     // you
-    const [px, py] = P(s.x, s.z);
-    g.save();
-    g.translate(px, py);
-    g.scale(dpr, dpr);
-    g.rotate(-s.yaw);
-    g.fillStyle = '#f6d3bd'; g.strokeStyle = '#120d07'; g.lineWidth = 2.2;
-    g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.stroke(); g.fill();
-    g.restore();
+    if (s) {
+      const [px, py] = P(s.x, s.z);
+      g.save(); g.translate(px, py); g.rotate(-s.yaw);
+      g.fillStyle = C.peach; g.strokeStyle = C.ink; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.stroke(); g.fill();
+      g.restore();
+    }
 
-    // scale bar
-    const km = this.zoom > 3 ? 0.5 : 1, len = km * 1000 * k;
-    const sx = (cv.clientWidth > 900 ? 332 : 226) * dpr, sy = H - 24 * dpr;
-    g.fillStyle = 'rgba(244,241,234,0.92)'; g.strokeStyle = 'rgba(8,8,6,0.6)'; g.lineWidth = 1 * dpr;
-    g.strokeRect(sx, sy, len, 3 * dpr); g.fillRect(sx, sy, len, 3 * dpr);
-    g.font = FONT(600, 12 * dpr);
-    g.strokeStyle = 'rgba(8,8,6,0.78)'; g.lineWidth = 3 * dpr;
-    g.strokeText(`${km} km`, sx + len + 8 * dpr, sy + 2 * dpr); g.fillText(`${km} km`, sx + len + 8 * dpr, sy + 2 * dpr);
-
-    const stats = `${s.lakesFound}/${s.lakesTotal} lakes · ${s.peaksFound}/${s.peaksTotal} summits · ${s.km.toFixed(1)} km hiked`;
-    if (stats !== this.lastStats) { this.lastStats = stats; $('map-stats').textContent = stats; }
+    const placed = [];
+    const prio = (m) => (m.on ? 100 : m.hot ? 90 : { tent: 80, car: 78, friend: 76, trailhead: 70, peak: 60, lake: 40 }[m.d.kind] || 30);
+    for (const m of marks.sort((a, b) => prio(b) - prio(a))) {
+      const { d, x, y, on, hot } = m;
+      if (!on && !hot && !labels && d.kind === 'lake' && this.view.zoom < 3.2) continue;   // the overview keeps to the big names
+      const label = d.kind === 'peak' && d.elev ? `${d.name}  ${ft(d.elev)}′` : d.name;
+      g.font = `${on || hot ? 700 : 600} ${on || hot ? 14 : 12.5}px Gabarito, system-ui, sans-serif`;
+      const tw = g.measureText(label).width, pad = 4;
+      const rect = [x + 10 - pad, y - 9 - pad, tw + pad * 2, 18 + pad * 2];
+      if (!on && !hot && placed.some((r) => rect[0] < r[0] + r[2] && rect[0] + rect[2] > r[0] && rect[1] < r[1] + r[3] && rect[1] + rect[3] > r[1])) continue;
+      placed.push(rect);
+      g.textBaseline = 'middle';
+      g.lineJoin = 'round';
+      g.strokeStyle = 'rgba(10,13,18,0.85)'; g.lineWidth = 3.5;
+      g.strokeText(label, x + 10, y);
+      g.fillStyle = on || hot ? C.peach : C.white;
+      g.fillText(label, x + 10, y);
+    }
+    // the cursor ring for the selection
+    if (this.sel) {
+      const [x, y] = P(this.sel.x, this.sel.z);
+      g.strokeStyle = C.peach; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, 13, 0, Math.PI * 2); g.stroke();
+    }
+    this.#stats();
   }
 
-  /** One place on the map, in the same shape and colour as its row in the list. */
-  #marker(g, { d, x, y, on, hot }, dpr) {
-    const r = (on || hot ? 6 : 4.4) * dpr;
-    g.fillStyle = d.kind === 'peak' || d.kind === 'friend' ? '#ffffff' : d.kind === 'trailhead' || d.kind === 'car' || d.kind === 'tent' ? '#f6d3bd' : '#8fb1d6';
-    g.strokeStyle = 'rgba(8,8,6,0.85)'; g.lineWidth = 1.8 * dpr;
+  #stats() {
+    const s = this.state, d = this.list;
+    const lakes = d.filter((q) => q.kind === 'lake'), peaks = d.filter((q) => q.kind === 'peak');
+    $('map-stats').textContent = `${lakes.filter((q) => q.known).length}/${lakes.length} lakes · ${peaks.filter((q) => q.known).length}/${peaks.length} summits · ${s.km.toFixed(1)} km`;
+  }
+
+  #marker(g, { d, x, y, on, hot }) {
+    const r = (on || hot ? 6.5 : 5) ;
+    g.fillStyle = MARK[d.kind] || C.white;
+    g.strokeStyle = C.ink; g.lineWidth = 2;
     g.beginPath();
-    if (d.kind === 'peak' || d.kind === 'tent') { g.moveTo(x, y - r * 1.5); g.lineTo(x + r * 1.3, y + r * 1.0); g.lineTo(x - r * 1.3, y + r * 1.0); g.closePath(); }
-    else if (d.kind === 'car' || d.kind === 'trailhead') g.rect(x - r * 0.9, y - r * 0.9, r * 1.8, r * 1.8);
+    if (d.kind === 'peak' || d.kind === 'tent') { g.moveTo(x, y - r * 1.5); g.lineTo(x + r * 1.3, y + r); g.lineTo(x - r * 1.3, y + r); g.closePath(); }
+    else if (d.kind === 'car' || d.kind === 'trailhead') g.rect(x - r, y - r, r * 2, r * 2);
     else g.arc(x, y, r, 0, Math.PI * 2);
     g.stroke(); g.fill();
-    // somewhere you have been
-    if (d.known) { g.strokeStyle = '#f6d3bd'; g.lineWidth = 1.6 * dpr; g.beginPath(); g.arc(x, y, r + 3.2 * dpr, 0, Math.PI * 2); g.stroke(); }
+    if (d.known) { g.strokeStyle = C.peach; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, r + 3.5, 0, Math.PI * 2); g.stroke(); }
   }
 }
+
+function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }

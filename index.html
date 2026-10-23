@@ -59,29 +59,34 @@
     <div id="dot"></div>
   </div>
 
-  <!-- ============================================================ map -->
+  <!-- ============================================================ map and field guide -->
   <div id="map" class="hidden">
     <canvas id="map-canvas"></canvas>
-    <aside id="map-side" class="glass">
-      <header class="ms-head"><h3>Travel</h3><span id="map-count"></span></header>
-      <label class="ms-search"><input id="map-search" type="search" placeholder="Search places" autocomplete="off" spellcheck="false" aria-label="Search places" /></label>
+    <div id="guide" class="hidden"></div>
+    <header id="map-top" class="glass">
+      <div id="map-modes" class="seg2" role="tablist">
+        <button data-mode="map" class="on" role="tab">Map</button>
+        <button data-mode="guide" role="tab">Field guide</button>
+      </div>
+      <label class="ms-search"><input id="map-search" type="search" placeholder="Find a place" autocomplete="off" spellcheck="false" aria-label="Find a place" /></label>
       <div id="map-filters" class="seg" role="tablist" aria-label="Show"></div>
-      <div id="map-list"></div>
-    </aside>
-    <div id="map-stats" class="glass"></div>
-    <button id="map-close" class="round" aria-label="Close map"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13" /></svg></button>
+    </header>
+    <div id="map-results" class="glass hidden"></div>
+    <button id="map-close" class="round glass-btn" aria-label="Close map"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13" /></svg></button>
     <div id="map-tools" class="glass">
       <button id="map-zin" class="round" aria-label="Zoom in"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg></button>
       <button id="map-zout" class="round" aria-label="Zoom out"><svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg></button>
       <button id="map-find" class="round" aria-label="Find me"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" /><path d="M8 1v3M8 12v3M1 8h3M12 8h3" /></svg></button>
     </div>
-    <div id="map-info" class="glass hidden">
-      <div class="mi-kind"></div>
-      <div class="mi-name"></div>
-      <div class="mi-sub"></div>
-      <button id="map-go" class="primary">Travel here</button>
-    </div>
+    <div id="map-stats" class="glass"></div>
+    <section id="map-card" class="glass hidden">
+      <div class="mc-kind" id="mc-kind"></div>
+      <div class="mc-name" id="mc-name"></div>
+      <div class="mc-sub" id="mc-sub"></div>
+      <div class="mc-actions"><button id="mc-go" class="primary">Travel here</button><button id="mc-clear" class="ghost">Clear</button></div>
+    </section>
     <div id="map-hint" class="glass"></div>
+    <div id="tip" class="map-tip hidden"></div>
   </div>
 
   <div id="fade"><div id="fade-text"></div></div>
@@ -182,6 +187,7 @@
       <footer class="sheet-foot">
         <button id="btn-resume" class="primary">Resume</button>
         <button id="btn-map">Map &amp; quick travel</button>
+        <button id="btn-guide">Field guide</button>
         <button id="btn-swap">Play as</button>
         <button id="btn-restart" class="ghost danger">Start over</button>
       </footer>

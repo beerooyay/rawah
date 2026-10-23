@@ -17,6 +17,7 @@ import { Character, CHARACTERS } from './character.js';
 import { Party } from './companions.js';
 import { Props } from './props.js';
 import { Mind } from './mind.js';
+import { Guide } from './guide.js';
 import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
@@ -139,7 +140,13 @@ const hud = new Hud(world);
 const mind = new Mind({ scene, world, hiker, camera, hud, audio: null });
 // ground that was reshaped: trees and rocks that stood on it are replanted at the new height
 const shaped = (rect) => { flora.reground(rect); props.settle(rect); camp.settle(rect); };
-const map = new GameMap(world);
+// the field guide: wildlife, plants and checkpoints, with a checkpoint for each trailhead
+const checkpoints = world.places.filter((q) => q.kind === 'trailhead').map((q, i) => ({
+  id: `checkpoint:${i}`, group: 'Checkpoints', name: q.name, chance: 1, when: () => false,
+  note: 'A trailhead, where the trail starts. Everything in the Rawah begins at one of these.',
+}));
+const guide = new Guide(checkpoints);
+const map = new GameMap(world, guide);
 const audio = new Audio();
 props.hud = hud; props.audio = audio; mind.audio = audio;
 party.onSwing = (x, y, z, nx, nz) => props.swingFx(x, y, z, nx, nz);
@@ -173,7 +180,7 @@ function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races,
+    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -189,6 +196,8 @@ function restore() {
   weather.load(s.weather);
   props.load(s.props);
   if (s.races) party.races = s.races;
+  guide.load(s.guide);
+  state.slept = s.slept || 0;
   mind.load(s.sculpt);
   shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
@@ -300,6 +309,7 @@ function toggleMap() {
 map.onClose = () => { if (map.open) toggleMap(); };
 map.onTravel = (d) => startTravel(d);
 $('btn-map').onclick = () => { pause(false); toggleMap(); };
+$('btn-guide').onclick = () => { pause(false); toggleMap(); map.guideTab(); };
 
 function pause(on) {
   state.paused = on;
@@ -354,6 +364,8 @@ function begin(fresh) {
     hiker.stamina = hiker.warmth = 100;
     props.reset();
     party.races = { won: 0, lost: 0 };
+    guide.load([]);
+    state.slept = 0;
     mind.load([]);
     shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
     weather.load({ seed: (Math.random() * 1e9) | 0 });
@@ -483,17 +495,7 @@ function renderJournal() {
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
   $('journal-stats').innerHTML = stat(`${found}/${lakeNames.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
     + stat(state.km.toFixed(1), 'Km hiked') + stat(`${party.races.won}–${party.races.lost}`, 'Races won–lost');
-  const add = (text, sub, done, cls = '') => {
-    const li = document.createElement('li');
-    li.className = `${done ? 'done' : ''} ${cls}`;
-    li.innerHTML = '<span></span><small></small>';
-    li.firstChild.textContent = text; li.lastChild.textContent = sub;
-    list.appendChild(li);
-  };
-  add('Summits', '', false, 'head');
-  [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(q.name, `${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
-  add('Lakes', '', false, 'head');
-  [...lakeNames].sort((a, b) => b.level - a.level).forEach((l) => add(l.label, `${ft(l.level)} ft`, state.discovered.has(l.label)));
+  list.classList.add('hidden');   // everything found lives in the field guide now
 }
 
 // ------------------------------------------------------------------ actions
@@ -551,6 +553,7 @@ function finishSleep() {
   weather.settle(state.day, state.hour);
   hiker.stamina = 100; hiker.warmth = Math.max(hiker.warmth, 85); hiker.injured = 0; hiker.wet = 0;
   camp.douse();
+  if (s.night) state.slept = (state.slept || 0) + 1;
   state.sleeping = 0;
   $('fade').classList.remove('on');
   hud.toast(s.night ? `Morning, day ${state.day}. ${weather.forecast}` : 'Rested.');
@@ -767,6 +770,25 @@ function checkDiscoveries() {
     party.event('summit', { place: q.name });
     save();
   }
+}
+
+// ------------------------------------------------------------------ field guide
+/** What the guide can see, checked twice a second: where you stand, the time, and what you have done. */
+function feedGuide(p) {
+  const c = world.cover(p.x, p.z), h = state.hour;
+  const f = {
+    cover: { forest: c.forest, krumm: c.krumm, aspen: c.aspen, snag: c.snag, meadow: c.meadow, rock: c.rock },
+    elev: p.y, treeline: world.treeline(p.x, p.z), alpine: c.alpine > 0.5,
+    dusk: (h >= 18 && h < 20.5) || (h >= 5 && h < 6.5), dawn: h >= 5 && h < 7, night: h >= 20.5 || h < 5,
+    rain: /Rain|Thunder|Sleet/.test(weather.label), km: state.km,
+    felled: props.stumps.length / 4, carried: !!props.carry, lifted: world.sculpt.count,
+    raced: party.races.won, slept: state.slept || 0, fire: !!camp.fire,
+  };
+  for (const cp of checkpoints) {
+    const q = world.places.find((x) => x.name === cp.name && x.kind === 'trailhead');
+    if (q && Math.hypot(q.x - p.x, q.z - p.z) < 60) { const e = guide.mark(cp.id); if (e) hud.toast(`Field guide · ${e.name}`); }
+  }
+  for (const e of guide.check(f)) hud.toast(`Field guide · ${e.name}`);
 }
 
 // ------------------------------------------------------------------ friends
@@ -1017,7 +1039,7 @@ function tick(dt, draw = true) {
     });
   }
   if (map.open && hudState) map.draw(hudState);
-  if (state.started && (frameNo++ % 30 === 0)) feedFriends(p);
+  if (state.started && (frameNo++ % 30 === 0)) { feedFriends(p); feedGuide(p); }
   // the sun's shadows only change slowly: redraw them every other frame (always while flying)
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel);
@@ -1061,7 +1083,7 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save, rig, avatar, party, input, props, mind, together: (o) => toggleTogether(o),
+    begin, tick, save, rig, avatar, party, input, props, mind, guide, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
