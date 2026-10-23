@@ -85,7 +85,7 @@ export class GameMap {
     g.lineJoin = g.lineCap = 'round';
     for (const t of w.trails) { g.strokeStyle = 'rgba(20,16,12,0.42)'; g.lineWidth = t.kind === 'road' ? 6.5 : 4.2; g.setLineDash([]); path(t.pts); }
     for (const t of w.trails) {
-      g.strokeStyle = t.kind === 'road' ? '#efe3c6' : t.kind === 'track' ? '#d8b98a' : 'rgba(255,150,104,0.92)';
+      g.strokeStyle = t.kind === 'road' ? '#efe3c6' : t.kind === 'track' ? '#d8b98a' : 'rgba(246,211,189,0.95)';
       g.lineWidth = t.kind === 'road' ? 4 : 2.4;
       g.setLineDash(t.kind === 'trail' ? [10, 6] : t.kind === 'track' ? [5, 5] : []);
       path(t.pts);
@@ -460,7 +460,7 @@ export class GameMap {
       const { d, x, y, on, hot } = m;
       if (d.kind === 'lake' && !d.known && !on && !hot && !zoomLabels) continue;   // the overview stays calm
       const label = d.kind === 'peak' ? `${d.name}  ${ft(d.elev)}′` : d.name;
-      const px = (on || hot ? 13 : 11.5) * dpr;
+      const px = (on || hot ? 14 : 12.5) * dpr;
       g.font = FONT(on || hot ? 700 : 600, px / dpr * dpr);
       const tw = g.measureText(label).width, pad = 3 * dpr;
       const rect = [x + 9 * dpr - pad, y - px * 0.7 - pad, tw + pad * 2, px * 1.4 + pad * 2];
@@ -476,7 +476,7 @@ export class GameMap {
     if (c) {
       const [x, y] = P(c[0], c[1]);
       const t = (performance.now() % 1600) / 1600;
-      g.strokeStyle = '#ffb15a'; g.lineWidth = 2 * dpr;
+      g.strokeStyle = '#f6d3bd'; g.lineWidth = 2 * dpr;
       g.beginPath(); g.arc(x, y, 12 * dpr, 0, Math.PI * 2); g.stroke();
       g.globalAlpha = 1 - t; g.lineWidth = 1.4 * dpr;
       g.beginPath(); g.arc(x, y, (12 + t * 14) * dpr, 0, Math.PI * 2); g.stroke();
@@ -489,7 +489,7 @@ export class GameMap {
     g.translate(px, py);
     g.scale(dpr, dpr);
     g.rotate(-s.yaw);
-    g.fillStyle = '#ffb15a'; g.strokeStyle = '#120d07'; g.lineWidth = 2.2;
+    g.fillStyle = '#f6d3bd'; g.strokeStyle = '#120d07'; g.lineWidth = 2.2;
     g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.stroke(); g.fill();
     g.restore();
 
@@ -498,7 +498,7 @@ export class GameMap {
     const sx = (cv.clientWidth > 900 ? 332 : 226) * dpr, sy = H - 24 * dpr;
     g.fillStyle = 'rgba(244,241,234,0.92)'; g.strokeStyle = 'rgba(8,8,6,0.6)'; g.lineWidth = 1 * dpr;
     g.strokeRect(sx, sy, len, 3 * dpr); g.fillRect(sx, sy, len, 3 * dpr);
-    g.font = FONT(600, 11 * dpr);
+    g.font = FONT(600, 12 * dpr);
     g.strokeStyle = 'rgba(8,8,6,0.78)'; g.lineWidth = 3 * dpr;
     g.strokeText(`${km} km`, sx + len + 8 * dpr, sy + 2 * dpr); g.fillText(`${km} km`, sx + len + 8 * dpr, sy + 2 * dpr);
 
@@ -509,7 +509,7 @@ export class GameMap {
   /** One place on the map, in the same shape and colour as its row in the list. */
   #marker(g, { d, x, y, on, hot }, dpr) {
     const r = (on || hot ? 6 : 4.4) * dpr;
-    g.fillStyle = d.kind === 'peak' ? '#fff3c4' : d.kind === 'trailhead' || d.kind === 'car' ? '#ffd1a6' : d.kind === 'tent' ? '#ff8a3a' : d.kind === 'friend' ? '#a9cf8e' : '#e8f2ff';
+    g.fillStyle = d.kind === 'peak' || d.kind === 'friend' ? '#ffffff' : d.kind === 'trailhead' || d.kind === 'car' || d.kind === 'tent' ? '#f6d3bd' : '#8fb1d6';
     g.strokeStyle = 'rgba(8,8,6,0.85)'; g.lineWidth = 1.8 * dpr;
     g.beginPath();
     if (d.kind === 'peak' || d.kind === 'tent') { g.moveTo(x, y - r * 1.5); g.lineTo(x + r * 1.3, y + r * 1.0); g.lineTo(x - r * 1.3, y + r * 1.0); g.closePath(); }
@@ -517,6 +517,6 @@ export class GameMap {
     else g.arc(x, y, r, 0, Math.PI * 2);
     g.stroke(); g.fill();
     // somewhere you have been
-    if (d.known) { g.strokeStyle = '#a9cf8e'; g.lineWidth = 1.6 * dpr; g.beginPath(); g.arc(x, y, r + 3.2 * dpr, 0, Math.PI * 2); g.stroke(); }
+    if (d.known) { g.strokeStyle = '#f6d3bd'; g.lineWidth = 1.6 * dpr; g.beginPath(); g.arc(x, y, r + 3.2 * dpr, 0, Math.PI * 2); g.stroke(); }
   }
 }

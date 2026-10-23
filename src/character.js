@@ -78,7 +78,7 @@ function skinLight(m) {
 
 const RETARGET = globalThis.RAWAH_RETARGET ?? true;   // fit each clip to the rig it plays on (the rigs and the clips disagree about up and about bone frames)
 const Y_AXIS = new THREE.Vector3(0, 1, 0), X_AXIS = new THREE.Vector3(1, 0, 0);
-const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
 const FLIP_AIR = 2 * 7.4 / 18;   // seconds a flip jump spends in the air (launch speed over gravity)
 
 export class Character {
@@ -96,6 +96,7 @@ export class Character {
     this.gait = 'walk';
     this.hand = null; this.tool = 'fists'; this.toolObj = null; this.grip = null;
     this.target = null; this.fitted = new Map();
+    this.arms = []; this.reachW = 0;
     this.head = null; this.neck = null; this.lookYaw = 0; this.lookPitch = 0; this.lookW = 0;
     this.#load(CHARACTERS[name] ? name : 'blaize');
   }
@@ -122,6 +123,7 @@ export class Character {
       this.mixer = new THREE.AnimationMixer(model);
       this.head = model.getObjectByName('mixamorigHead'); this.neck = model.getObjectByName('mixamorigNeck');
       this.hand = model.getObjectByName('mixamorigRightHand');
+      this.arms = [['Left', -1], ['Right', 1]].map(([side, sx]) => ({ sx, bones: ['Arm', 'ForeArm', 'Hand'].map((n) => model.getObjectByName(`mixamorig${side}${n}`)) })).filter((a) => a.bones.every(Boolean));
       this.grip = this.#gripOf();
       this.#bulk(model, name);
       if (this.fallback) this.fallback.root.visible = false;
@@ -233,6 +235,7 @@ export class Character {
     if (w) this.#apply(w);
     this.mixer.update(dt);
     this.#look(dt, h);
+    this.#reach(dt, h);
     // a held pose: freeze a one-shot partway through
     if (this.hold && this.cur && this.cur.time >= this.hold) { this.cur.time = this.hold; this.cur.timeScale = 0; }
   }
@@ -242,6 +245,31 @@ export class Character {
    * is doing: eased in and out, split between neck and head, and let go of
    * when the target is behind or the body is busy.
    */
+  /**
+   * Telekinesis: both arms lift forward and a little outward, over whatever clip
+   * is playing. Each bone is turned in the world so its child points where
+   * wanted, then written back as a local rotation.
+   */
+  #reach(dt, h) {
+    this.reachW += ((h.channel ? 1 : 0) - this.reachW) * Math.min(1, dt * 6);
+    if (this.reachW < 0.01 || !this.cur) return;
+    this.group.updateMatrixWorld(true);
+    const face = this.group.getWorldQuaternion(_q1);
+    for (const { sx, bones } of this.arms) {
+      for (let i = 0; i < 2; i++) {
+        const bone = bones[i], child = bones[i + 1];
+        const want = _v1.set(sx * (i ? 0.2 : 0.45), i ? 0.45 : 0.3, 0.85).applyQuaternion(face).normalize();
+        const cur = _v2.setFromMatrixPosition(child.matrixWorld).sub(_v3.setFromMatrixPosition(bone.matrixWorld)).normalize();
+        _q2.setFromUnitVectors(cur, want);
+        _q3.identity().slerp(_q2, this.reachW);
+        const world = bone.getWorldQuaternion(_q4).premultiply(_q3);
+        const parent = bone.parent.getWorldQuaternion(_q2).invert();
+        bone.quaternion.copy(parent.multiply(world));
+        bone.updateMatrixWorld(true);
+      }
+    }
+  }
+
   #look(dt, h) {
     if (!this.head || !this.neck || !this.cur) return;   // the turn is added on top of a clip's pose; with no clip driving the bones it would pile up every frame
     const t = h.lookAt, busy = h.action || h.mode !== 'walk' || h.stance !== 'stand' || !h.grounded || this.vs > 0.7;

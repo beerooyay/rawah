@@ -155,10 +155,13 @@ export class CDLODTerrain {
             gx += k * (relief(p + vec2(de, 0.0), amp, rock, sp) - relief(p - vec2(de, 0.0), amp, rock, sp)) / (2.0 * de);
             gz += k * (relief(p + vec2(0.0, de), amp, rock, sp) - relief(p - vec2(0.0, de), amp, rock, sp)) / (2.0 * de);
           }
+          float editSlope = 0.0;
           if (uEditOn > 0.5) {
             float ee = max(0.5, camD * 0.0015);
-            gx += (editH(p + vec2(ee, 0.0)) - editH(p - vec2(ee, 0.0))) / (2.0 * ee);
-            gz += (editH(p + vec2(0.0, ee)) - editH(p - vec2(0.0, ee))) / (2.0 * ee);
+            float ex = (editH(p + vec2(ee, 0.0)) - editH(p - vec2(ee, 0.0))) / (2.0 * ee);
+            float ez = (editH(p + vec2(0.0, ee)) - editH(p - vec2(0.0, ee))) / (2.0 * ee);
+            gx += ex; gz += ez;
+            editSlope = length(vec2(ex, ez));
           }
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
           #ifdef NEAR_DETAIL
@@ -168,6 +171,14 @@ export class CDLODTerrain {
           vec3 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
           vec3 nonPerturbedNormal = normal;
           ${ALBEDO}
+          // a face you carved: the satellite image is stretched straight down it, so lay bare earth with bedding lines instead
+          if (editSlope > 0.2) {
+            float ek = smoothstep(0.2, 0.8, editSlope) * (1.0 - smoothstep(200.0, 900.0, camD));
+            float bed = texture2D(uNoise, vec2((vWPos.x + vWPos.z) / 11.0, vWPos.y / 1.7)).r;
+            float grit = texture2D(uNoise, vec2(vWPos.x + vWPos.z, vWPos.y) / 0.8).r;
+            vec3 earth = mix(vec3(0.33, 0.26, 0.2), vec3(0.5, 0.41, 0.31), bed) * (0.85 + grit * 0.3);
+            diffuseColor.rgb = mix(diffuseColor.rgb, earth, ek * 0.85);
+          }
           #ifdef NEAR_DETAIL
           ${NEAR_COLOR}
           #endif`);

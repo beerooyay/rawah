@@ -347,12 +347,26 @@ export class Props {
     if (this.tick > 0.1) { this.tick = 0; this.#free(); this.#hint(); }
   }
 
-  /** Ground under this area was reshaped: loose rocks drop onto it or ride it up. */
+  /** Ground under this area was reshaped: loose rocks drop onto it or ride up; stumps and the trees lying beside them follow. */
   settle({ x0, z0, x1, z1 }) {
     for (const k of this.rocks) {
       if (k.x < x0 || k.x > x1 || k.z < z0 || k.z > z1) continue;
       if (k.y > this.#groundY(k) + 0.05) k.air = true; else k.dirty = true;
     }
+    let moved = false;
+    for (let i = 0; i < this.stumps.length; i += 4) {
+      const x = this.stumps[i], z = this.stumps[i + 2];
+      if (x < x0 || x > x1 || z < z0 || z > z1) continue;
+      const e = this.world.height(x, z), d = e - this.stumps[i + 1];
+      if (Math.abs(d) < 0.01) continue;
+      this.stumps[i + 1] = e; moved = true;
+      for (const f of [...this.falling, ...this.lying]) {
+        if (Math.abs(f.x - x) > 0.05 || Math.abs(f.z - z) > 0.05) continue;
+        f.y += d;
+        if (f.t >= f.dur) this.#poseTree(f, REST);
+      }
+    }
+    if (moved) this.#writeStumps();
   }
 
   /** Walking up to a pushable boulder works it loose from the ground. */

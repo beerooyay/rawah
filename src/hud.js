@@ -109,18 +109,18 @@ export class Hud {
       const x = W / 2 + ((d - heading) / span) * W;
       if (dd % 45 === 0) {
         const lab = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' }[dd];
-        g.fillStyle = dd === 0 ? '#f2a65a' : '#f3efe6';
-        g.font = `${dd % 90 === 0 ? 600 : 500} ${(dd % 90 === 0 ? 14 : 11) * k}px Gabarito, system-ui, sans-serif`;
+        g.fillStyle = dd === 0 ? '#f6d3bd' : '#ffffff';
+        g.font = `${dd % 90 === 0 ? 600 : 500} ${(dd % 90 === 0 ? 15 : 12) * k}px Gabarito, system-ui, sans-serif`;
         g.fillText(lab, x, H / 2 + 1 * k);
       } else if (dd % 15 === 0) {
-        g.fillStyle = 'rgba(243,239,230,0.55)';
+        g.fillStyle = 'rgba(255,255,255,0.6)';
         g.fillRect(x - 0.6 * k, H / 2 - 3 * k, 1.2 * k, 6 * k);
       } else if (dd % 5 === 0) {
-        g.fillStyle = 'rgba(243,239,230,0.25)';
+        g.fillStyle = 'rgba(255,255,255,0.3)';
         g.fillRect(x - 0.5 * k, H / 2 - 1.5 * k, 1 * k, 3 * k);
       }
     }
-    g.fillStyle = '#f2a65a';
+    g.fillStyle = '#f6d3bd';
     g.beginPath(); g.moveTo(W / 2 - 4 * k, 0); g.lineTo(W / 2 + 4 * k, 0); g.lineTo(W / 2, 5 * k); g.fill();
     this.#put('heading', `${Math.round(heading)}°`);
   }

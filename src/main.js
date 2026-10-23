@@ -304,29 +304,31 @@ function showTab(name) {
   tab = name;
   for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === name);
   for (const p of document.querySelectorAll('.panel')) p.classList.toggle('hidden', p.dataset.panel !== name);
-  if (name === 'controls') renderControls($('controls-pause'));
+  if (name === 'controls') renderControls($('controls-pause'), null);
 }
 function cycleTab(dir) { showTab(TABS[(TABS.indexOf(tab) + dir + TABS.length) % TABS.length]); }
 for (const b of document.querySelectorAll('.tab')) b.onclick = () => showTab(b.dataset.tab);
 
-/** The controls reference, in three columns: keyboard and mouse, Xbox controller, touch. */
-function renderControls(el) {
+/** The controls reference: the essentials for the scheme in use, with a switch to see the others. */
+function renderControls(el, mode) {
+  mode = mode || (input.mode === 'pad' || input.mode === 'touch' ? input.mode : 'kbm');
   const k = (c) => keyCap(c, 'kbm'), p = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`, t = (x) => `<span class="key">${x}</span>`;
-  const col = (title, rows) => `<div><h4>${title}</h4><dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl></div>`;
-  el.innerHTML = [
-    col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop · flip when hiking fast'],
-      [k('X'), 'Crouch, lie down, stand'], [k('Q') + ' ' + t('Click'), 'Punch (chain three), or swing the tool'], [k('R') + ' ' + t('Right click'), 'Hook'], [k('G'), 'Stomp'],
-      [k('E'), 'Pick up / put down a stone · grab a rock face'], [k('T'), 'Tool: hands, axe, machete, telekinesis'], [k('Q') + ' ' + t('Click'), 'Telekinesis: lift the ground'], [k('R') + ' ' + t('Right click'), 'Telekinesis: sink it'], [k('E') + ' ' + t('Wheel'), 'Telekinesis: level it · brush size'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
-      [k('L'), 'Headlamp'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
-    col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up stone / grab rock / let go'], [p('R3'), 'Tool'],
-      [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('Y', 'y'), 'Camera'],
-      [p('D-pad'), 'Down crouch · left punch · right hook · up stomp (with telekinesis: left lifts, right sinks, B levels)'],
-      [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
-    col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Duck') + t('Punch'), 'Crouch, punch / swing / throw'], [t('Fast'), 'Toggle hiking fast'],
-      [t('Tool'), 'Hands, axe, machete, telekinesis'], [t('Punch') + t('Grab') + t('Hook'), 'Telekinesis: lift, level, sink'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Map'), 'Map &amp; quick travel']]),
-  ].join('');
+  const rows = {
+    kbm: [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'], [k('X'), 'Crouch, lie down'],
+      [t('Click'), 'Punch, swing, lift'], [t('Right click'), 'Hook, sink'], [k('E'), 'Pick up, grab, level'], [k('T'), 'Tool'], [k('V'), 'Camera'],
+      [k('C') + k('F'), 'Tent, campfire'], [k('M'), 'Map'], [k('Esc'), 'Pause']],
+    pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('R3'), 'Tool'],
+      [p('Y', 'y'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
+    touch: [['Left thumb', 'Walk'], ['Right thumb', 'Look'], [t('Hop') + t('Fast'), 'Hop, hike fast'], [t('Duck'), 'Crouch'], [t('Punch'), 'Punch, swing, lift'], [t('Hook'), 'Hook, sink'],
+      [t('Grab'), 'Pick up, grab, level'], [t('Tool'), 'Tool'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
+  };
+  const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
+  el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
+    <dl>${rows[mode].map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>
+    <p class="more">Tools (${mode === 'touch' ? t('Tool') : mode === 'pad' ? p('R3') : k('T')}): hands, axe, machete, telekinesis. Telekinesis lifts, sinks and levels the ground; the wheel sets the brush size.</p>`;
+  for (const b of el.querySelectorAll('.seg button')) b.onclick = () => renderControls(el, b.dataset.mode);
 }
-function openControls() { renderControls($('controls-title')); $('controls-sheet').classList.remove('hidden'); }
+function openControls() { renderControls($('controls-title'), null); $('controls-sheet').classList.remove('hidden'); }
 function closeControls() { $('controls-sheet').classList.add('hidden'); }
 $('btn-controls').onclick = openControls;
 $('controls-close').onclick = closeControls;
