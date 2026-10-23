@@ -34,10 +34,19 @@ export const CLOUD_GLSL = /* glsl */ `
 uniform sampler2D uCloudTex;
 uniform vec2 uCloudOff;
 uniform float uCloudCover, uCloudAlt;
+// each octave is turned by a different angle, and the whole field is domain-warped, so
+// no two octaves line up and the noise tile never shows as a grid
+vec2 cloudRot1(vec2 q) { return mat2(0.8, 0.6, -0.6, 0.8) * q; }
+vec2 cloudRot2(vec2 q) { return mat2(0.6, -0.8, 0.8, 0.6) * q; }
+vec2 cloudRot3(vec2 q) { return mat2(-0.68, 0.73, -0.73, -0.68) * q; }
+vec2 cloudWarp(vec2 q) {
+  vec2 w = vec2(texture2D(uCloudTex, q * 0.61 + vec2(0.23, 0.41)).r, texture2D(uCloudTex, q * 0.61 + vec2(0.71, 0.13)).r) - 0.5;
+  return q + w * 0.2;
+}
 float cloudFbm(vec2 p, int oct) {
-  vec2 q = (p + uCloudOff) / 20000.0;
-  float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, q * 2.73 + 0.31).r * 0.24;
-  if (oct > 2) f += texture2D(uCloudTex, q * 7.1 + 0.57).r * 0.13 + texture2D(uCloudTex, q * 19.3 + 0.11).r * 0.07;
+  vec2 q = cloudWarp((p + uCloudOff) / 20000.0);
+  float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, cloudRot1(q) * 2.73 + 0.31).r * 0.24;
+  if (oct > 2) f += texture2D(uCloudTex, cloudRot2(q) * 7.1 + 0.57).r * 0.13 + texture2D(uCloudTex, cloudRot3(q) * 19.3 + 0.11).r * 0.07;
   else f += 0.1;
   return f;
 }
@@ -61,8 +70,11 @@ export function cloudDensityAt(x, z) {
     return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
   };
   const off = atmosphere.uCloudOff.value;
-  const u = (x + off.x) / 20000, v = (z + off.y) / 20000;
-  const f = at(u, v) * 0.56 + at(u * 2.73 + 0.31, v * 2.73 + 0.31) * 0.24 + 0.1;
+  // the same warp and octave turns as CLOUD_GLSL
+  const ux = (x + off.x) / 20000, uy = (z + off.y) / 20000;
+  const wx = at(ux * 0.61 + 0.23, uy * 0.61 + 0.41) - 0.5, wy = at(ux * 0.61 + 0.71, uy * 0.61 + 0.13) - 0.5;
+  const u = ux + wx * 0.2, v = uy + wy * 0.2;
+  const f = at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1;
   const th = 0.74 + (0.2 - 0.74) * atmosphere.uCloudCover.value;
   const t = Math.min(1, Math.max(0, (f - th) / 0.13));
   return t * t * (3 - 2 * t);

@@ -5,7 +5,7 @@ import { withAtmosphere } from './atmosphere.js';
 // and the distant horizon mesh. The near terrain itself is cdlod.js.
 
 
-export function makeNoiseTexture(size = 256) {
+export function makeNoiseTexture(size = 512) {
   const data = new Uint8Array(size * size * 4);
   // tileable value noise, two octaves
   const lattice = (n) => {
@@ -19,10 +19,11 @@ export function makeNoiseTexture(size = 256) {
       return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
     };
   };
-  const n1 = lattice(16), n2 = lattice(64);
+  // prime lattice sizes: the cells never line up with the power-of-two tile, so no grid shows
+  const n1 = lattice(23), n2 = lattice(41);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const v = n1(x / size * 16, y / size * 16) * 0.55 + n2(x / size * 64, y / size * 64) * 0.45;
+      const v = n1(x / size * 23, y / size * 23) * 0.6 + n2(x / size * 41, y / size * 41) * 0.4;
       const i = (y * size + x) * 4;
       data[i] = data[i + 1] = data[i + 2] = v * 255;
       data[i + 3] = 255;
@@ -64,6 +65,12 @@ export const ALBEDO = /* glsl */ `
         float lumA = dot(albedo, vec3(0.3, 0.55, 0.15));
         float meadow = smoothstep(0.012, 0.06, albedo.r - albedo.b) * (1.0 - smoothstep(0.32, 0.5, lumA));
         albedo = mix(albedo, vec3(0.33, 0.45, 0.19) * lumA * 1.75, uGreen * meadow * 0.65);
+        // tufts and the dark gaps between them, at three scales. The noise is mipmapped, so each scale
+        // fades to its average on its own as it gets smaller than a pixel: close up the meadow is
+        // mottled, and from a ridge it is one even colour, with no hard change at any distance
+        float tufts = texture2D(uNoise, vWPos.xz / 0.9).r * 0.45 + texture2D(uNoise, vWPos.xz / 3.1 + 0.27).r * 0.35 + texture2D(uNoise, vWPos.xz / 11.0 + 0.61).r * 0.2;
+        float tuftK = mix(0.1, 0.34, meadow) * (1.0 - 0.6 * uHasCover * (1.0 - smoothstep(0.02, 0.1, lumA)));
+        albedo *= 1.0 + (tufts - 0.5) * tuftK * (0.6 + 0.4 * lumA * 2.0);
         // from orbit you only see canopy; up close, under the modelled trees, show the floor
         if (uHasCover > 0.5) {
           vec4 cov = texture2D(uCover, vWPos.xz / uExtent + 0.5);

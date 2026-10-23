@@ -58,7 +58,7 @@ float noise(vec3 x) {
 float slab(vec2 P, float k, float dist) {
   float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
   float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
-  float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, (P + uCloudOff) / 2600.0 + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
+  float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
   return smoothstep(th, th + 0.085 + far * 0.1, f);
 }
 void main() {
@@ -73,7 +73,7 @@ void main() {
     float ht = 9000.0 - cameraPosition.y;
     vec2 P = cameraPosition.xz + d.xz * ht / h;
     vec2 q = (P + uCloudOff * 1.6) / vec2(42000.0, 17000.0);
-    float s = texture2D(uCloudTex, q).r * 0.62 + texture2D(uCloudTex, q * vec2(2.9, 1.8) + 0.4).r * 0.38;
+    float s = texture2D(uCloudTex, cloudWarp(q)).r * 0.62 + texture2D(uCloudTex, cloudRot1(q) * vec2(2.9, 1.8) + 0.4).r * 0.38;
     float ci = smoothstep(0.6, 0.86, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
     col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 4.0) * 0.5, ci * 0.38 * (1.0 - uNight * 0.85));
   }
@@ -93,7 +93,7 @@ void main() {
       float dn = slab(P, k, tt);
       if (dn > 0.003) {
         float occ = slab(P + sunH, min(k + 0.2, 1.0), tt) * 0.5 + slab(P + sunH * 2.4, min(k + 0.45, 1.0), tt) * 0.5;
-        float billow = 0.72 + 0.56 * texture2D(uCloudTex, (P + uCloudOff) / 1700.0 + 0.2).r;
+        float billow = 0.72 + 0.56 * texture2D(uCloudTex, cloudRot3((P + uCloudOff) / 1700.0) + 0.2).r;
         float lit = clamp((1.0 - occ * (0.5 + 0.4 * uThick)) * (0.38 + 0.62 * k) * billow, 0.0, 1.0);
         vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
         c += uGlow * pow(sd, 5.0) * (1.0 - dn) * dn * 2.0 * (1.0 - uNight) * lit;     // silver lining

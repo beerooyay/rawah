@@ -11,7 +11,7 @@ const PAD = {
   1: 'KeyE',       // B: grab rock / let go
   2: 'KeyC',       // X: pitch / pack tent
   3: 'KeyV',       // Y: first / third person
-  4: 'KeyL',       // LB: headlamp
+  4: 'KeyH',       // LB: call the friends together (the together menu)
   5: 'KeyF',       // RB: campfire
   6: 'KeyZ',       // LT: rest / sleep
   7: 'ShiftLeft',  // RT: hike fast
@@ -179,7 +179,7 @@ export class Input {
         <button data-code="KeyZ" data-hold>Rest</button>
       </div>
       <div class="t-top">
-        <button data-code="KeyL">Lamp</button>
+        <button data-code="KeyH">Together</button>
         <button data-code="KeyV">Cam</button>
         <button data-code="KeyT">Tool</button>
         <button data-code="KeyM">Map</button>

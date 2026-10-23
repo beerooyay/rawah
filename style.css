@@ -287,6 +287,21 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
 #controls-sheet .controls { padding: 18px 24px 24px; overflow-y: auto; }
 @media (min-width: 760px) { .controls dl { grid-template-columns: minmax(96px, auto) 1fr minmax(96px, auto) 1fr; } }
 
+/* ------------------------------------------------------------ friends */
+.bubble { position: fixed; z-index: 30; transform: translate(-50%, -100%); margin-top: -14px; max-width: min(300px, 70vw); padding: 10px 15px; pointer-events: none;
+  border-radius: 16px; background: var(--glass-strong); border: 1px solid var(--edge-strong); box-shadow: var(--shadow);
+  font: 500 var(--t-sm)/1.35 var(--sans); color: var(--ink); text-align: center; text-shadow: none; }
+.bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; width: 10px; height: 10px; background: var(--glass-strong);
+  border-right: 1px solid var(--edge-strong); border-bottom: 1px solid var(--edge-strong); transform: translateX(-50%) rotate(45deg); }
+.menu-card { position: fixed; z-index: 40; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, 92vw); padding: 22px; display: grid; gap: 14px; background: var(--glass-strong); }
+.menu-card .cm-who { font: 400 var(--t-xl)/1.1 var(--display); }
+.menu-card .cm-list { display: grid; gap: 8px; }
+.menu-card .cm-list button { text-align: left; border-radius: var(--r-sm); padding: 13px 16px; }
+.menu-card .cm-list button.on { background: var(--select); border-color: var(--accent); }
+.menu-card .cm-list button:disabled { opacity: 0.4; }
+.menu-card .more { margin: 0; font-size: var(--t-xs); color: var(--faint); }
+body.together-open #hud #hint, body.together-open #keys { opacity: 0.3; }
+
 /* ------------------------------------------------------------ touch */
 body.touch { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 #touch { display: none; }

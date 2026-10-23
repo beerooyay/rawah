@@ -85,6 +85,20 @@
   </div>
 
   <div id="fade"><div id="fade-text"></div></div>
+  <div id="bubble" class="bubble hidden" aria-live="polite"></div>
+
+  <!-- ============================================================ together -->
+  <div id="together" class="glass menu-card hidden" role="dialog" aria-label="Together">
+    <div class="kicker">Together</div>
+    <div id="tog-who" class="cm-who"></div>
+    <div class="cm-list">
+      <button data-stance="together">Hike together</button>
+      <button data-stance="free">Explore on your own</button>
+      <button data-stance="rest">Take a break</button>
+      <button data-stance="race" id="tog-race">Race</button>
+    </div>
+    <p class="more">Press H or B to close. They stay out of your way unless you ask.</p>
+  </div>
 
   <!-- ============================================================ loading -->
   <div id="loading" class="screen">
@@ -168,6 +182,7 @@
       <footer class="sheet-foot">
         <button id="btn-resume" class="primary">Resume</button>
         <button id="btn-map">Map &amp; quick travel</button>
+        <button id="btn-swap">Play as</button>
         <button id="btn-restart" class="ghost danger">Start over</button>
       </footer>
     </div>

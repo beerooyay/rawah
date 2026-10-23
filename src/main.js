@@ -131,6 +131,8 @@ const charParam = new URLSearchParams(location.search).get('char');
 const playerName = CHARACTERS[charParam] ? charParam : CHARACTERS[settings.character] ? settings.character : 'blaize';
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
+party.camera = camera;
+party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
 const hud = new Hud(world);
@@ -159,6 +161,7 @@ const state = {
   rescue: null, travel: null,
 };
 let hudState = null; // the last thing the HUD showed; the map reads it too
+let frameNo = 0, togetherOpen = false;
 
 function spawnAtCar() {
   const { x, z, toward } = world.startSpot || { ...trailhead, toward: [trailhead.x - 1, trailhead.z] };
@@ -170,7 +173,7 @@ function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(),
+    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -185,6 +188,7 @@ function restore() {
   camp.load(s.camp);
   weather.load(s.weather);
   props.load(s.props);
+  if (s.races) party.races = s.races;
   mind.load(s.sculpt);
   shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
@@ -200,15 +204,23 @@ const { keys, pressed } = input;
 if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
+  if (togetherOpen && (code === 'Escape' || code === 'KeyH')) { toggleTogether(false); return; }
   if (!state.started || state.travel) return;
   if (document.activeElement?.tagName === 'INPUT' && document.activeElement.type === 'search') return;   // typing in the map's search
   if (code === 'Escape' && map.open) { toggleMap(); return; }
   if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
   if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
   if (code === 'KeyT' && !state.paused && !map.open) props.cycleTool();
+  if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
+  if (code === 'KeyP' && !map.open) swapPlayer();
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
+  if (togetherOpen) {
+    if (name === 'B' || name === 'Start') toggleTogether(false);
+    else menuPad($('together'), name);
+    return;
+  }
   if (map.open) {
     if (name === 'B') toggleMap();
     else map.pad(name, stickOnly);
@@ -293,7 +305,7 @@ function pause(on) {
   state.paused = on;
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
-  if (on) { renderJournal(); keys.clear(); showTab('journal'); }
+  if (on) { renderJournal(); keys.clear(); showTab('journal'); $('bubble').classList.add('hidden'); $('btn-swap').textContent = `Play as ${cap(nextFriend())}`; }
   else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
 }
 
@@ -316,11 +328,11 @@ function renderControls(el, mode) {
   const rows = {
     kbm: [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'], [k('X'), 'Crouch, lie down'],
       [t('Click'), 'Punch, swing, lift'], [t('Right click'), 'Hook, sink'], [k('E'), 'Pick up, grab, level'], [k('T'), 'Tool'], [k('V'), 'Camera'],
-      [k('C') + k('F'), 'Tent, campfire'], [k('M'), 'Map'], [k('Esc'), 'Pause']],
+      [k('C') + k('F'), 'Tent, campfire'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('Esc'), 'Pause']],
     pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('R3'), 'Tool'],
-      [p('Y', 'y'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
+      [p('LB'), 'Together'], [p('Y', 'y'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
     touch: [['Left thumb', 'Walk'], ['Right thumb', 'Look'], [t('Hop') + t('Fast'), 'Hop, hike fast'], [t('Duck'), 'Crouch'], [t('Punch'), 'Punch, swing, lift'], [t('Hook'), 'Hook, sink'],
-      [t('Grab'), 'Pick up, grab, level'], [t('Tool'), 'Tool'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
+      [t('Grab'), 'Pick up, grab, level'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
   };
   const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
   el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
@@ -341,10 +353,12 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
+    party.races = { won: 0, lost: 0 };
     mind.load([]);
     shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
     weather.load({ seed: (Math.random() * 1e9) | 0 });
     spawnAtCar();
+    party.event('hello');
   } else restore();
   updateCalendar();
   weather.settle(state.day, state.hour);
@@ -468,7 +482,7 @@ function renderJournal() {
   $('journal-forecast').textContent = weather.forecast;
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
   $('journal-stats').innerHTML = stat(`${found}/${lakeNames.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
-    + stat(state.km.toFixed(1), 'Km hiked') + stat(state.day, state.day === 1 ? 'Day' : 'Days');
+    + stat(state.km.toFixed(1), 'Km hiked') + stat(`${party.races.won}–${party.races.lost}`, 'Races won–lost');
   const add = (text, sub, done, cls = '') => {
     const li = document.createElement('li');
     li.className = `${done ? 'done' : ''} ${cls}`;
@@ -740,6 +754,7 @@ function checkDiscoveries() {
       state.discovered.add(l.label);
       const n = lakeNames.filter((q) => state.discovered.has(q.label)).length;
       hud.discovery(l.label, `${ft(l.level)} ft · lake ${n} of ${lakeNames.length}`);
+      party.event('lake', { place: l.label });
       save();
     }
   }
@@ -749,9 +764,73 @@ function checkDiscoveries() {
     state.discovered.add(key);
     const n = peaks.filter((o) => state.discovered.has(`peak:${o.name}`)).length;
     hud.discovery(q.name, `${ft(q.elev)} ft · summit ${n} of ${peaks.length}${q.elev === Math.max(...peaks.map((o) => o.elev)) ? ' · the roof of the Rawah' : ''}`);
+    party.event('summit', { place: q.name });
     save();
   }
 }
+
+// ------------------------------------------------------------------ friends
+/** What the friends can see, refreshed twice a second: weather, the hour, where you stand. */
+function feedFriends(p) {
+  const c = world.cover(p.x, p.z), h = state.hour;
+  Object.assign(party.ctx, {
+    weather: weather.label, warmth: hiker.warmth,
+    dusk: (h >= 18 && h < 20.5) || (h >= 5 && h < 6.5), night: h >= 20.5 || h < 5,
+    alpine: c.alpine > 0.5, meadow: c.meadow > 0.6, forest: c.forest > 0.5, burn: c.snag > 0.4,
+  });
+}
+
+/** The nearest named lake or summit a little way off: where a race goes. */
+function raceGoal() {
+  const p = hiker.pos;
+  let best = null, bd = Infinity;
+  for (const g of [...lakeList.map((l) => ({ x: l.x, z: l.z, name: l.label })), ...peaks.map((q) => ({ x: q.x, z: q.z, name: q.name }))]) {
+    const d = Math.hypot(g.x - p.x, g.z - p.z);
+    if (d > 150 && d < 2600 && d < bd) { bd = d; best = g; }
+  }
+  return best;
+}
+
+let togetherGoal = null;
+function toggleTogether(open = !togetherOpen) {
+  if (open && (!state.started || state.paused || map.open || state.travel)) return;
+  togetherOpen = open;
+  $('together').classList.toggle('hidden', !open);
+  document.body.classList.toggle('together-open', open);
+  if (open) {
+    keys.clear();
+    togetherGoal = raceGoal();
+    $('tog-who').textContent = `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
+    const race = $('tog-race');
+    race.textContent = togetherGoal ? `Race to ${togetherGoal.name}` : 'Race (no summit or lake close enough)';
+    race.disabled = !togetherGoal;
+    for (const b of $('together').querySelectorAll('[data-stance]')) b.classList.toggle('on', b.dataset.stance === party.stance);
+    if (document.pointerLockElement) document.exitPointerLock();
+    $('together').querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+  } else lockPointer();
+}
+for (const b of $('together').querySelectorAll('[data-stance]')) {
+  b.onclick = () => {
+    const s = b.dataset.stance;
+    if (s === 'race') { if (!togetherGoal) return; party.command('race', togetherGoal); }
+    else party.command(s);
+    toggleTogether(false);
+  };
+}
+
+function raceEnded({ won, name }) {
+  if (won === null) hud.toast(`The race to ${name} is off.`, 'warn');
+  else hud.toast(won ? `You beat them to ${name}.` : `They beat you to ${name}.`, won ? '' : 'warn');
+  save();
+}
+
+/** Play as the next friend: the same place and the same journal, continued in the new body. */
+const nextFriend = () => { const names = Object.keys(CHARACTERS); return names[(names.indexOf(playerName) + 1) % names.length]; };
+function swapPlayer() {
+  if (!state.started) return;
+  setCharacter(nextFriend());
+}
+$('btn-swap').onclick = () => swapPlayer();
 
 // ------------------------------------------------------------------ loop
 const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = new THREE.Color(), _snowBounce = new THREE.Color();
@@ -767,7 +846,7 @@ $('title').classList.remove('hidden');
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
-  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open;
+  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen;
   if (state.sleeping) {
     state.sleeping.t += dt;
     if (state.sleeping.t > 2.2) finishSleep();
@@ -937,6 +1016,7 @@ function tick(dt, draw = true) {
     });
   }
   if (map.open && hudState) map.draw(hudState);
+  if (state.started && (frameNo++ % 30 === 0)) feedFriends(p);
   // the sun's shadows only change slowly: redraw them every other frame (always while flying)
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel);
@@ -980,7 +1060,7 @@ requestAnimationFrame(loop);
 if (DEV) {
   window.__rawah = {
     world, hiker, camp, state, flora, terrain, renderer, scene, camera,
-    begin, tick, save, rig, avatar, party, input, props, mind,
+    begin, tick, save, rig, avatar, party, input, props, mind, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
