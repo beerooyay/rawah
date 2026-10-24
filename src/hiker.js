@@ -28,7 +28,7 @@ export const ACTIONS = {
   combo: { dur: 1.15, hits: [0.22, 0.5, 0.85], slow: 0.2, cost: 8 },
   hook: { dur: 0.85, hits: [0.4], slow: 0.25, cost: 6 },
   stomp: { dur: 0.9, hits: [0.45], slow: 0.2, cost: 4 },
-  chop: { dur: 1.1, hits: [0.4], slow: 0.12, cost: 3.5 },      // an axe swing; props.js decides what it hits
+  chop: { dur: 0.62, hits: [0.285], slow: 0.12, cost: 2 },     // an axe swing (0.62 s, landing at 46%); props.js decides what it hits
   slash: { dur: 0.9, hits: [0.4], slow: 0.2, cost: 2.5 },      // a machete swing
   hitSide: { dur: 1.1, hits: [], slow: 0 },
   hitKidney: { dur: 0.9, hits: [], slow: 0 },

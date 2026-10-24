@@ -188,10 +188,12 @@ export class Wood {
     const [u0, v0, du, dv] = t.bark, tb = t0 / t.L, uv = geo.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + du * uv.getX(i), v0 + dv * (tb + uv.getY(i) * (1 - tb)));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(uv.count * 3).fill(0.9), 3));
-    const mesh = new THREE.Mesh(geo, [this.flora.foliage, this.cutMat, this.cutMat]);
+    // the foliage material is written for instancing (wind, tint), so the trunk is a one-instance mesh like the standing trees
+    const mesh = new THREE.InstancedMesh(geo, [this.flora.foliage, this.cutMat, this.cutMat], 1);
+    mesh.setMatrixAt(0, _m.compose(this.#at(t, t0 + len / 2), _q.setFromUnitVectors(Y, t.axis), _s.set(1, 1, 1)));
+    mesh.setColorAt(0, _c.setRGB(0.82, 0.81, 0.79));
+    mesh.frustumCulled = false;
     mesh.castShadow = mesh.receiveShadow = true;
-    mesh.position.copy(this.#at(t, t0 + len / 2));
-    mesh.quaternion.setFromUnitVectors(Y, t.axis);
     this.scene.add(mesh);
     t.mesh = mesh;
   }

@@ -1258,7 +1258,9 @@ function tick(dt, draw = true) {
   const mindOn = hiker.tool === 'mind';
   ctl.grab = live && !mindOn && pressed.has('KeyE') && !props.interact();
   ctl.crouch = live && pressed.has('KeyX');
-  ctl.punch = live && !mindOn && (pressed.has('KeyQ') || pressed.has('Mouse0'));
+  // a blade keeps swinging while the button is held; fists still take one press per punch
+  const held = hiker.tool === 'axe' || hiker.tool === 'machete';
+  ctl.punch = live && !mindOn && (held ? (keys.has('KeyQ') || keys.has('Mouse0')) : (pressed.has('KeyQ') || pressed.has('Mouse0')));
   if (ctl.punch && props.throwStone()) ctl.punch = false;
   ctl.hook = live && !mindOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
   ctl.stomp = live && pressed.has('KeyG');

@@ -12,13 +12,15 @@ import { clamp } from './noise.js';
 // that moves. Those are what a save keeps.
 //
 // Trees take a number of swings that grows with their girth (an axe on a mature
-// tree is about twenty; a machete on one is a long job, and quick work on
+// tree is about ten; a machete on one is a long job, and quick work on
 // saplings and brush). Rocks come in three weights by scale: stones you can
 // carry, boulders you can push (slowly, and the heavier the slower), and
 // everything bigger, which is part of the mountain.
 
 const BRUSH = ['krumm', 'willow'];
 const NAME = { spruce: 'spruce', fir: 'subalpine fir', lodgepole: 'lodgepole pine', aspen: 'aspen', snag: 'snag', krumm: 'krummholz', willow: 'willow' };
+// axe strokes to bring down a tree of scale 1.0 (more for a thicker one, fewer for a thinner)
+const SWINGS = { spruce: 9, fir: 9, lodgepole: 8, aspen: 5, snag: 5 };
 const CARRY_MAX = 0.55;        // rock scale you can lift
 const PUSH_MIN = CARRY_MAX;
 const PUSH_MAX = 1.45;         // rock scale you can shove; bigger is bedrock
@@ -109,7 +111,7 @@ export class Props {
     const key = itemKey(found.kind, found.x, found.z);
     // swings to bring it down: an axe on a mature tree is about twenty, a machete a long afternoon
     const hp = small ? (BRUSH.includes(found.kind) ? 3 : 1.6)
-      : (9 + 13 * found.s) * (found.kind === 'snag' ? 0.7 : found.kind === 'aspen' ? 0.85 : 1);
+      : Math.max(3, Math.round(SWINGS[found.kind] * (0.7 + 0.5 * found.s)) - 2);
     const power = tool === 'axe' ? 1 : small ? 1.25 : 0.28;
     const taken = (this.damage.get(key) || 0) + power;
     this.damage.set(key, taken);

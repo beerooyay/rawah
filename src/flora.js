@@ -70,7 +70,7 @@ export class Flora {
     this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 } };
     const atlas = paintAtlas(leaves);
     this.species = buildSpecies();
-    const foliage = foliageMaterial(atlas, this.uniforms);
+    const foliage = this.foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);
     this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);
 
