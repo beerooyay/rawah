@@ -250,6 +250,7 @@ export class ATV {
 
     // trees and boulders push the quad out (and take the speed with them)
     const bx = p.x, bz = p.z;
+    this.solids?.(p, 1.1);
     const lift = this.flora.collide(p, 0.85, this.y);
     const pushed = Math.hypot(p.x - bx, p.z - bz);
     if (pushed > 0.01) {

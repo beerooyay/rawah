@@ -27,7 +27,7 @@ const MAX_ROCKS = 160;         // loose rocks kept
 const MAX_STUMPS = 3000;
 const CHIPS = 72;
 const GRAVITY = 18;
-const REST = Math.PI / 2 - 0.11;   // a felled tree lies a little short of flat: the crown's branches prop it up
+export const REST = Math.PI / 2 - 0.11;   // a felled tree lies a little short of flat: the crown's branches prop it up
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0), _axis = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -100,7 +100,11 @@ export class Props {
   strike(e) {
     const p = this.hiker.pos, tool = this.tool;
     const found = this.flora.find(p.x + e.x * 0.7, p.z + e.z * 0.7, 1.35, [...TREES, ...BRUSH]);
-    if (!found) { this.audio.chop?.(false); return; }
+    if (!found) {
+      if (tool === 'axe' && this.wood?.strike(e, this.hiker)) return;   // sawing a lying trunk into firewood
+      this.audio.chop?.(false);
+      return;
+    }
     const small = BRUSH.includes(found.kind) || found.s < SAPLING;
     const key = itemKey(found.kind, found.x, found.z);
     // swings to bring it down: an axe on a mature tree is about twenty, a machete a long afternoon
@@ -135,6 +139,13 @@ export class Props {
     const a = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.5;
     this.falling.push({ mesh, kind: h.kind, vi: h.variant, x: h.x, y: h.e - 0.15, z: h.z, s: h.s, r: h.r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * h.s * 0.055, 2.1, 3.4), H: height * h.s });
     this.#stump(h.x, h.e, h.z, h.s);
+  }
+
+  /** A lying tree that has been sawn up: take it away (its stump stays). */
+  dropLying(f) {
+    f.mesh.parent?.remove(f.mesh); f.mesh.dispose?.();
+    const i = this.lying.indexOf(f);
+    if (i >= 0) this.lying.splice(i, 1);
   }
 
   #stump(x, e, z, s) {

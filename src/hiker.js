@@ -200,10 +200,11 @@ export class Hiker {
     p.z += this.vel.z * dt;
     const lim = w.half - 40;
     p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim);
+    this.solids?.(p, 0.3);               // tent walls
     const lift = this.flora.collide(p, 0.32, p.y);
     const lk2 = w.lakeAt(p.x, p.z);
     const ice = lk2 && lk2.level >= w.iceLine ? lk2.level : -Infinity;
-    const ground = Math.max(w.height(p.x, p.z), lift, ice);
+    const ground = Math.max(w.height(p.x, p.z), lift, ice, this.floorAt ? this.floorAt(p.x, p.z) : -Infinity);
 
     if (this.mode === 'swim') {
       const lk = w.lakeAt(p.x, p.z);

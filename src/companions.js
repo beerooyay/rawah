@@ -141,8 +141,10 @@ class Actor {
     if (b.action) { b.action.t += dt; if (b.action.t >= b.action.dur) b.action = null; }
     p.x += (b.vel.x + this.kick.x) * dt; p.z += (b.vel.z + this.kick.z) * dt;
     this.kick.multiplyScalar(Math.exp(-8 * dt));
+    this.party.solids?.(p, 0.32);     // the family tent's walls
     this.party.flora.collide(p, 0.35, p.y);
-    p.y += (w.height(p.x, p.z) - p.y) * Math.min(1, dt * 14);
+    const floor = this.party.floorAt ? this.party.floorAt(p.x, p.z) : -Infinity;
+    p.y += (Math.max(w.height(p.x, p.z), floor) - p.y) * Math.min(1, dt * 14);
     this.char.update(dt, b);
   }
 }
@@ -177,6 +179,9 @@ export class Party {
     this.go = null;    // { x, z, who }: a friend with somewhere to be (a scripted moment)
     this.atv = null;   // the four-wheeler, while someone is boarding or riding
     this._pin = null;  // the actor a script owns this frame
+    this.biz = null;   // a friend's call of nature: { a, phase: walk | squat | done, x, z, ux, uz, t, drops, n }
+    this.urge = between(110, 170);   // seconds until the next one
+    this.onDrop = null;              // called with (x, y, z) for each dropping
   }
 
   // ------------------------------------------------------------ speech
@@ -285,6 +290,7 @@ export class Party {
   // ------------------------------------------------------------ the together menu
   /** What you asked for from the menu. `goal` is { x, z, name } for a race. */
   command(what, goal = null) {
+    this.#endBusiness();
     this.roam = null;
     this.race = null;
     this.stance = what === 'rest' ? 'rest' : what === 'race' ? 'race' : what === 'free' ? 'free' : 'together';
@@ -317,12 +323,12 @@ export class Party {
     const sitting = this.duo?.kind === 'sit' || this.stance === 'rest';
     this.energy = clamp(this.energy + (sitting ? 5 : speed > 1.2 ? -0.7 : -0.05) * dt, 0, 100);
     if (this.stance === 'together' && !this.duo && !this.work) this.curiosity = clamp(this.curiosity + dt * 0.5, 0, 100);
-    if (this.energy < 22 && this.stance === 'together' && !this.duo && !this.work) {
+    if (this.energy < 22 && this.stance === 'together' && !this.duo && !this.work && !this.biz) {
       this.say('tired', {}, null, { force: true });
       this.startDuo(pl, 'sit', false, 18);
       this.energy = 40;
     }
-    if (this.curiosity > 90 && this.stance === 'together' && !this.duo && !this.work && !this.roam) {
+    if (this.curiosity > 90 && this.stance === 'together' && !this.duo && !this.work && !this.roam && !this.biz) {
       this.curiosity = 30;
       this.roamFrom(pick(this.actors));
       this.say('wander', {}, null, { force: true });
@@ -393,6 +399,7 @@ export class Party {
     this.ctx.player = pl;
     if (dt > 0) {
       this.#needs(dt, pl, speed);
+      this.#business(dt, pl);
       if (this.race) this.#race(dt, pl);
       else if (this.roam) this.#roam(dt, pl);
       else if (this.stance === 'rest' && speed > 0.6) this.command('together');
@@ -430,9 +437,77 @@ export class Party {
     this.#bubbleAt(performance.now() / 1000);
   }
 
+  // ------------------------------------------------------------ calls of nature
+  /** A tree to duck behind: out of your line of sight, a walk from you and from camp, with room to squat. */
+  #coverSpot(a, pl) {
+    const { fire, tent } = this.ctx, w = this.world;
+    let best = null, bs = Infinity;
+    for (const t of this.flora.treesAround(a.x, a.z, 30)) {
+      let ux = t.x - pl.pos.x, uz = t.z - pl.pos.z;
+      const ud = Math.hypot(ux, uz);
+      if (ud < 5) continue;
+      ux /= ud; uz /= ud;
+      const x = t.x + ux * (t.rad + 0.9), z = t.z + uz * (t.rad + 0.9);
+      if (Math.hypot(x - pl.pos.x, z - pl.pos.z) < 7 || w.lakeAt(x, z) || w.localGrade(x, z) > 0.45 || !a.passable(x, z)) continue;
+      if (fire && Math.hypot(x - fire.x, z - fire.z) < 7) continue;
+      if (tent && Math.hypot(x - tent.x, z - tent.z) < 6) continue;
+      if (this.flora.collide({ x, z }, 0.4, Infinity) > -Infinity) continue;
+      const sc = Math.hypot(x - a.x, z - a.z) + (ud < 12 ? 10 : 0) + Math.random() * 3;
+      if (sc < bs) { bs = sc; best = { x, z, ux, uz }; }
+    }
+    return best;
+  }
+
+  /** Every five to nine minutes a friend ducks behind a tree, squats a while (dropping what falls), and comes back. */
+  #business(dt, pl) {
+    const b = this.biz;
+    if (!b) {
+      this.urge -= dt;
+      if (this.urge > 0) return;
+      const calm = this.mode === 'follow' && !this.duo && !this.work && !this.race && !this.roam && !this.go && !this.atv && this.stance !== 'rest'
+        && pl.mode === 'walk' && !pl.action && this.actors.every((a) => !a.seat && !a.riding && !a.boarding);
+      if (!calm) { this.urge = 15; return; }
+      const a = pick(this.actors), spot = this.#coverSpot(a, pl);
+      if (!spot) { this.urge = 40; return; }
+      this.biz = { a, phase: 'walk', t: 0, ...spot };
+      this.tell(pick(['Nature calls. Back in a minute.', 'Need a tree. Do not follow me.', 'Be right back. Do not look.']), a);
+      return;
+    }
+    const a = b.a, away = Math.hypot(pl.pos.x - a.x, pl.pos.z - a.z);
+    b.t += dt;
+    if (this.go || this.race || this.atv || pl.mode === 'swim' || away > 120) { this.#endBusiness(60); return; }
+    if (b.phase === 'walk') {
+      a.b.face = false; a.b.emote = ''; a.b.lookAt = null;
+      if (a.goto(b.x, b.z, JOG, 0.2, dt) < 0.45) {
+        b.phase = 'squat'; b.t = 0; b.n = 0;
+        b.drops = [3 + Math.random(), 5 + Math.random(), 7 + Math.random()].slice(0, 2 + (Math.random() < 0.6 ? 1 : 0));
+      } else if (b.t > 45) this.#endBusiness(40);
+    } else if (b.phase === 'squat') {
+      a.stop();
+      a.face(b.x + b.ux, b.z + b.uz);        // back to the tree and to you
+      a.b.emote = 'Crouch Idle 01'; a.b.lookAt = null;
+      if (b.n < b.drops.length && b.t > b.drops[b.n]) {
+        b.n++;
+        this.onDrop?.(a.x - b.ux * 0.22, a.b.pos.y + 0.42, a.z - b.uz * 0.22);
+      }
+      if (b.t > b.drops[b.drops.length - 1] + 2.2) {
+        b.phase = 'done'; b.t = 0;
+        a.b.emote = ''; a.b.face = false;
+        this.tell(pick(['Ahh. Much better.', 'Do not go over there.', 'I feel ten pounds lighter.']), a);
+      }
+    } else if (b.t > 1.8) this.#endBusiness(300 + Math.random() * 240);
+  }
+
+  #endBusiness(urge = 60) {
+    const b = this.biz;
+    if (b) { b.a.b.emote = ''; b.a.b.face = false; }
+    this.biz = null;
+    this.urge = urge;
+  }
+
   /** The friend who is not off racing or roaming keeps by you. */
   #trail(a, pl, dt) {
-    if (a === this._pin || a.riding || a.boarding || a.seat) return;
+    if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a) return;
     const i = this.actors.indexOf(a);
     const [fx, fz] = fwd(this.dir + (i ? 0.8 : -0.8)), r = 4.5 + i * 2.2;
     a.goto(pl.pos.x + fx * r, pl.pos.z + fz * r, RUN, 1.5, dt);
@@ -441,7 +516,7 @@ export class Party {
   // ------------------------------------------------------------ walking with you
   follow(dt, pl, speed) {
     this.actors.forEach((a, i) => {
-      if (a === this._pin || a.riding || a.boarding || a.seat) return;
+      if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a) return;
       if (this.work && this.work.a === a) return;
       const ang = this.dir + (i ? 0.8 : -0.8), r = 4.5 + i * 2.2, [fx, fz] = fwd(ang);
       const tx = pl.pos.x + fx * r, tz = pl.pos.z + fz * r, d = Math.hypot(tx - a.x, tz - a.z);
@@ -460,7 +535,7 @@ export class Party {
     this.next -= dt;
     const calm = pl.mode === 'walk' && pl.grounded && !pl.action;
     const close = this.actors.every((a) => Math.hypot(a.x - pl.pos.x, a.z - pl.pos.z) < 22);
-    if (this.next <= 0 && calm && close && !this.work) {
+    if (this.next <= 0 && calm && close && !this.work && !this.biz) {
       if (Math.random() < 0.4 && this.startWork(pl)) this.next = between(30, 60);
       else this.startDuo(pl);
     }

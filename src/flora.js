@@ -580,6 +580,25 @@ export class Flora {
   rockParts(kind, vi) { const m = this.meshes[kind][vi]; return { geometry: m.geometry, material: m.material }; }
 
   /** A single-instance copy of a tree variant, for one that is falling or lying down. Returns the mesh and the tree's height. */
+  /** Standing full-size trees within r of (x, z): { x, z, rad }. Only the loaded tiles around the point. */
+  treesAround(x, z, r) {
+    const out = [], w = this.world, size = this.tile * w.cell;
+    const ci = Math.floor((x + w.half) / size), cj = Math.floor((z + w.half) / size);
+    for (let j = cj - 1; j <= cj + 1; j++) {
+      for (let i = ci - 1; i <= ci + 1; i++) {
+        const tile = this.tiles.get(j * this.nt + i);
+        if (!tile) continue;
+        for (const kind of ['spruce', 'lodgepole', 'aspen', 'snag']) {
+          const list = tile.items[kind];
+          for (let k = 0; k < list.length; k += 5) {
+            if (list[k + 3] >= SAPLING && Math.hypot(list[k] - x, list[k + 2] - z) <= r) out.push({ x: list[k], z: list[k + 2], rad: 0.24 * list[k + 3] });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   treeMesh(kind, vi, shade = 1) {
     const src = this.meshes[kind][vi];
     const m = new THREE.InstancedMesh(src.geometry, src.material, 1);

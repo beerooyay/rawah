@@ -196,7 +196,7 @@ function paintAtlas(season = 'autumn') {
 // ------------------------------------------------------------------ geometry
 // the canvas texture is flipped (v = 1 at the top row), so cell row j sits at v = 1 - (j + 1) / 4
 const slotUV = (name) => { const [i, j] = SLOTS[name]; return [i / 4, 1 - (j + 1) / 4, 1 / 4, 1 / 4]; };
-const barkUV = (name) => [BARK[name] / 4, 0, 1 / 4, 1 / 2];
+export const barkUV = (name) => [BARK[name] / 4, 0, 1 / 4, 1 / 2];
 
 /** Builder that collects cards and trunks into one geometry with rounded crown normals. */
 class Builder {

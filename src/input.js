@@ -17,7 +17,7 @@ const PAD = {
   7: 'ShiftLeft',  // RT: hike fast
   8: 'KeyM',       // Back: map
   9: 'Escape',     // Start: pause
-  10: 'ShiftLeft', // L3: hike fast
+  10: 'KeyK',      // L3: cook at the fire, or drop your firewood
   11: 'KeyV',      // R3: first / third person
   12: 'KeyT',      // D-pad up: tool (hands, axe, machete)
   13: 'KeyB',      // D-pad down: fish
@@ -182,6 +182,9 @@ export class Input {
       ride: '<circle cx="12" cy="14" r="7"/><circle cx="12" cy="14" r="2.6"/><path d="M12 7v4.4M6.2 16.6l3.9-1.7M17.8 16.6l-3.9-1.7M9 4.5h6"/>',
       fish: '<path d="M3 12c2.8-3.6 6-5 9.5-5L21 4.5v15L12.5 17C9 17 5.8 15.6 3 12z"/><circle cx="9" cy="11" r="0.9"/>',
       roast: '<path d="M3.5 20.5 14 10"/><rect x="13" y="3.5" width="8" height="8" rx="2.2" transform="rotate(45 17 7.5)"/>',
+      cook: '<path d="M3 7h10v4.5a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 3 11.5zM13 8.5h1.5M5.5 2.5c.5.8-.5 1.5 0 2.5M8.5 2.5c.5.8-.5 1.5 0 2.5"/>',
+      sip: '<path d="M3.5 6h7v4a3 3 0 0 1-3 3h-1a3 3 0 0 1-3-3zM10.5 7h1.2a1.6 1.6 0 0 1 0 3.2h-1.2"/>',
+      drop: '<path d="M8 2.5v6M5.3 6 8 8.7 10.7 6M3 12.5h10"/>',
     };
     const btn = (code, ic, label, cls = '') => `<button data-code="${code}" class="${cls}" aria-label="${label}">${icon(IC[ic])}</button>`;
     ui.innerHTML = `
@@ -196,6 +199,9 @@ export class Input {
         ${btn('KeyC', 'camp', 'Camp')}
         ${btn('KeyF', 'fire', 'Fire')}
         ${btn('KeyZ', 'rest', 'Rest')}
+        ${btn('KeyK', 'cook', 'Cook')}
+        ${btn('KeyO', 'sip', 'Sip coffee')}
+        ${btn('KeyJ', 'drop', 'Drop firewood')}
       </div>
       <div class="t-top">
         ${btn('KeyB', 'fish', 'Fish')}

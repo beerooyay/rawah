@@ -190,7 +190,7 @@ function particles(count, vert, extra, blending, order, map = SPRITE) {
 }
 
 /** Bark: dark furrows lengthwise. */
-function barkTexture() {
+export function barkTexture() {
   const cv = document.createElement('canvas');
   cv.width = 128; cv.height = 256;
   const g = cv.getContext('2d');
@@ -260,9 +260,10 @@ export class Fire {
       return m;
     };
     const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    this.teepee = [];
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2 + 0.4;
-      addLog(0.95, 0.065, V(Math.cos(a) * 0.4, 0.06, Math.sin(a) * 0.4), V(Math.cos(a) * 0.04, 0.82, Math.sin(a) * 0.04), i === 1);
+      this.teepee.push(addLog(0.95, 0.065, V(Math.cos(a) * 0.4, 0.06, Math.sin(a) * 0.4), V(Math.cos(a) * 0.04, 0.82, Math.sin(a) * 0.04), i === 1));
     }
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2 + 1.1;
@@ -282,6 +283,9 @@ export class Fire {
     this.glow.position.y = 0.2;
     g.add(this.glow);
   }
+
+  /** The three logs leaning together come away when a grate goes over the fire. */
+  setTeepee(on) { for (const m of this.teepee) m.visible = on; }
 
   /** `fuel` 0..1: how much of the fire is left; `px`: viewport height in device pixels over 2 tan(fov/2). */
   update(t, fuel, scale) {

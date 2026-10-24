@@ -128,6 +128,97 @@ export class Audio {
     if (surface === 'gravel' || surface === 'rock') this.#burst(0.05, f * 1.8, 3, g * 0.5 * v, 'bandpass', 0.03);
   }
 
+  /** A saw working through a log. */
+  saw() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 3; i++) this.#burst(0.14, 1800 + Math.random() * 900, 0.9, 0.16, 'bandpass', i * 0.16);
+  }
+
+  /** A tree's trunk giving way. */
+  creak() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(130, t + 0.5); o.frequency.exponentialRampToValueAtTime(50, t + 1.1);
+    f.type = 'bandpass'; f.frequency.value = 420; f.Q.value = 5;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.28, t + 0.15); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.15);
+    o.connect(f).connect(g).connect(this.master);
+    o.start(t); o.stop(t + 1.2);
+    this.#burst(0.9, 900, 0.6, 0.12, 'bandpass', 0.1);
+  }
+
+  /** The crown hitting the ground. */
+  crash() {
+    if (!this.ctx) return;
+    this.#burst(0.9, 120, 0.7, 0.95, 'lowpass', 0, this.noise);
+    this.#burst(0.5, 700, 0.5, 0.35, 'bandpass', 0.03);
+    this.#burst(0.35, 90, 0.8, 0.8, 'lowpass', 0.06, this.noise);
+  }
+
+  /** A log landing on a stack. */
+  clunk() {
+    if (!this.ctx) return;
+    this.#burst(0.1, 260, 1.2, 0.4, 'bandpass');
+    this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
+  }
+
+  /** Bacon and eggs in a hot pan. */
+  sizzle() {
+    if (!this.ctx) return;
+    this.#burst(0.22, 5200, 0.7, 0.05, 'highpass', 0, this.noise);
+    if (Math.random() < 0.4) this.#burst(0.025, 1400 + Math.random() * 1200, 3, 0.1, 'bandpass', Math.random() * 0.15);
+  }
+
+  /** Something soft hitting the ground. */
+  plop() {
+    if (!this.ctx) return;
+    this.#burst(0.12, 160, 1.5, 0.35, 'lowpass', 0, this.noise);
+    this.#burst(0.05, 420, 2, 0.15, 'bandpass', 0.02);
+  }
+
+  /** Flies circling: `v` 0..1 by how close you are. */
+  buzz(v) {
+    if (!this.ctx) return;
+    const f = 190 + Math.random() * 90;
+    this.#burst(0.1, f, 9, 0.07 * v, 'bandpass');
+    this.#burst(0.08, f * 2.1, 8, 0.04 * v, 'bandpass', 0.01);
+  }
+
+  /** A bubble popping up the percolator's stem. */
+  perk() {
+    if (!this.ctx) return;
+    const f = 380 + Math.random() * 380;
+    this.#burst(0.05, f, 4, 0.22, 'bandpass');
+    this.#burst(0.04, f * 1.5, 5, 0.12, 'bandpass', 0.045);
+  }
+
+  /** Coffee poured into a cup. */
+  pour() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 7; i++) this.#burst(0.1, 900 + i * 90, 2.5, 0.07, 'bandpass', i * 0.09);
+  }
+
+  /** The pot lid going on. */
+  lid() {
+    if (!this.ctx) return;
+    this.#burst(0.05, 2600, 3, 0.2, 'bandpass');
+    this.#burst(0.08, 1700, 4, 0.15, 'bandpass', 0.05);
+  }
+
+  /** The percolator is done: two bright notes. */
+  ready() {
+    if (!this.ctx) return;
+    this.#whistle(1175, 1175, 0, 0.9, 0.22);
+    this.#whistle(1568, 1568, 0.22, 1.1, 0.2);
+  }
+
+  /** A sip. */
+  sip() {
+    if (!this.ctx) return;
+    this.#burst(0.18, 700, 1.5, 0.12, 'bandpass', 0.05);
+    this.#burst(0.12, 200, 1, 0.2, 'lowpass', 0.3, this.noise);
+  }
+
   thud(big) {
     if (!this.ctx) return;
     this.#burst(big ? 0.45 : 0.2, 160, 0.8, big ? 0.7 : 0.35, 'lowpass', 0, this.noise);

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Fire } from './fire.js';
+import { FamilyTent } from './famtent.js';
 
 // Camp: pitch a tent on flat ground (Leave No Trace distances from water and
 // trail), build a fire below treeline where there is deadfall, and sleep
@@ -56,7 +57,8 @@ function stoolMesh() {
   return g;
 }
 
-const FUEL = 300;        // game minutes a fire burns
+const FUEL = 180;        // game minutes the logs you start a fire with burn
+const FUEL_MAX = 360;    // and the most it will hold
 const STOOL_R = 1.4;     // how far from the fire the stools sit
 
 export class Camp {
@@ -66,11 +68,12 @@ export class Camp {
     this.scene = scene;
     this.tent = null;    // {x, z, yaw}
     this.fire = null;    // {x, z, life}
-    this.tentObj = tentMesh();
+    this.soloObj = tentMesh();
+    this.famObj = new FamilyTent(scene);
     this.fireObj = new Fire();
-    this.tentObj.visible = false;
+    this.soloObj.visible = false;
     this.fireObj.visible = false;
-    scene.add(this.tentObj, this.fireObj.group);
+    scene.add(this.soloObj, this.fireObj.group);
     // two stools to sit on, set out when the fire is lit
     this.stools = [0, 1].map(() => {
       const obj = stoolMesh();
@@ -80,15 +83,43 @@ export class Camp {
     });
   }
 
+  /** The tent that is up: the small one, or the family cabin tent. */
+  get tentObj() { return this.tent?.kind === 'family' ? this.famObj : this.soloObj; }
+
+  /** How far from the tent's centre the door is. */
+  get doorDist() { return this.tent?.kind === 'family' ? 3.4 : 1.45; }
+
   near(p, what, r = 3.2) {
     const t = this[what];
-    return t ? Math.hypot(t.x - p.x, t.z - p.z) < r : false;
+    return t ? Math.hypot(t.x - p.x, t.z - p.z) < r * (what === 'tent' && t.k ? t.k : 1) : false;
   }
 
+  /** Light the family tent's lantern at night, brighter with someone inside. */
+  lantern(dark, p) { if (this.tent?.kind === 'family') this.famObj.update(dark, this.famObj.inside(p.x, p.z)); }
+
+  /** Walls and floor of the family tent, for whoever walks into it. */
+  collide(p, r) { if (this.tent?.kind === 'family') this.famObj.collide(p, r); }
+  floorAt(x, z) { return this.tent?.kind === 'family' ? this.famObj.floorAt(x, z) : -Infinity; }
+  insideTent(x, z) { return this.tent?.kind === 'family' && this.famObj.inside(x, z); }
+
   /** Why you cannot camp here, or null if you can. */
-  campProblem(x, z) {
+  campProblem(x, z, kind = 'solo', yaw = 0) {
     const w = this.world;
-    if (w.localGrade(x, z) > 0.2 || w.localGrade(x + 1, z) > 0.2 || w.localGrade(x, z + 1.2) > 0.2) return 'Too sloped to pitch a tent.';
+    if (kind === 'family') {
+      // a big footprint: 3.2 x 6 m (plus guy lines) needs fairly level ground, clear of rocks
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      let lo = Infinity, hi = -Infinity;
+      for (let lx = -1.8; lx <= 1.8; lx += 0.9) {
+        for (let lz = -3.2; lz <= 3.2; lz += 1.07) {
+          const px = x + lx * c + lz * s, pz = z - lx * s + lz * c, h = w.height(px, pz);
+          lo = Math.min(lo, h); hi = Math.max(hi, h);
+          if (w.localGrade(px, pz) > 0.22) return 'Too sloped for the family tent. Find level ground.';
+          if (w.lakeAt(px, pz)) return 'Too close to the water.';
+          if (this.flora.collide({ x: px, z: pz }, 0.6, Infinity) > -Infinity) return 'A boulder or tree is in the way of the family tent.';
+        }
+      }
+      if (hi - lo > 0.4) return 'Too uneven for the family tent. Find level ground.';
+    } else if (w.localGrade(x, z) > 0.2 || w.localGrade(x + 1, z) > 0.2 || w.localGrade(x, z + 1.2) > 0.2) return 'Too sloped to pitch a tent.';
     if (w.nearWater(x, z, CAMP_FROM_WATER)) return 'Camp at least 200 ft (61 m) from lakes.';
     const t = w.nearestTrail(x, z);
     if (t.trail && t.d < CAMP_FROM_TRAIL) return 'Too close to the trail — find a spot out of sight.';
@@ -96,16 +127,17 @@ export class Camp {
     return null;
   }
 
-  pitch(x, z, yaw) {
-    this.tent = { x, z, yaw };
-    this.tentObj.position.set(x, this.world.height(x, z), z);
-    this.tentObj.rotation.y = yaw;
+  pitch(x, z, yaw, kind = 'solo') {
+    this.tent = kind === 'family' ? { x, z, yaw, kind, k: 1.7 } : { x, z, yaw };
+    this.soloObj.visible = this.famObj.visible = false;
+    if (kind === 'family') this.famObj.place(this.world, x, z, yaw);
+    else { this.soloObj.position.set(x, this.world.height(x, z), z); this.soloObj.rotation.y = yaw; }
     this.tentObj.visible = true;
   }
 
   strike() {
     this.tent = null;
-    this.tentObj.visible = false;
+    this.soloObj.visible = this.famObj.visible = false;
     this.douse();
     for (const st of this.stools) st.obj.visible = false;
   }
@@ -126,7 +158,7 @@ export class Camp {
     const w = this.world;
     const toTent = this.tent ? Math.atan2(this.tent.z - z, this.tent.x - x) : 0;
     const ok = (sx, sz) => !w.lakeAt(sx, sz) && w.localGrade(sx, sz) < 0.45 && this.flora.collide({ x: sx, z: sz }, 0.4, Infinity) === -Infinity
-      && !(this.tent && Math.hypot(this.tent.x - sx, this.tent.z - sz) < 1.7);
+      && !(this.tent && Math.hypot(this.tent.x - sx, this.tent.z - sz) < 1.7 * (this.tent.k || 1));
     this.stools.forEach((st, i) => {
       const base = toTent + (i ? -1 : 1) * 1.65;
       let at = [x + Math.cos(base) * STOOL_R, z + Math.sin(base) * STOOL_R];
@@ -144,18 +176,25 @@ export class Camp {
 
   fireProblem(x, z) {
     const w = this.world;
-    if (!this.tent || Math.hypot(this.tent.x - x, this.tent.z - z) > 12) return 'Build a fire at your camp.';
-    if (Math.hypot(this.tent.x - x, this.tent.z - z) < 3.2) return 'Too close to the tent — build the fire a few steps away.';
+    const k = this.tent?.kind === 'family' ? 1 : 0;
+    if (!this.tent || Math.hypot(this.tent.x - x, this.tent.z - z) > 12 + k * 6) return 'Build a fire at your camp.';
+    if (Math.hypot(this.tent.x - x, this.tent.z - z) < 3.2 + k * 3.2) return 'Too close to the tent — build the fire a few steps away.';
     if (w.height(x, z) > w.treeline(x, z) - 20) return 'No deadfall up here — you are above treeline.';
-    if (!this.flora.treeNear(x, z, 45)) return 'No firewood nearby.';
     return null;
   }
 
   light(x, z) {
-    this.fire = { x, z, life: FUEL }; // game minutes of fuel
+    this.fire = { x, z, life: FUEL }; // game minutes of fuel (three logs' worth)
     this.fireObj.group.position.set(x, this.world.height(x, z), z);
     this.fireObj.visible = true;
     this.#setStools(x, z);
+  }
+
+  /** A log on the fire: an hour more, up to six hours' worth. False if it is already full. */
+  addFuel(minutes = 60) {
+    if (!this.fire || this.fire.life > FUEL_MAX - 20) return false;
+    this.fire.life = Math.min(FUEL_MAX, this.fire.life + minutes);
+    return true;
   }
 
   douse() {
@@ -206,7 +245,7 @@ export class Camp {
   }
 
   load(s) {
-    if (s?.tent) this.pitch(s.tent.x, s.tent.z, s.tent.yaw);
+    if (s?.tent) this.pitch(s.tent.x, s.tent.z, s.tent.yaw, s.tent.kind);
     if (s?.fire && this.tent) { this.light(s.fire.x, s.fire.z); this.fire.life = s.fire.life; }
   }
 }

@@ -35,6 +35,10 @@ import { HorizonMap } from './culling.js';
 import { ATV } from './atv.js';
 import { Fishing } from './fishing.js';
 import { Roast } from './roast.js';
+import { Wood } from './wood.js';
+import { Coffee } from './coffee.js';
+import { Dump } from './dump.js';
+import { Breakfast } from './breakfast.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -46,6 +50,7 @@ const calendar = new Calendar(settings.doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
 settings.shadows ??= Q.shadows;
+if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
 
 // ------------------------------------------------------------------ renderer
@@ -175,7 +180,17 @@ for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
 party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
+// the family tent's walls and floor
+for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
+for (const b of [hiker, party]) b.floorAt = (x, z) => camp.floorAt(x, z);
+party.onDrop = (x, y, z) => dump.drop(x, y, z);
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
+const wood = new Wood(world, flora, scene, props);
+props.wood = wood;
+const coffee = new Coffee(world, scene);
+const dump = new Dump(scene, world);
+const breakfast = new Breakfast(coffee.stand, scene);
+let coffeeBoost = 0;     // stamina from a sip, still working its way in
 const hud = new Hud(world);
 const mind = new Mind({ scene, world, hiker, camera, hud, audio: null });
 // ground that was reshaped: trees and rocks that stood on it are replanted at the new height
@@ -222,7 +237,7 @@ function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
-    atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect },
+    atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect }, wood: wood.save(), coffee: coffee.save(), breakfast: breakfast.save(),
     stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
@@ -236,6 +251,10 @@ function restore() {
   state.discovered = new Set(s.discovered || []);
   hiker.stamina = s.stamina ?? 100; hiker.warmth = s.warmth ?? 100;
   camp.load(s.camp);
+  wood.setCamp(camp.tent);
+  wood.load(s.wood);
+  coffee.load(s.coffee);
+  breakfast.load(s.breakfast);
   if (s.atv) atv.place(s.atv.x, s.atv.z, s.atv.yaw);
   fishing.load(s.fish);
   roast.eaten = s.roast?.eaten || 0; roast.perfect = s.roast?.perfect || 0;
@@ -389,11 +408,11 @@ function renderControls(el, mode) {
   const rows = {
     kbm: [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'], [k('X'), 'Crouch, lie down'],
       [t('Click'), 'Punch, swing, lift'], [t('Right click'), 'Hook, sink'], [k('E'), 'Pick up, grab, level'], [k('T'), 'Tool'], [k('V'), 'Camera'],
-      [k('C') + k('F'), 'Tent, campfire'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('Esc'), 'Pause']],
-    pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('R3'), 'Tool'],
-      [p('LB'), 'Together'], [p('Y', 'y'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
+      [k('C') + k('F'), 'Tent, campfire (a log feeds it)'], [k('U'), 'Sit, ride, take firewood, pour, eat'], [k('B'), 'Cast a line'], [k('N'), 'Marshmallow'], [k('K'), 'Cook: coffee, then breakfast'], [k('O'), 'Sip coffee'], [k('J'), 'Drop firewood'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('Esc'), 'Pause']],
+    pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('↑'), 'Tool'],
+      [p('LB'), 'Together'], [p('Y', 'y'), 'Sit, ride, take firewood, pour, eat'], [p('↓'), 'Cast a line'], [p('←'), 'Marshmallow, or sip coffee'], [p('L3'), 'Cook, or drop firewood'], [p('R3'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
     touch: [['Left thumb', 'Walk'], ['Right thumb', 'Look'], [t('Hop') + t('Fast'), 'Hop, hike fast'], [t('Duck'), 'Crouch'], [t('Punch'), 'Punch, swing, lift'], [t('Hook'), 'Hook, sink'],
-      [t('Grab'), 'Pick up, grab, level'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
+      [t('Grab'), 'Pick up, grab, level'], [ t('Ride'), 'Sit, ride, take firewood'], [t('Fish'), 'Cast a line'], [t('Roast'), 'Marshmallow'], [t('Cook') + t('Sip') + t('Drop'), 'Camp cooking, coffee, firewood'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
   };
   const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
   el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
@@ -410,6 +429,7 @@ function begin(fresh) {
   if (fresh) {
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     camp.strike();
+    wood.reset();
     Object.assign(state, { hour: settings.hour, day: 1, km: 0 });
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
@@ -517,6 +537,8 @@ $('set-weather').onchange = () => {
   weather.settle(state.day, state.hour);
   storeJSON('rawah-settings', settings);
 };
+$('set-tent').value = settings.tent;
+$('set-tent').onchange = () => { settings.tent = $('set-tent').value; storeJSON('rawah-settings', settings); hud.toast(settings.tent === 'family' ? 'Next camp: the family tent for six. Needs level ground.' : 'Next camp: the backpacking tent.'); };
 $('set-moon').value = settings.moon;
 $('set-moon').onchange = () => { settings.moon = $('set-moon').value; sky.moon = MOONS[settings.moon]; storeJSON('rawah-settings', settings); };
 $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (v) { state.hour = v; save(); } $('set-hour').value = ''; };
@@ -543,7 +565,7 @@ function renderJournal() {
   $('journal-forecast').textContent = weather.forecast;
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
   $('journal-stats').innerHTML = stat(`${found}/${lakeNames.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
-    + stat(state.km.toFixed(1), 'Km hiked') + stat(`${party.races.won}–${party.races.lost}`, 'Races won–lost');
+    + stat(state.km.toFixed(1), 'Km hiked') + stat(`${party.races.won}–${party.races.lost}`, 'Races won–lost') + stat(wood.cutTotal, 'Logs');
   list.classList.add('hidden');   // everything found lives in the field guide now
 }
 
@@ -558,7 +580,12 @@ function act() {
     else if (hiker.mode === 'walk' && hiker.grounded && !fishing.busy && !state.cut) {
       const si = freeStool(p), dStool = si >= 0 ? Math.hypot(camp.stools[si].x - p.x, camp.stools[si].z - p.z) : Infinity;
       const dAtv = atv.near(p) ? Math.hypot(atv.pos.x - p.x, atv.pos.z - p.z) : Infinity;
-      if (dAtv < dStool && dAtv < Infinity) mountATV();
+      const dWood = Math.min(wood.stackDist(p), wood.carried > 0 || wood.campCount > 0 ? wood.pileDist(p) : Infinity);
+      const dCof = coffee.reach(p, hiker.yaw), dBrk = breakfast.reach(p, hiker.yaw);
+      if (dBrk < dCof) { if (breakfast.interact()) save(); }
+      else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
+      else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
+      else if (dAtv < dStool && dAtv < Infinity) mountATV();
       else if (si >= 0) sitDown(si);
     }
   } else if (state.seat >= 0 && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k))) standUp();
@@ -569,30 +596,38 @@ function act() {
   if (state.cut || fishing.locked || atv.riding || state.seat >= 0) return;
   if (pressed.has('KeyC')) {
     if (camp.near(p, 'tent', 4)) {
-      camp.strike(); audio.zip(); hud.toast('Camp packed up.');
+      camp.strike(); const kept = wood.packUpCamp(); audio.zip(); hud.toast(kept ? `Camp packed up. ${kept} logs into your pack.` : 'Camp packed up.');
     } else if (hiker.mode !== 'walk' || !hiker.grounded) {
       hud.toast('Find solid ground first.');
     } else {
-      const x = p.x + fx * 3, z = p.z + fz * 3;
-      const why = camp.campProblem(x, z);
+      const family = settings.tent === 'family', ahead = family ? 5.0 : 3;
+      const x = p.x + fx * ahead, z = p.z + fz * ahead;
+      const why = camp.campProblem(x, z, settings.tent, Math.atan2(-fx, -fz));
       if (why) hud.toast(why, 'warn');
       else {
         if (camp.tent) hud.toast('You packed up your old camp and moved it here.');
         camp.strike();
-        camp.pitch(x, z, Math.atan2(-fx, -fz));
+        camp.pitch(x, z, Math.atan2(-fx, -fz), settings.tent);
+        wood.setCamp(camp.tent);
+        party.event('camp');
         audio.zip();
-        hud.toast('Tent pitched. [Z] near the tent to sleep.');
+        hud.toast(family ? 'Family tent up: walk in through the screen porch. [Z] inside to sleep.' : 'Tent pitched. [Z] near the tent to sleep.');
         save();
       }
     }
   }
   if (pressed.has('KeyF')) {
-    if (camp.fire && camp.near(p, 'fire', 5)) { camp.douse(); hud.toast('Fire drowned and stirred cold. Nice.'); }
-    else {
+    if (camp.fire && camp.near(p, 'fire', 5)) {
+      // a log on the fire, if you have one; otherwise put it out
+      if (wood.available(p) > 0) {
+        if (camp.addFuel(60)) { wood.consume(p, 1); audio.strike(); hud.toast('You lay a log on the fire.'); }
+        else hud.toast('The fire is roaring already.');
+      } else { camp.douse(); hud.toast('Fire drowned and stirred cold. Nice.'); }
+    } else {
       const x = p.x + fx * 2, z = p.z + fz * 2;
-      const why = camp.fireProblem(x, z);
+      const why = camp.fireProblem(x, z) || (wood.available(p) < 3 ? 'You need firewood: three logs. Fell a tree with the axe ([T]) and cut it up.' : null);
       if (why) hud.toast(why, 'warn');
-      else { camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
+      else { wood.consume(p, 3); camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
     }
   }
   if (pressed.has('KeyZ') && camp.near(p, 'tent', 4.5) && !state.sleeping) startSleep();
@@ -663,10 +698,25 @@ function marshmallow() {
     save();
     return;
   }
+  const nearFire = camp.fire && Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) <= 4.8;
+  if (!nearFire && coffee.cup.sips > 0 && hiker.mode === 'walk') { coffee.sip(); return; }   // (the gamepad's only sip button)
   if (!camp.fire) { hud.toast('Light a campfire first: [F].'); return; }
-  if (Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) > 4.8) { hud.toast('Get closer to the fire.'); return; }
+  if (!nearFire) { hud.toast('Get closer to the fire.'); return; }
   roast.start();
   hud.toast('Hold [Space] to put it over the flames.');
+}
+
+/** [K] cook (coffee, then bacon and eggs; or drop your firewood away from the fire), [O] sip, [J] drop firewood. */
+function camping() {
+  if (atv.riding || fishing.busy || state.cut || hiker.mode !== 'walk') return;
+  const fireNear = camp.fire && Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) < 4.5;
+  const heading = rig.mode === 'first' ? hiker.yaw : avatar.heading;
+  if (pressed.has('KeyK') && state.seat < 0) {
+    if (fireNear || wood.carried <= 0) { if (coffee.rigged ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos)) save(); }
+    else if (wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
+  }
+  if (pressed.has('KeyJ') && state.seat < 0 && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
+  if (pressed.has('KeyO') && !state.sleeping) coffee.sip();
 }
 
 // ------------------------------------------------------------------ "want to smash?"
@@ -711,7 +761,7 @@ function startScene() {
   const t = camp.tent;
   standUp(); roast.drop(); fishing.cancel();
   const dx = Math.sin(t.yaw), dz = Math.cos(t.yaw), sx = Math.cos(t.yaw), sz = -Math.sin(t.yaw);
-  const door = (side) => ({ x: t.x + dx * 1.45 + sx * side * 0.3, z: t.z + dz * 1.45 + sz * side * 0.3 });
+  const door = (side) => ({ x: t.x + dx * camp.doorDist + sx * side * 0.3, z: t.z + dz * camp.doorDist + sz * side * 0.3 });
   state.cut = { phase: 'walk', t: 0, a: door(1), b: door(-1), view: rig.mode };
   party.go = { ...state.cut.b, who: companionBud || party.actors[0] };
   if (rig.mode === 'first') { rig.toggle(); avatar.setFirstPerson(false); }
@@ -896,7 +946,7 @@ function rescue(why) {
 function finishRescue() {
   if (camp.tent) {
     const t = camp.tent;
-    hiker.place(t.x + Math.sin(t.yaw) * 2.5, t.z + Math.cos(t.yaw) * 2.5, t.yaw);
+    hiker.place(t.x + Math.sin(t.yaw) * (camp.doorDist + 1.05), t.z + Math.cos(t.yaw) * (camp.doorDist + 1.05), t.yaw);
   } else spawnAtCar();
   advanceClock(120);
   hiker.injured = 60; hiker.stamina = 40;
@@ -936,7 +986,7 @@ function landing(d) {
   }
   if (d.kind === 'tent') {
     const t = camp.tent;
-    return { x: t.x + Math.sin(t.yaw) * 2.5, z: t.z + Math.cos(t.yaw) * 2.5, yaw: t.yaw };
+    return { x: t.x + Math.sin(t.yaw) * (camp.doorDist + 1.05), z: t.z + Math.cos(t.yaw) * (camp.doorDist + 1.05), yaw: t.yaw };
   }
   if (d.kind === 'peak') {
     let bx = d.x, bz = d.z, bh = -Infinity;
@@ -1116,6 +1166,7 @@ function feedFriends(p) {
     weather: weather.label, warmth: hiker.warmth,
     dusk: (h >= 18 && h < 20.5) || (h >= 5 && h < 6.5), night: h >= 20.5 || h < 5,
     alpine: c.alpine > 0.5, meadow: c.meadow > 0.6, forest: c.forest > 0.5, burn: c.snag > 0.4,
+    fire: camp.fire, tent: camp.tent,
   });
 }
 
@@ -1245,6 +1296,7 @@ function tick(dt, draw = true) {
       }
     }
     act();
+    camping();
     // caught out in it: rain soaks you (less under thick forest), wet snow too
     const soak = weather.precip * (1 - weather.snowK * 0.6) * (1 - world.coverAt(p.x, p.z, 0) * 0.5);
     if (soak > 0.2 && hiker.mode !== 'swim') hiker.wet = Math.max(hiker.wet, 30 * soak);
@@ -1270,6 +1322,54 @@ function tick(dt, draw = true) {
   }, shaped);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
+  if (state.started && !state.paused && !state.travel && !state.sleeping) {
+    for (const e of wood.update(dt, { pos: hiker.pos, yaw: hiker.yaw }, { axe: props.tool === 'axe', carryVisible: state.seat < 0 && !atv.riding && !state.cut, heading: avatar.heading, first: rig.mode === 'first' })) {
+      if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+      else if (e.type === 'sound') { if (e.name === 'chop') audio.chop(true); else audio[e.name]?.(); }
+    }
+  }
+  if (state.started) {
+    coffee.update(state.paused ? 0 : dt, {
+      fire: camp.fire, tent: camp.tent, p: hiker.pos, yaw: hiker.yaw, heading: state.seat >= 0 ? camp.stools[state.seat].yaw : (rig.mode === 'first' ? hiker.yaw : avatar.heading),
+      first: rig.mode === 'first', camera, seated: state.seat >= 0, minutes: state.paused ? 0 : gameMin,
+    });
+    camp.fireObj.setTeepee(!coffee.rigged);
+    camp.lantern(sky.light < 0.4, hiker.pos);
+    breakfast.update(state.paused ? 0 : dt, { on: coffee.rigged && !!camp.fire, fire: camp.fire, p: hiker.pos, yaw: hiker.yaw, seated: state.seat >= 0, coffeeReach: coffee.reach(hiker.pos, hiker.yaw) });
+    const nearBud = () => { const b = party.near(hiker.pos); return b && Math.hypot(b.x - hiker.pos.x, b.z - hiker.pos.z) < 12 ? b : null; };
+    for (const e of breakfast.events) {
+      if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+      else if (e.type === 'sound') audio[e.name]?.();
+      else if (e.type === 'ready') {
+        audio.ready();
+        hud.discovery('Breakfast is ready', 'Bacon and eggs, hot off the grate', 'Cooked');
+        if (nearBud()) party.tell('That smells amazing. Save me some!', nearBud());
+      } else if (e.type === 'eat') {
+        audio.sip();
+        coffeeBoost += 45 * e.q; hiker.warmth = Math.min(100, hiker.warmth + 12 * e.q);
+        hud.discovery(e.label, `Breakfast ${breakfast.eaten}`, 'You ate');
+        party.event('smore');
+        save();
+      }
+    }
+    for (const e of coffee.events) {
+      if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+      else if (e.type === 'sound') audio[e.name]?.();
+      else if (e.type === 'ready') {
+        audio.ready();
+        hud.discovery('Coffee is ready', 'The percolator has finished perking', 'Brewed');
+        if (nearBud()) party.tell('Coffee smells ready!', nearBud());
+      } else if (e.type === 'sip') {
+        audio.sip();
+        coffeeBoost += 24 * e.q; hiker.warmth = Math.min(100, hiker.warmth + 3 * e.q);
+        hud.toast(e.left > 0 ? `${e.q > 0.75 ? 'Hot' : e.q > 0.55 ? 'Warm' : 'Lukewarm'} coffee · ${e.left} sip${e.left > 1 ? 's' : ''} left` : 'That was the last sip. Brew more at the fire.');
+        save();
+      }
+    }
+    if (coffeeBoost > 0 && !state.paused) { const d = Math.min(coffeeBoost, 14 * dt); hiker.stamina = Math.min(100, hiker.stamina + d); coffeeBoost -= d; }
+    dump.update(state.paused ? 0 : dt, p);
+    for (const e of dump.events) audio[e.name]?.(e.v);
+  }
   // the friends press snow too, a print every stride or so
   if (live && onSnowAt(p.y) > 0.35) for (const a of party.actors) {
     const d = a._px === undefined ? 99 : Math.hypot(a.x - a._px, a.z - a._pz);
@@ -1354,6 +1454,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
+  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
@@ -1393,9 +1494,13 @@ function tick(dt, draw = true) {
     const [place, sub] = locate(p, cv);
     const found = lakeNames.filter((l) => state.discovered.has(l.label)).length;
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
-      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '']
+      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '', wood.carried > 0 ? `Firewood ×${wood.carried}` : '', coffee.cup.sips > 0 ? `Coffee ×${coffee.cup.sips}` : '']
       .filter(Boolean).join(' · ');
     let hint = hiker.hint || props.hint;
+    if (!hint && wood.hint) hint = wood.hint;
+    if (!hint && breakfast.hint) hint = breakfast.hint;
+    if (!hint && (coffee.hint || breakfast.tip)) hint = [coffee.hint, breakfast.tip].filter(Boolean).join('  ·  ');
+    if (!hint && state.seat >= 0 && coffee.cup.sips > 0) hint = '[U] stand up  ·  [O] sip coffee';
     if (!hint && camp.near(p, 'tent', 4.5)) hint = state.hour >= 19 || state.hour < 5 ? '[Z] sleep until morning · [F] fire · [C] pack up' : '[Z] nap · [F] fire · [C] pack up';
     if (!hint && sky.light < 0.35 && !camp.tent && hiker.mode === 'walk') hint = 'Getting dark — find flat ground away from water and [C] make camp';
     if (!hint && sky.light < 0.2 && !state.lamp) hint = '[L] headlamp';
@@ -1470,7 +1575,7 @@ if (DEV) {
     bench(o) { return boxels.bench(o); },
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
-    begin, tick, save, rig, avatar, party, input, props, mind, guide, together: (o) => toggleTogether(o),
+    begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
