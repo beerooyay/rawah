@@ -3,6 +3,7 @@ import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
 import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR, BOXEL_COLOR } from './terrain.js';
 import { withAtmosphere } from './atmosphere.js';
 import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
+import { CULL } from './culling.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
 // A quadtree over the whole map picks, every frame, which nodes to draw and
@@ -200,6 +201,21 @@ export class CDLODTerrain {
     this._box = new THREE.Box3();
     this._sphere = new THREE.Sphere();
     this.nodes = 0;
+    this.horizon = null;   // HorizonMap: nodes behind a ridge are skipped
+    this.occluded = 0;
+  }
+
+  /** Lowest and highest ground (with margin) under the rectangle, from the leaf bounds. */
+  heightRange(x0, z0, x1, z1) {
+    const [lo, hi, n] = this.minmax[0], h = this.extent / 2;
+    const i0 = Math.max(0, Math.floor((x0 + h) / this.leaf)), i1 = Math.min(n - 1, Math.floor((x1 + h) / this.leaf));
+    const j0 = Math.max(0, Math.floor((z0 + h) / this.leaf)), j1 = Math.min(n - 1, Math.floor((z1 + h) / this.leaf));
+    let a = Infinity, b = -Infinity;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      if (lo[j * n + i] < a) a = lo[j * n + i];
+      if (hi[j * n + i] > b) b = hi[j * n + i];
+    }
+    return [a, b];
   }
 
   /** Min/max height pyramid: level l holds one entry per level-l quadtree node. */
@@ -265,7 +281,9 @@ export class CDLODTerrain {
   #select(level, i, j) {
     if (!this.#inRange(level, i, j, this.ranges[level])) return false;
     this.#box(level, i, j);
-    if (!this.frustum.intersectsBox(this._box)) return true;
+    if (CULL.frustum && !this.frustum.intersectsBox(this._box)) return true;
+    const hz = this.horizon, b = this._box;
+    if (hz && hz.hiddenBox(b.min.x, b.max.x, b.min.z, b.max.z, b.max.y)) { this.occluded++; return true; }
     if (level === 0 || !this.#inRange(level, i, j, this.ranges[level - 1])) {
       this.#add(level, i, j, 15);
       return true;
@@ -285,6 +303,7 @@ export class CDLODTerrain {
     this.frustum.setFromProjectionMatrix(this._pm);
     for (const g of this.geos) g.instanceCount = 0;
     this.nodes = 0;
+    this.occluded = 0;
     this.#select(LEVELS - 1, 0, 0);
     for (const g of this.geos) g.attributes.nodeA.needsUpdate = true;
   }

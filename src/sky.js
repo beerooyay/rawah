@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { atmosphere, CLOUD_GLSL, cloudDensityAt } from './atmosphere.js';
+import { Starfield, siderealAngle } from './stars.js';
 
 // Sky dome, sun, moon, stars, the Milky Way and the clouds, plus the lights
 // and fog that follow them and the weather. The sun runs on a real ephemeris
@@ -8,9 +9,12 @@ import { atmosphere, CLOUD_GLSL, cloudDensityAt } from './atmosphere.js';
 // clock time of solar noon for the date.
 
 const LAT = 40.65 * Math.PI / 180;
-const SUN = { decl: -1.6 * Math.PI / 180, noon: 12.93 };   // late September until the calendar says otherwise
+const SUN = { decl: -1.6 * Math.PI / 180, noon: 12.93, doy: 269 };   // late September until the calendar says otherwise
 
-export function setSun({ decl, noon }) { SUN.decl = decl; SUN.noon = noon; }
+export function setSun({ decl, noon, doy }) { SUN.decl = decl; SUN.noon = noon; if (doy !== undefined) SUN.doy = doy; }
+
+/** Moon phases the game offers: how far the moon trails the sun across the sky (hours) and how bright it is. */
+export const MOONS = { new: { lag: 0, k: 0 }, quarter: { lag: 6, k: 0.45 }, full: { lag: 12, k: 1 } };
 
 export function sunDirection(hour, out = new THREE.Vector3()) {
   const DECL = SUN.decl;
@@ -45,7 +49,9 @@ void main() {
 
 const FRAG = `varying vec3 vDir;
 uniform vec3 uSun, uMoon, uZenith, uHorizon, uGlow, uCloudLit, uCloudDark;
-uniform float uNight, uTime, uThick, uFlash;
+uniform float uNight, uTime, uThick, uFlash, uMWk, uMoonK;
+uniform samplerCube uMW;
+uniform mat3 uGal;
 ${CLOUD_GLSL}
 float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float noise(vec3 x) {
@@ -109,21 +115,12 @@ void main() {
   }
   col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0 * (1.0 - cloud);
   if (uNight > 0.0) {
-    // Milky Way: a soft noisy band across the sky
-    vec3 bandN = normalize(vec3(0.5, 0.35, 0.8));
-    float band = exp(-pow(dot(d, bandN) / 0.13, 2.0));
-    float dust = noise(d * 38.0) * 0.55 + noise(d * 90.0) * 0.45;
-    float lane = smoothstep(0.02, 0.0, abs(dot(d, bandN) + 0.02 * noise(d * 12.0))) * 0.6;
-    col += vec3(0.5, 0.55, 0.7) * band * (0.35 + dust * 0.65) * (1.0 - lane) * 0.075 * uNight * (1.0 - cloud);
-    vec3 p = d * 260.0;
-    vec3 c = floor(p);
-    float r = hash(c);
-    float star = smoothstep(0.9965 - band * 0.004, 1.0, r) * smoothstep(0.5, 0.0, length(fract(p) - 0.5));
-    star *= 0.7 + 0.3 * sin(uTime * (2.0 + r * 5.0) + r * 40.0);
-    col += vec3(0.9, 0.93, 1.0) * star * 2.2 * uNight * smoothstep(-0.05, 0.15, h) * (1.0 - cloud);
+    // the Milky Way, baked in galactic coordinates and turned to the sky overhead (dimmer toward the horizon, where the air is thick)
+    vec3 mwc = textureCube(uMW, uGal * d).rgb;
+    col += mwc * mwc * uMWk * uNight * (1.0 - cloud) * smoothstep(-0.04, 0.4, h);
     float md = dot(d, uMoon);
-    col += vec3(0.95, 0.93, 0.85) * smoothstep(0.99975, 0.99985, md) * 1.8 * uNight * (1.0 - cloud);
-    col += vec3(0.2, 0.25, 0.35) * pow(max(md, 0.0), 30.0) * 0.25 * uNight * (1.0 - cloud * 0.7);
+    col += vec3(0.95, 0.93, 0.85) * smoothstep(0.99975, 0.99985, md) * 1.8 * uMoonK * uNight * (1.0 - cloud);
+    col += vec3(0.2, 0.25, 0.35) * pow(max(md, 0.0), 30.0) * 0.25 * uMoonK * uNight * (1.0 - cloud * 0.7);
   }
   col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0; // dither away gradient banding
   gl_FragColor = vec4(col, 1.0);
@@ -132,13 +129,19 @@ void main() {
 }`;
 
 export class Sky {
-  constructor(scene) {
+  constructor(scene, renderer) {
+    this.renderer = renderer;
+    this.stars = new Starfield(renderer);
+    this.moon = MOONS.new;
+    this.pixelRatio = 1;
+    this.frames = 0;
     this.uniforms = {
       uSun: { value: new THREE.Vector3() }, uMoon: { value: new THREE.Vector3() },
       uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() }, uGlow: { value: new THREE.Color() },
       uNight: { value: 0 }, uTime: { value: 0 },
       uCloudLit: { value: new THREE.Color() }, uCloudDark: { value: new THREE.Color() },
       uThick: { value: 0 }, uFlash: { value: 0 },
+      uMW: { value: this.stars.mw }, uGal: { value: this.stars.gal }, uMWk: { value: 0.2 }, uMoonK: { value: 0 },
       uCloudTex: atmosphere.uCloudTex, uCloudOff: atmosphere.uCloudOff, uCloudCover: atmosphere.uCloudCover, uCloudAlt: atmosphere.uCloudAlt,
     };
     this.dome = new THREE.Mesh(
@@ -148,6 +151,10 @@ export class Sky {
     this.dome.frustumCulled = false;
     this.dome.renderOrder = -1;
     scene.add(this.dome);
+    // the stars share the dome's night and clock
+    this.stars.uniforms.uNight = this.uniforms.uNight;
+    this.stars.uniforms.uTime = this.uniforms.uTime;
+    scene.add(this.stars.points);
 
     this.sun = new THREE.DirectionalLight(0xffffff, 3);
     this.sun.castShadow = true;
@@ -180,14 +187,15 @@ export class Sky {
 
   update(hour, camPos, focus, t, wx) {
     sunDirection(hour, this.sunDir);
-    // a waxing gibbous moon trailing the sun by ~9.5 hours
-    sunDirection((hour + 14.5) % 24, this.moonDir);
+    // the moon trails the sun by its phase: with a new moon it rides with the sun and the night is dark
+    sunDirection((hour + 24 - this.moon.lag) % 24, this.moonDir);
     this.moonDir.y = this.moonDir.y * 0.85 + 0.06;
     this.moonDir.normalize();
     const s = this.sunDir.y;
     const u = this.uniforms;
     u.uSun.value.copy(this.sunDir);
     u.uMoon.value.copy(this.moonDir);
+    u.uMoonK.value = this.moon.k;
     u.uZenith.value.copy(this.#palette(s, 0));
     u.uHorizon.value.copy(this.#palette(s, 1));
     u.uGlow.value.copy(this.#palette(s, 2));
@@ -227,7 +235,7 @@ export class Sky {
     const warm = smoothstep(0.0, 0.35, s);
     if (useMoon) {
       this.sun.color.setRGB(0.62, 0.72, 1.0);
-      this.sun.intensity = 0.32 * moonUp;
+      this.sun.intensity = 0.32 * moonUp * this.moon.k;
     } else {
       this.sun.color.setRGB(1, lerp(0.62, 0.96, warm), lerp(0.38, 0.9, warm));
       this.sun.intensity = 3.1 * day * (1 - overcast * 0.55);
@@ -239,6 +247,8 @@ export class Sky {
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
     // haze, valley fog, and the grey wall of a squall
     this.fog.density = 0.00008 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;
-    this.light = clamp((day + moonUp * 0.25) * (1 - overcast * 0.35), 0, 1);
+    this.light = clamp((day + moonUp * 0.25 * this.moon.k) * (1 - overcast * 0.35), 0, 1);
+    if (!this.stars.baked && ++this.frames > 2) this.stars.bake(this.renderer);   // paint the Milky Way once the renderer is warm
+    this.stars.update(siderealAngle(SUN.doy, hour, SUN.noon), camPos, this.pixelRatio);
   }
 }

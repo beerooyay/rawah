@@ -83,7 +83,7 @@ export class Hiker {
     if (this.mode === 'climb') {
       return out.set(this.pos.x - this.wallUp.x * 0.55, this.pos.y + 1.45, this.pos.z - this.wallUp.y * 0.55);
     }
-    return out.set(this.pos.x, this.pos.y + (this.mode === 'swim' ? 1.68 : this.eyeH), this.pos.z);
+    return out.set(this.pos.x, this.pos.y + (this.mode === 'swim' ? 1.68 : this.sitting ? this.eyeH - 0.56 : this.eyeH), this.pos.z);
   }
 
   ground(x, z) {
@@ -105,6 +105,21 @@ export class Hiker {
     this.wet = Math.max(0, this.wet - dt * (env.nearFire ? 4 : 1));
     if (this.mode === 'climb') this.#climb(dt, inp);
     else this.#walk(dt, inp);
+    this.#body(dt, env);
+    return this.events;
+  }
+
+  /** Riding: the vehicle owns the body; follow it and keep the survival numbers ticking. */
+  carried(dt, pos, vel, env) {
+    this.events.length = 0;
+    this.hint = '';
+    this.pos.copy(pos);
+    this.vel.copy(vel);
+    this.mode = 'walk'; this.grounded = true; this.sliding = false;
+    this.moving = 0; this.lastGrade = 0;
+    this.airTop = pos.y; this.slideDrop = 0;
+    this.injured = Math.max(0, this.injured - dt);
+    this.wet = Math.max(0, this.wet - dt * (env.nearFire ? 4 : 1));
     this.#body(dt, env);
     return this.events;
   }

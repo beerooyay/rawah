@@ -56,6 +56,12 @@
     <div id="hint" class="hidden"></div>
     <div id="toasts"></div>
     <div id="discovery"><div class="d-kicker">Discovered</div><div class="d-title"></div><div class="d-sub"></div></div>
+    <div id="fishing" class="hidden">
+      <div class="fs-pull"><span class="fs-l">◀</span><span class="fs-label">Lean against the pull</span><span class="fs-r">▶</span></div>
+      <div class="fs-row"><label>Line</label><b class="fs-ten" data-zone="green"><i></i></b></div>
+      <div class="fs-row"><label>Fish</label><b class="fs-prog"><i></i></b></div>
+      <small>Hold <span class="key">Space</span> to reel · lean with <span class="key">A</span> <span class="key">D</span> or the mouse</small>
+    </div>
     <div id="dot"></div>
   </div>
 
@@ -87,6 +93,11 @@
     </section>
     <div id="map-hint" class="glass"></div>
     <div id="tip" class="map-tip hidden"></div>
+  </div>
+
+  <div id="ask" class="glass hidden">
+    <div class="ak-q"></div>
+    <div class="ak-row"><button id="ask-yes" class="primary"><span class="key">Y</span> Yes</button><button id="ask-no"><span class="key">N</span> No</button></div>
   </div>
 
   <div id="fade"><div id="fade-text"></div></div>
@@ -175,7 +186,11 @@
         <div id="settings">
           <h4>World</h4>
           <label class="row"><span>Playing as</span><select id="set-character"></select></label>
+          <label class="row"><span>Season</span><select id="set-season"></select></label>
           <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
+          <div class="row"><span>Night time</span><button id="set-night" type="button">Switch to night</button></div>
+          <label class="row"><span>Jump to</span><select id="set-hour"><option value="">Time of day…</option><option value="5.7">Dawn</option><option value="9">Morning</option><option value="12.9">Midday</option><option value="16.5">Afternoon</option><option value="19.2">Dusk</option><option value="22.2">Night</option><option value="1">Deep night</option></select></label>
+          <label class="row"><span>Moon</span><select id="set-moon"><option value="new">New moon (darkest)</option><option value="quarter">Quarter moon</option><option value="full">Full moon</option></select></label>
           <label class="row"><span>Time speed</span><input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
           <h4>Display</h4>
           <label class="row"><span>Quality</span><select id="set-quality"><option value="auto">Auto</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low · phones</option></select></label>

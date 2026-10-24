@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Fire } from './fire.js';
 
 // Camp: pitch a tent on flat ground (Leave No Trace distances from water and
 // trail), build a fire below treeline where there is deadfall, and sleep
@@ -26,37 +27,37 @@ function tentMesh() {
   return g;
 }
 
-function fireMesh() {
+/** A three-legged folding camp stool, seat 45 cm up. */
+function stoolMesh() {
   const g = new THREE.Group();
-  const stone = new THREE.MeshLambertMaterial({ color: 0x77726c });
-  for (let i = 0; i < 9; i++) {
-    const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.17, 0), stone);
-    const a = (i / 9) * Math.PI * 2;
-    s.position.set(Math.cos(a) * 0.55, 0.06, Math.sin(a) * 0.55);
-    s.scale.y = 0.7;
-    g.add(s);
-  }
-  const wood = new THREE.MeshLambertMaterial({ color: 0x4a3322 });
-  for (let i = 0; i < 4; i++) {
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.8, 5), wood);
-    log.rotation.z = Math.PI / 2 - 0.55;
-    log.rotation.y = (i / 4) * Math.PI * 2;
-    log.position.y = 0.2;
-    g.add(log);
-  }
-  const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-  const flames = [];
-  for (let i = 0; i < 5; i++) {
-    const f = new THREE.Mesh(new THREE.ConeGeometry(0.16 - i * 0.015, 0.7, 6), flameMat);
-    f.position.set((Math.random() - 0.5) * 0.2, 0.4, (Math.random() - 0.5) * 0.2);
-    g.add(f);
-    flames.push(f);
-  }
-  const light = new THREE.PointLight(0xff8a3a, 0, 22, 1.6);
-  light.position.y = 0.8;
-  g.add(light);
-  return { group: g, flames, light };
+  const fabric = new THREE.MeshLambertMaterial({ color: 0x2c4a6e });
+  const metal = new THREE.MeshLambertMaterial({ color: 0x9aa0a6 });
+  const dark = new THREE.MeshLambertMaterial({ color: 0x15181b });
+  const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.21, 0.035, 22), fabric);
+  seat.position.y = 0.432;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.212, 0.012, 6, 28), dark);
+  rim.rotation.x = Math.PI / 2; rim.position.y = 0.43;
+  g.add(seat, rim);
+  const leg = (a) => {
+    const top = new THREE.Vector3(Math.cos(a) * 0.12, 0.42, Math.sin(a) * 0.12), bot = new THREE.Vector3(Math.cos(a) * 0.27, 0.01, Math.sin(a) * 0.27);
+    const d = top.clone().sub(bot), len = d.length();
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, len, 6), metal);
+    m.position.copy(bot).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), dark);
+    foot.position.copy(bot);
+    g.add(m, foot);
+  };
+  for (let i = 0; i < 3; i++) leg(i * Math.PI * 2 / 3 + Math.PI / 2);
+  const brace = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.008, 5, 24), metal);
+  brace.rotation.x = Math.PI / 2; brace.position.y = 0.17;
+  g.add(brace);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
 }
+
+const FUEL = 300;        // game minutes a fire burns
+const STOOL_R = 1.4;     // how far from the fire the stools sit
 
 export class Camp {
   constructor(world, flora, scene) {
@@ -66,10 +67,17 @@ export class Camp {
     this.tent = null;    // {x, z, yaw}
     this.fire = null;    // {x, z, life}
     this.tentObj = tentMesh();
-    this.fireObj = fireMesh();
+    this.fireObj = new Fire();
     this.tentObj.visible = false;
-    this.fireObj.group.visible = false;
+    this.fireObj.visible = false;
     scene.add(this.tentObj, this.fireObj.group);
+    // two stools to sit on, set out when the fire is lit
+    this.stools = [0, 1].map(() => {
+      const obj = stoolMesh();
+      obj.visible = false;
+      scene.add(obj);
+      return { x: 0, z: 0, yaw: 0, obj };
+    });
   }
 
   near(p, what, r = 3.2) {
@@ -99,40 +107,86 @@ export class Camp {
     this.tent = null;
     this.tentObj.visible = false;
     this.douse();
+    for (const st of this.stools) st.obj.visible = false;
+  }
+
+  /** The stool within reach of `p` (nearest first), or -1. */
+  stoolNear(p, r = 2.3) {
+    let best = -1, bd = r;
+    this.stools.forEach((st, i) => {
+      if (!st.obj.visible) return;
+      const d = Math.hypot(st.x - p.x, st.z - p.z);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+
+  /** Set the two stools either side of the fire, facing it, off the tent and clear of rocks and water. */
+  #setStools(x, z) {
+    const w = this.world;
+    const toTent = this.tent ? Math.atan2(this.tent.z - z, this.tent.x - x) : 0;
+    const ok = (sx, sz) => !w.lakeAt(sx, sz) && w.localGrade(sx, sz) < 0.45 && this.flora.collide({ x: sx, z: sz }, 0.4, Infinity) === -Infinity
+      && !(this.tent && Math.hypot(this.tent.x - sx, this.tent.z - sz) < 1.7);
+    this.stools.forEach((st, i) => {
+      const base = toTent + (i ? -1 : 1) * 1.65;
+      let at = [x + Math.cos(base) * STOOL_R, z + Math.sin(base) * STOOL_R];
+      for (const da of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.3, -1.3]) {
+        const a = base + da, sx = x + Math.cos(a) * STOOL_R, sz = z + Math.sin(a) * STOOL_R;
+        if (ok(sx, sz)) { at = [sx, sz]; break; }
+      }
+      st.x = at[0]; st.z = at[1];
+      st.yaw = Math.atan2(-(x - st.x), -(z - st.z));      // facing the fire
+      st.obj.position.set(st.x, w.height(st.x, st.z), st.z);
+      st.obj.rotation.y = st.yaw;
+      st.obj.visible = true;
+    });
   }
 
   fireProblem(x, z) {
     const w = this.world;
     if (!this.tent || Math.hypot(this.tent.x - x, this.tent.z - z) > 12) return 'Build a fire at your camp.';
+    if (Math.hypot(this.tent.x - x, this.tent.z - z) < 3.2) return 'Too close to the tent — build the fire a few steps away.';
     if (w.height(x, z) > w.treeline(x, z) - 20) return 'No deadfall up here — you are above treeline.';
     if (!this.flora.treeNear(x, z, 45)) return 'No firewood nearby.';
     return null;
   }
 
   light(x, z) {
-    this.fire = { x, z, life: 90 }; // game minutes of fuel
+    this.fire = { x, z, life: FUEL }; // game minutes of fuel
     this.fireObj.group.position.set(x, this.world.height(x, z), z);
-    this.fireObj.group.visible = true;
+    this.fireObj.visible = true;
+    this.#setStools(x, z);
   }
 
   douse() {
     this.fire = null;
-    this.fireObj.group.visible = false;
-    this.fireObj.light.intensity = 0;
+    this.fireObj.visible = false;
   }
 
-  update(dt, gameMinutes, t) {
+  /** `scale`: viewport height in pixels over 2 tan(fov / 2), for the flame sprites. */
+  /** Shake the tent for this many seconds. */
+  shake(seconds) {
+    this.shakeFor = this.shakeLeft = seconds;
+    if (this.tent) this.shakeBase = { x: this.tentObj.position.x, y: this.tentObj.position.y, z: this.tentObj.position.z };
+  }
+
+  #shakeTent(dt) {
+    if (!this.shakeLeft || !this.tent) return;
+    this.shakeLeft = Math.max(0, this.shakeLeft - dt);
+    const t = this.shakeFor - this.shakeLeft, b = this.shakeBase, o = this.tentObj;
+    // builds for a couple of seconds, surges in waves, and settles at the end
+    const env = Math.min(1, t / 1.6) * Math.min(1, this.shakeLeft / 1.2) * (0.65 + 0.35 * Math.sin(t * 1.9));
+    o.position.set(b.x + Math.sin(t * 31) * 0.035 * env, b.y + Math.abs(Math.sin(t * 17)) * 0.04 * env, b.z + Math.cos(t * 27) * 0.035 * env);
+    o.rotation.set(Math.sin(t * 29 + 1) * 0.045 * env, this.tent.yaw + Math.sin(t * 13) * 0.03 * env, Math.sin(t * 23) * 0.06 * env);
+    if (this.shakeLeft === 0) { o.position.set(b.x, b.y, b.z); o.rotation.set(0, this.tent.yaw, 0); }
+  }
+
+  update(dt, gameMinutes, t, scale = 800) {
+    this.#shakeTent(dt);
     if (!this.fire) return;
     this.fire.life -= gameMinutes;
     if (this.fire.life <= 0) { this.douse(); return; }
-    const fade = Math.min(1, this.fire.life / 15);
-    const flick = 0.75 + Math.sin(t * 13) * 0.08 + Math.sin(t * 29 + 1) * 0.06 + Math.random() * 0.1;
-    this.fireObj.light.intensity = 45 * flick * fade;
-    this.fireObj.flames.forEach((f, i) => {
-      f.scale.set(1, (0.6 + Math.sin(t * (8 + i * 2.3) + i) * 0.25 + Math.random() * 0.15) * fade, 1);
-      f.position.y = 0.2 + f.scale.y * 0.35;
-      f.rotation.y = t * (1 + i * 0.3);
-    });
+    this.fireObj.update(t, Math.min(1, this.fire.life / 25), scale);
   }
 
   /** Ground under this area was reshaped: the tent and fire sit on it again. */
@@ -143,6 +197,9 @@ export class Camp {
       if (x >= x0 && x <= x1 && z >= z0 && z <= z1) o.position.y = this.world.height(x, z);
     }
   }
+
+  /** Height of the flames' centre above the world, for the roasting stick. */
+  get flameBase() { return this.fireObj.group.position.y; }
 
   save() {
     return { tent: this.tent, fire: this.fire };

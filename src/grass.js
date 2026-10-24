@@ -3,6 +3,7 @@ import { NOISE_GLSL } from './detail.js';
 import { WIND_GLSL } from './wind.js';
 import { HEIGHT_GLSL } from './cdlod.js';
 import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING } from './atmosphere.js';
+import { CULL } from './culling.js';
 
 // Grass, as clumps rather than blades. A canvas atlas holds four painted
 // clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
@@ -99,8 +100,11 @@ function clumpGeometry() {
   return g;
 }
 
+const BLOCKS = 6;   // the clump grid is drawn as BLOCKS x BLOCKS pieces so the ones off screen can be skipped
+
 export class Grass {
   constructor(terrain, { radius = 30, spacing = 0.5 } = {}, uniforms) {
+    this.terrain = terrain;
     this.spacing = spacing;
     this.W = Math.round((radius * 2) / spacing);
     this.uniforms = {
@@ -109,9 +113,9 @@ export class Grass {
       uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
       uTrA: atmosphere.uTrA, uTrB: atmosphere.uTrB,   // the shared ring of pressings (atmosphere.js)
       uFrost: { value: 0 }, uCure: { value: 0.75 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
+      uClear0: { value: new THREE.Vector3(1e6, 1e6, 1) }, uClear1: { value: new THREE.Vector3(1e6, 1e6, 1) },   // x, z, radius: ground kept bare (the fire, the tent)
     };
-    const geo = clumpGeometry();
-    geo.instanceCount = this.W * this.W;
+    const clump = clumpGeometry();
     const mat = new THREE.MeshLambertMaterial({ map: paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
@@ -126,15 +130,17 @@ export class Grass {
           uniform vec2 uCenter;
           uniform vec3 uPlayer;
           uniform vec4 uTrA[${TRAMPLE}], uTrB[${TRAMPLE}];
+          attribute vec3 aBlock;   // this piece's first cell in the grid, and its width in cells
           uniform float uSnow, uSnowLine;
+          uniform vec3 uClear0, uClear1;
           varying vec3 vSat, vTone;
           varying float vLush;
           ${HEIGHT_GLSL}
           ${WIND_GLSL}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
         .replace('#include <begin_vertex>', `
-          int W = int(uW);
-          ivec2 cell = ivec2(floor(uCenter / uSpacing)) - W / 2 + ivec2(gl_InstanceID % W, gl_InstanceID / W);
+          int W = int(uW), BW = int(aBlock.z);
+          ivec2 cell = ivec2(floor(uCenter / uSpacing)) - W / 2 + ivec2(aBlock.xy) + ivec2(gl_InstanceID % BW, gl_InstanceID / BW);
           float h1 = ihash(cell), h2 = ihash(cell + ivec2(7919, 104729)), h3 = ihash(cell * 3 + ivec2(17, 3));
           vec2 root = (vec2(cell) + vec2(h1, h2)) * uSpacing;
           float r = distance(root, uCenter);
@@ -154,6 +160,7 @@ export class Grass {
           // snow buries the tufts gradually: they shrink under it, and only the deepest vanish
           float buried = uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5);
           live *= 1.0 - step(1.25, buried);
+          live *= smoothstep(uClear0.z * 0.7, uClear0.z, distance(root, uClear0.xy)) * smoothstep(uClear1.z * 0.7, uClear1.z, distance(root, uClear1.xy));
           float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
@@ -206,10 +213,33 @@ export class Grass {
         .replace('#include <normal_fragment_begin>', 'float faceDirection = 1.0;\nvec3 normal = normalize(vNormal);\nvec3 nonPerturbedNormal = normal;');
     };
     mat.customProgramCacheKey = () => 'rawah-grass-clumps';
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.receiveShadow = true;
-    this.mesh.renderOrder = 0;
+    this.mesh = new THREE.Group();
+    this.blocks = [];
+    const step = Math.ceil(this.W / BLOCKS);
+    for (let j = 0; j < this.W; j += step) {
+      for (let i = 0; i < this.W; i += step) {
+        const bw = Math.min(step, this.W - i), bh = Math.min(step, this.W - j);
+        const geo = clump.clone();
+        geo.setAttribute('aBlock', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 3).map((_, n) => [i, j, bw][n % 3]), 3));
+        geo.instanceCount = bw * bh;
+        const m = new THREE.Mesh(geo, mat);
+        m.frustumCulled = false;
+        m.receiveShadow = true;
+        m.renderOrder = 0;
+        this.mesh.add(m);
+        this.blocks.push({ mesh: m, i, j, bw, bh });
+      }
+    }
+    this.frustum = new THREE.Frustum();
+    this._pm = new THREE.Matrix4();
+    this._box = new THREE.Box3();
+    this.drawn = this.blocks.length;
+  }
+
+  /** Keep the ground bare around up to two camp features: [x, z, radius] or null. */
+  clear(a, b) {
+    (a ? this.uniforms.uClear0.value.set(a[0], a[1], a[2]) : this.uniforms.uClear0.value.set(1e6, 1e6, 1));
+    (b ? this.uniforms.uClear1.value.set(b[0], b[1], b[2]) : this.uniforms.uClear1.value.set(1e6, 1e6, 1));
   }
 
   /**
@@ -243,5 +273,26 @@ export class Grass {
     this.#trample(hiker, heading);
     this.uniforms.uFrost.value = frost;
     if (cure !== undefined) this.uniforms.uCure.value = cure;
+    this.#cull(camera);
+  }
+
+  /** Draw only the pieces of the clump grid that can be seen. */
+  #cull(camera) {
+    const s = this.spacing, W = this.W, T = this.terrain;
+    this.frustum.setFromProjectionMatrix(this._pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const c0x = Math.floor(camera.position.x / s) - W / 2, c0z = Math.floor(camera.position.z / s) - W / 2;
+    const pad = 2.2;   // a clump leans and spreads about this far from its root
+    let drawn = 0;
+    for (const b of this.blocks) {
+      const x0 = (c0x + b.i) * s - pad, x1 = (c0x + b.i + b.bw) * s + pad, z0 = (c0z + b.j) * s - pad, z1 = (c0z + b.j + b.bh) * s + pad;
+      let seen = true;
+      if (CULL.frustum) {
+        const [lo, hi] = T.heightRange(x0, z0, x1, z1);
+        seen = this.frustum.intersectsBox(this._box.set(this._box.min.set(x0, lo - 1, z0), this._box.max.set(x1, hi + 3, z1)));
+      }
+      b.mesh.visible = seen;
+      if (seen) drawn++;
+    }
+    this.drawn = drawn;
   }
 }

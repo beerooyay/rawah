@@ -48,6 +48,13 @@ const LINES = {
   travel: ['Made it.', 'Whoa, okay, we\'re here.'],
   camp: ['Good spot. I\'ll grab some water.', 'Home for the night.'],
   fire: ['Now we\'re talking.', 'Fire\'s perfect. Don\'t you dare put it out yet.'],
+  hop: ['Wait for me!', 'Room for one more?', 'Hold on, I\'m coming!'],
+  ride: ['Okay, I\'m on. Go easy!', 'Let\'s ride!', 'Holding on!'],
+  fast: ['Faster!', 'Woooo!', 'Watch the trees!', 'I can\'t feel my face!'],
+  fish: ['Nice one!', 'Look at the size of that!', 'Beautiful fish. Now I\'m jealous.', 'Dinner!'],
+  smore: ['That is the perfect marshmallow. Don\'t look at mine.', 'Okay, golden brown. I am a professional.', 'Best thing I\'ve ever tasted, honestly.', 'Mine is on fire. Mine is definitely on fire.'],
+  sit: ['Good spot. Look at those stars.', 'Fire\'s perfect. Stay a while.', 'I could sit here all night.'],
+  off: ['Whew. That was fun.', 'My legs are still shaking.', 'Again later?'],
 };
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
@@ -167,6 +174,9 @@ export class Party {
     this.nextTalk = between(18, 30);
     this.talk = { who: null, until: 0, el: document.getElementById('bubble') };
     this.lastSaid = {};
+    this.go = null;    // { x, z, who }: a friend with somewhere to be (a scripted moment)
+    this.atv = null;   // the four-wheeler, while someone is boarding or riding
+    this._pin = null;  // the actor a script owns this frame
   }
 
   // ------------------------------------------------------------ speech
@@ -195,6 +205,53 @@ export class Party {
 
   /** After fast travel: the friends are put back behind you where you land. */
   #arriveWith(p) { this.gather(p); }
+
+  /** The friend nearest a point. */
+  near(p) {
+    let best = null, bd = 1e9;
+    for (const a of this.actors) { const d = Math.hypot(a.x - p.x, a.z - p.z); if (d < bd) { bd = d; best = a; } }
+    return best;
+  }
+
+  /** Say exactly this, now, over `who` (or the nearer friend). */
+  tell(text, who = null, cool = 0) {
+    const now = performance.now() / 1000;
+    this.talk.who = who || this.near(this.ctx.player?.pos || this.actors[0].b.pos);
+    this.talk.text = text;
+    this.talk.until = now + 3.4 + text.length * 0.05 + cool;
+    if (this.talk.el) { this.talk.el.textContent = text; this.talk.el.classList.remove('hidden'); }
+  }
+
+  /** You climbed on the quad: the nearer friend jogs over and takes the back seat. */
+  boardATV(atv) {
+    const a = this.near(atv.pos);
+    if (!a || Math.hypot(atv.pos.x - a.x, atv.pos.z - a.z) > 25 || this.race?.a === a || a.b.mode === 'swim') return false;
+    this.atv = atv;
+    this.endDuo();
+    a.boarding = true; a.riding = false; a.seat = null;
+    this.say('hop', {}, a, { force: true, cool: 20 });
+    return true;
+  }
+
+  /** You got off: the passenger hops down on the far side. */
+  leaveATV(atv) {
+    for (const a of this.actors) {
+      const was = a.riding || a.boarding;
+      a.boarding = false;
+      if (!a.riding) continue;
+      a.riding = false; a.b.resting = false;
+      const rx = Math.cos(atv.yaw), rz = -Math.sin(atv.yaw);
+      a.place(atv.pos.x + rx * 1.5, atv.pos.z + rz * 1.5, atv.yaw);
+      if (was) this.say('off', {}, a, { force: true, cool: 20 });
+    }
+  }
+
+  get boarding() { return this.actors.some((a) => a.boarding); }
+  get riding() { return this.actors.some((a) => a.riding); }
+
+  /** Offer the friend nearer the fire the stool you are not on. */
+  sitOn(st) { const a = this.near(st); if (a) { a.seat = st; this.say('sit', {}, a, { cool: 120 }); } }
+  clearSeat() { for (const a of this.actors) a.seat = null; }
 
   /** Speech bubble: sit it above the friend who is talking, and hide it when the line is done. */
   #bubbleAt(now) {
@@ -350,12 +407,32 @@ export class Party {
         this.say(this.#contextKind(), {}, null, { cool: 50 });
       }
     }
+    this._pin = this.go ? (this.go.who || this.actors[0]) : null;
+    for (const a of this.actors) {
+      if (a === this._pin) { a.goto(this.go.x, this.go.z, RUN, 0.3, dt); a.b.face = false; a.b.lookAt = null; }
+      else if (a.boarding && this.atv) {
+        const sx = Math.sin(this.atv.yaw), cz = Math.cos(this.atv.yaw);
+        if (a.goto(this.atv.pos.x + sx * 1.7, this.atv.pos.z + cz * 1.7, RUN, 0.4, dt) < 0.6) { a.boarding = false; a.riding = true; this.say('ride', {}, a, { cool: 20 }); }
+      }
+      else if (a.riding && this.atv) {
+        this.atv.seat(a.b.pos, 1);
+        a.b.vel.set(0, 0, 0); a.speed = 0; a.b.resting = true;
+        a.b.yaw = this.atv.yaw; a.char.heading = this.atv.yaw; a.b.face = false; a.b.lookAt = null;
+      }
+      else if (a.seat) {
+        const st = a.seat;
+        if (a.goto(st.x, st.z, JOG, 0.4, dt) < 0.5) { a.stop(); a.b.resting = true; a.b.yaw = st.yaw; a.char.heading = st.yaw; }
+        else a.b.resting = false;
+      }
+      else a.b.resting = false;
+    }
     for (const a of this.actors) a.update(dt);
     this.#bubbleAt(performance.now() / 1000);
   }
 
   /** The friend who is not off racing or roaming keeps by you. */
   #trail(a, pl, dt) {
+    if (a === this._pin || a.riding || a.boarding || a.seat) return;
     const i = this.actors.indexOf(a);
     const [fx, fz] = fwd(this.dir + (i ? 0.8 : -0.8)), r = 4.5 + i * 2.2;
     a.goto(pl.pos.x + fx * r, pl.pos.z + fz * r, RUN, 1.5, dt);
@@ -364,6 +441,7 @@ export class Party {
   // ------------------------------------------------------------ walking with you
   follow(dt, pl, speed) {
     this.actors.forEach((a, i) => {
+      if (a === this._pin || a.riding || a.boarding || a.seat) return;
       if (this.work && this.work.a === a) return;
       const ang = this.dir + (i ? 0.8 : -0.8), r = 4.5 + i * 2.2, [fx, fz] = fwd(ang);
       const tx = pl.pos.x + fx * r, tz = pl.pos.z + fz * r, d = Math.hypot(tx - a.x, tz - a.z);

@@ -61,6 +61,42 @@ export class Audio {
     this.nextBird = 4; this.nextElk = 20; this.nextCrackle = 0; this.nextDrop = 0;
   }
 
+  /** The four-wheeler's engine: a throaty saw plus a sub, opened up by speed and throttle. `on` false lets it die away. */
+  engine(on, speed, throttle) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this.eng) {
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 500; lp.Q.value = 2;
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      const a = ctx.createOscillator(); a.type = 'sawtooth';
+      const b = ctx.createOscillator(); b.type = 'square';
+      const bg = ctx.createGain(); bg.gain.value = 0.5;
+      a.connect(lp); b.connect(bg).connect(lp);
+      lp.connect(gain).connect(this.master);
+      a.start(); b.start();
+      this.eng = { a, b, lp, gain };
+    }
+    const e = this.eng, t = ctx.currentTime;
+    // idle ~28 Hz firing, climbing with speed, with a surge on the throttle
+    const hz = 26 + speed * 62 + throttle * 14;
+    e.a.frequency.setTargetAtTime(hz, t, 0.08);
+    e.b.frequency.setTargetAtTime(hz * 0.5, t, 0.08);
+    e.lp.frequency.setTargetAtTime(380 + speed * 900 + throttle * 500, t, 0.1);
+    e.gain.gain.setTargetAtTime(on ? 0.05 + speed * 0.05 + throttle * 0.03 : 0, t, on ? 0.15 : 0.4);
+  }
+
+  /** A reel click. */
+  reel() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime, src = ctx.createBufferSource();
+    src.buffer = this.white;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 3200; f.Q.value = 6;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t, Math.random() * 2, 0.06);
+  }
+
   setVolume(v) {
     this.volume = v;
     if (this.master) this.master.gain.value = v;

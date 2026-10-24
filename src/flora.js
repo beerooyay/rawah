@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { hash2, clamp } from './noise.js';
 import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
 import { rockGeometries, rockMaterial } from './rocks.js';
+import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
 // Trees, burned snags, downed logs, krummholz, willows and rock around the
 // hiker. Placement is a jittered grid driven by World.cover(), which reads the
@@ -32,6 +33,17 @@ const TOP = { boulder: 0.65, slab: 0.3, tooth: 1.7 };
 const FOOT = { boulder: 0.85, slab: 1.2, tooth: 0.5 };
 const TILT = { boulder: 1, slab: 2.2, tooth: 0.5 };
 const SEE = [[0.5, 70], [1, 150], [2, 280], [Infinity, 520]];   // [scale up to, metres you can see it from]
+const ROCK_R = 240;        // boulders and logs inside this radius
+// Culling. The buffers are refilled only when the view has turned ROT_REFILL or moved
+// REFILL_M, so the frustum used to fill them is wider than the camera's by CULL.margin
+// (culling.js), which must stay above ROT_REFILL.
+const ROT_REFILL = 0.12;   // radians
+const OCC_FROM = 120;      // impostors nearer than this are never tested against the skyline
+const TALL = 30;           // tallest tree, for tile bounds
+const LOW_SUN = 0.55;      // below this (33 degrees up) shadows run long, and down a slope they run on without end: keep every caster
+const SHADOW_REACH = 170;  // longest shadow worth keeping a caster for (the shadow map reaches about this far)
+// height and crown radius of each kind at scale 1, for shadow-aware culling
+const DIM = { spruce: [18, 3.4], fir: [22, 3], lodgepole: [20, 3], aspen: [12, 3], snag: [19, 1.5], krumm: [3, 2], willow: [3, 2], boulder: [2.5, 2.5], slab: [2.5, 3], tooth: [4, 1.2], log: [1, 3.2] };
 
 export { TREES, ROCKS, SAPLING, BOT, FOOT, TOP };
 const fract = (v) => v - Math.floor(v);
@@ -110,6 +122,42 @@ export class Flora {
     this.tiles = new Map();
     this.filledAt = new THREE.Vector3(Infinity, 0, 0);
     this.dirty = true;
+
+    // view culling: set each frame by setView()
+    this.camera = null;
+    this.horizon = null;
+    this.shadowDir = null;
+    this.frustum = new THREE.Frustum();
+    this.fill = { key: -1, dir: new THREE.Vector3(0, 0, -1), cam: new THREE.Vector3(Infinity, 0, 0), fov: 0, aspect: 0, horizon: -1, light: new THREE.Vector3(), shadows: false };
+    this._dir = new THREE.Vector3();
+    this.stats = { kept: 0, outside: 0, hidden: 0 };
+  }
+
+  /** The camera, the terrain skyline and the direction the light comes from (null when nothing casts a shadow). */
+  setView(camera, horizon, shadowDir) {
+    this.camera = camera;
+    this.horizon = horizon;
+    this.shadowDir = shadowDir;
+  }
+
+  #cullKey() {
+    return (CULL.frustum && this.camera ? 1 : 0) + (CULL.occlusion && this.horizon?.active ? 2 : 0) + (this.shadowDir ? 4 : 0) + (this.shadowDir && this.shadowDir.y < LOW_SUN ? 8 : 0);
+  }
+
+  /** Has the view changed enough that the culled buffers no longer cover it? */
+  #viewStale() {
+    const f = this.fill, cam = this.camera;
+    if (!cam) return false;
+    const key = this.#cullKey();
+    if (key !== f.key) return true;
+    if (key & 1) {
+      cam.getWorldDirection(this._dir);
+      if (this._dir.angleTo(f.dir) > ROT_REFILL || Math.abs(cam.fov - f.fov) > 1 || cam.aspect !== f.aspect) return true;
+      if (cam.position.distanceTo(f.cam) > REFILL_M) return true;
+      if (key & 4 && this.shadowDir.angleTo(f.light) > 0.04) return true;
+    }
+    if (key & 2 && this.horizon.version !== f.horizon) return true;
+    return false;
   }
 
   /** Ground under (x0..x1, z0..z1) was reshaped: forget the tiles there so trees and rocks are planted at the new height. */
@@ -154,7 +202,7 @@ export class Flora {
       this.tiles.set(key, this.#populate(i, j));
       this.dirty = true;
     }
-    if (this.dirty || this.filledAt.distanceTo(pos) > REFILL_M) this.#fill(pos);
+    if (this.dirty || this.filledAt.distanceTo(pos) > REFILL_M || this.#viewStale()) this.#fill(pos);
     return todo.length - n;
   }
 
@@ -164,6 +212,7 @@ export class Flora {
     const n = Math.floor(size / SPACING);
     const items = Object.fromEntries(KINDS.map((k) => [k, []]));
     const solids = []; // x, z, radius, top
+    let minY = Infinity, maxY = -Infinity;
     const blocks = []; // x, z, radius of the big rocks, so trees leave them room
 
     // water, trail and brook keep clear of whatever is placed
@@ -200,6 +249,8 @@ export class Flora {
       if (s >= 0.9) blocks.push(x, z, FOOT[kind] * s);
       if (inside(x, z) && (base !== null || free(x, z, e, 1.2)) && !this.#gone(kind, x, z)) {
         items[kind].push(x, y, z, s, r);
+        if (y < minY) minY = y;
+        if (y + TOP[kind] * s > maxY) maxY = y + TOP[kind] * s;
         if (s >= 0.6) solids.push(x, z, FOOT[kind] * s * 0.9, y + TOP[kind] * s);
       }
       return y + TOP[kind] * s;
@@ -309,6 +360,8 @@ export class Flora {
               : 0.62 + hash2(gi, gj, 5) * 0.55 - Math.max(0, e - tl + 120) / 450;
             if (s >= 0.35 && !this.#gone(kind, x, z)) {
               items[kind].push(x, e, z, s, hash2(gi, gj, 6));
+              if (e < minY) minY = e;
+              if (e > maxY) maxY = e;
               if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.2 : 0.3) * s + 0.1, Infinity);
             }
           }
@@ -323,10 +376,11 @@ export class Flora {
         }
       }
     }
-    return { ti, tj, items, solids: new Float32Array(solids) };
+    if (minY > maxY) minY = maxY = w.baseHeight(x0 + size / 2, z0 + size / 2);
+    return { ti, tj, items, solids: new Float32Array(solids), x0, z0, size, minY, maxY };
   }
 
-  /** Refill every instanced mesh from the tiles in range. */
+  /** Refill every instanced mesh from the tiles in range, leaving out what the camera cannot see. */
   #fill(pos) {
     this.filledAt.copy(pos);
     this.dirty = false;
@@ -340,6 +394,39 @@ export class Flora {
       const c = mesh.instanceColor.array;
       c[k * 3] = v; c[k * 3 + 1] = v * 0.99; c[k * 3 + 2] = v * 0.96;
     };
+
+
+    // what to cull against, remembered so #viewStale knows when it has gone out of date
+    const f = this.fill, cam = this.camera, horizon = this.horizon;
+    const key = f.key = this.#cullKey();
+    const planes = key & 1 ? expandedFrustum(cam, CULL.margin, this.frustum).planes : null;
+    const sky = key & 2 ? horizon : null;
+    const sun = key & 4 ? this.shadowDir : null;
+    if (cam) { cam.getWorldDirection(f.dir); f.cam.copy(cam.position); f.fov = cam.fov; f.aspect = cam.aspect; }
+    f.horizon = horizon ? horizon.version : -1;
+    if (sun) f.light.copy(sun);
+    // a shadow falls away from the light: this much sideways per metre of height
+    const sk = sun ? 1 / Math.max(sun.y, 0.05) : 0;
+    const sx = sun ? -sun.x * sk : 0, sz = sun ? -sun.z * sk : 0;
+    const keepCasters = !CULL.casters || !!(key & 8);
+    const stats = this.stats;
+    stats.kept = stats.outside = stats.hidden = 0;
+
+    /** Could this caster, or the shadow it throws, be on screen? (centre, half-height, crown radius) */
+    const casterSeen = (x, y, z, hh, R) => {
+      if (!planes || keepCasters) return true;
+      const r = hh + R + REFILL_M;
+      if (sphereInView(planes, x, y + hh, z, r)) return true;
+      if (!sun) return false;
+      // the shadow of the crown runs out along the ground to here; look along it in four samples
+      let h = hh * 2;
+      const len = Math.hypot(sx, sz) * h;
+      if (len > SHADOW_REACH) h *= SHADOW_REACH / len;
+      const L = Math.hypot(sx, sz) * h * 0.125 + REFILL_M;
+      for (let t = 0.125; t < 1.01; t += 0.25) if (sphereInView(planes, x + sx * h * t, y, z + sz * h * t, R + L)) return true;
+      return false;
+    };
+
     const put = (mesh, x, y, z, sx, sy, sz, rot, v) => {
       const k = counts.get(mesh);
       if (k >= mesh.instanceMatrix.count) return;
@@ -357,32 +444,50 @@ export class Flora {
       _m.toArray(mesh.instanceMatrix.array, k * 16);
       shade(mesh, k, 0.9 + r * 0.2);
     };
+    const rr = ROCK_R + REFILL_M;
     for (const tile of this.tiles.values()) {
+      // whole-tile rejection: off screen (shadows included), or behind a ridge with nothing but far impostors in it
+      if (planes || sky) {
+        const cx = tile.x0 + tile.size / 2, cz = tile.z0 + tile.size / 2;
+        const hy = (tile.maxY - tile.minY) / 2, cy = tile.minY + hy;
+        // a sphere around the whole tile that holds every crown and shadow in it
+        if (planes && !casterSeen(cx, cy, cz, hy + TALL / 2, tile.size * 0.71 + hy + 20)) { stats.outside++; continue; }
+        // past the boulders and the full trees a tile holds nothing but impostors, which cast no shadow
+        const near = Math.hypot(cx - pos.x, cz - pos.z) - tile.size * 0.71;
+        if (sky && near > rr && sky.hiddenBox(tile.x0, tile.x0 + tile.size, tile.z0, tile.z0 + tile.size, tile.maxY + TALL)) { stats.hidden++; continue; }
+      }
       for (const kind of KINDS) {
         const list = tile.items[kind];
         const variants = this.meshes[kind];
         const rocky = ROCKS.includes(kind);
+        const [dh, dr] = DIM[kind];
         for (let k = 0; k < list.length; k += 5) {
           const x = list[k], e = list[k + 1], z = list[k + 2], s = list[k + 3], r = list[k + 4];
-          const d = Math.hypot(x - pos.x, z - pos.z);
+          const ex = x - pos.x, ez = z - pos.z, d = Math.sqrt(ex * ex + ez * ez);
           const rot = r * Math.PI * 2, v = 0.82 + r * 0.3;
           if (rocky) {
             let see = 520;
             for (const [m, dist] of SEE) if (s <= m) { see = dist; break; }
-            if (d < see) putRock(variants[Math.floor(fract(r * 5.77) * variants.length)], kind, x, e, z, s, r);
+            if (d < see && casterSeen(x, e, z, dh * s * 0.5, dr * s)) { putRock(variants[Math.floor(fract(r * 5.77) * variants.length)], kind, x, e, z, s, r); stats.kept++; }
             continue;
           }
           if (kind === 'log') {
-            if (d < 240) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
+            if (d < 240 && casterSeen(x, e, z, 0.5 * s, dr)) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
             continue;
           }
           const vi = Math.floor(fract(r * 7.31) * variants.length);
           if (s < SAPLING) { if (d < 55) put(variants[vi], x, e - 0.1, z, s, s, s, rot, v); continue; }
-          if (d < this.cardR) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
+          if (d < this.cardR) {
+            if (casterSeen(x, e, z, dh * s * 0.5, dr * s)) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); stats.kept++; }
+            else stats.outside++;
+            continue;
+          }
           // far forest thins out progressively; the fog hides the difference
           const keep = d < this.thin * 0.5 ? 1 : d < this.thin ? 0.7 : 0.4;
           if (d > this.radius || fract(r * 3.77) > keep || ni >= this.impCap) continue;
           const c = cells[kind][vi];
+          if (planes && !sphereInView(planes, x, e + c.h * s * 0.5, z, c.h * s * 0.5 + REFILL_M)) { stats.outside++; continue; }
+          if (sky && d > OCC_FROM && sky.hidden(x, e + c.h * s, z)) { stats.hidden++; continue; }
           writeMatrix(im, ni, x, e - 0.15, z, c.w * s, c.h * s, c.w * s, rot);
           ic[ni * 3] = v; ic[ni * 3 + 1] = v; ic[ni * 3 + 2] = v;
           cell[ni * 2] = c.u; cell[ni * 2 + 1] = c.v;

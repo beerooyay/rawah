@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
+import { chunkGeometry } from './culling.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
 // and the distant horizon mesh. The near terrain itself is cdlod.js.
@@ -328,14 +329,20 @@ export function farTerrain(world, material) {
         idx[t++] = A; idx[t++] = Cc; idx[t++] = D;
       }
     }
+    // the squares that lie wholly under the inner rings (all three corners sunk) can never be seen
+    const sunk = (v) => Math.abs(pos[v * 3]) < sink && Math.abs(pos[v * 3 + 2]) < sink;
+    const keep = [];
+    for (let i = 0; i < idx.length; i += 3) if (!(sunk(idx[i]) && sunk(idx[i + 1]) && sunk(idx[i + 2]))) keep.push(idx[i], idx[i + 1], idx[i + 2]);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.matrixAutoUpdate = false;
-    group.add(mesh);
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+    // cut into chunks so the engine can reject the ones outside the view
+    for (const g of chunkGeometry(geo, (half * 2) / 12)) {
+      const mesh = new THREE.Mesh(g, material);
+      mesh.matrixAutoUpdate = false;
+      group.add(mesh);
+    }
   }
   return group;
 }

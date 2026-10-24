@@ -10,7 +10,7 @@ const PAD = {
   0: 'Space',      // A: hop / lunge
   1: 'KeyE',       // B: grab rock / let go
   2: 'KeyC',       // X: pitch / pack tent
-  3: 'KeyV',       // Y: first / third person
+  3: 'KeyU',       // Y: ride / get off the ATV
   4: 'KeyH',       // LB: call the friends together (the together menu)
   5: 'KeyF',       // RB: campfire
   6: 'KeyZ',       // LT: rest / sleep
@@ -18,10 +18,10 @@ const PAD = {
   8: 'KeyM',       // Back: map
   9: 'Escape',     // Start: pause
   10: 'ShiftLeft', // L3: hike fast
-  11: 'KeyT',      // R3: tool (hands, axe, machete)
-  12: 'KeyG',      // D-pad up: stomp
-  13: 'KeyX',      // D-pad down: crouch, then lie down, then stand
-  14: 'KeyQ',      // D-pad left: punch
+  11: 'KeyV',      // R3: first / third person
+  12: 'KeyT',      // D-pad up: tool (hands, axe, machete)
+  13: 'KeyB',      // D-pad down: fish
+  14: 'KeyN',      // D-pad left: roast
   15: 'KeyR',      // D-pad right: hook
 };
 const NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'L3', 'R3', 'Up', 'Down', 'Left', 'Right', 'Guide'];
@@ -179,12 +179,16 @@ export class Input {
       tool: '<path d="M10.3 2.4a3.2 3.2 0 0 0-4.1 4.1L2.5 10.2l2.3 2.3 3.7-3.7a3.2 3.2 0 0 0 4.1-4.1l-2 2-1.8-1.8z"/>',
       map: '<path d="M5 3 8 4.4l3-1.4 3 1.5v8l-3-1.5-3 1.5-3-1.5-3 1.5v-8zM8 4.4v8.6M11 3v7.5"/>',
       pause: '<path d="M5.4 3.5v9M10.6 3.5v9"/>',
+      ride: '<circle cx="12" cy="14" r="7"/><circle cx="12" cy="14" r="2.6"/><path d="M12 7v4.4M6.2 16.6l3.9-1.7M17.8 16.6l-3.9-1.7M9 4.5h6"/>',
+      fish: '<path d="M3 12c2.8-3.6 6-5 9.5-5L21 4.5v15L12.5 17C9 17 5.8 15.6 3 12z"/><circle cx="9" cy="11" r="0.9"/>',
+      roast: '<path d="M3.5 20.5 14 10"/><rect x="13" y="3.5" width="8" height="8" rx="2.2" transform="rotate(45 17 7.5)"/>',
     };
     const btn = (code, ic, label, cls = '') => `<button data-code="${code}" class="${cls}" aria-label="${label}">${icon(IC[ic])}</button>`;
     ui.innerHTML = `
       <div class="t-stick"><i></i></div>
       <div class="t-acts">
         <div class="t-stack">${btn('ShiftLeft', 'sprint', 'Sprint', 'tog')}${btn('KeyX', 'duck', 'Duck')}</div>
+        ${btn('KeyU', 'ride', 'Ride', 'mid')}
         ${btn('KeyE', 'act', 'Grab', 'mid')}
         ${btn('Space', 'hop', 'Hop', 'big')}
       </div>
@@ -194,6 +198,8 @@ export class Input {
         ${btn('KeyZ', 'rest', 'Rest')}
       </div>
       <div class="t-top">
+        ${btn('KeyB', 'fish', 'Fish')}
+        ${btn('KeyN', 'roast', 'Roast')}
         ${btn('KeyH', 'together', 'Together')}
         ${btn('KeyV', 'cam', 'Camera')}
         ${btn('KeyT', 'tool', 'Tool')}

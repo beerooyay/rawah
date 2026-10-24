@@ -4,6 +4,7 @@ import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
 import { NOISE_GLSL } from './detail.js';
 import { WORLEY_GLSL } from './terrain.js';
+import { ChunkSet } from './culling.js';
 
 // Lakes, trail ribbons, cairns, trail signs and the car at the trailhead.
 
@@ -154,6 +155,8 @@ function draped(params) {
   return mat;
 }
 
+const CHUNK_M = 1000;
+
 export function buildTrails(world) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true });
@@ -195,12 +198,11 @@ export function buildTrails(world) {
     geo.computeVertexNormals();
     geos.push(geo);
   }
-  // all the trails and roads in one draw call
-  const mesh = new THREE.Mesh(mergeGeometries(geos), mat);
-  mesh.geometry.computeBoundingSphere();
-  mesh.receiveShadow = true;
-  group.add(mesh);
+  // all the trails and roads as ~1 km chunks, so the ones off screen or behind a ridge cost nothing
+  const chunks = new ChunkSet(mergeGeometries(geos), mat, CHUNK_M, (m) => { m.receiveShadow = true; });
+  group.add(chunks.group);
   group.add(buildCairns(world));
+  group.chunks = chunks;
   return group;
 }
 
@@ -438,11 +440,9 @@ export function buildStreams(world) {
     geo.computeVertexNormals();
     geos.push(geo);
   }
-  const mesh = new THREE.Mesh(mergeGeometries(geos), mat);
-  mesh.geometry.computeBoundingSphere();
-  mesh.renderOrder = 1;
-  group.add(mesh);
-  return { group, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
+  const chunks = new ChunkSet(mergeGeometries(geos), mat, CHUNK_M, (m) => { m.renderOrder = 1; });
+  group.add(chunks.group);
+  return { group, chunks, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
 }
 
 /** The two cars, nose to tail along the road. Anyone can drive either. */
