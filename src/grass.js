@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { NOISE_GLSL } from './detail.js';
 import { WIND_GLSL } from './wind.js';
 import { HEIGHT_GLSL } from './cdlod.js';
 import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING } from './atmosphere.js';
 import { CULL } from './culling.js';
+import { BOXEL } from './terrain.js';
 
 // Grass, as clumps rather than blades. A canvas atlas holds four painted
 // clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
@@ -122,10 +122,11 @@ export class Grass {
       shader.uniforms.uColorMap = { value: terrain.colorMap };
       shader.uniforms.uCover = { value: terrain.coverMap };
       shader.uniforms.uExtent = { value: terrain.extent };
+      shader.uniforms.uBoxel = BOXEL;
       withAtmosphere(shader, { translucency: 0.7, weather: 0.8 });
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
-          uniform sampler2D uColorMap, uCover;
+          uniform sampler2D uColorMap, uCover, uBoxel;
           uniform float uExtent, uSpacing, uW, uRadius;
           uniform vec2 uCenter;
           uniform vec3 uPlayer;
@@ -151,7 +152,8 @@ export class Grass {
           grow *= smoothstep(3960.0, 3700.0, y0);
           float alpine = smoothstep(3330.0, 3560.0, y0);
           vSat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
-          vLush = clamp((vSat.g - vSat.r) * 8.0, 0.0, 1.0);
+          vec4 bx = texture2D(uBoxel, root / uExtent + 0.5);
+          vLush = clamp((vSat.g - vSat.r) * 8.0 + bx.r * 0.35, 0.0, 1.0);
           float fade = 1.0 - smoothstep(uRadius * 0.72, uRadius, r);
           float live = step(h1 * 0.8 + h3 * 0.2, grow * 2.0);
           // each clump its own shade: some straw-pale, some russet, some dun
@@ -180,6 +182,7 @@ export class Grass {
             press = max(press, k);
             lean += (off / max(d, 0.05) + a.zw * 0.6) * k;
           }
+          press = max(press, bx.g * 0.75);   // the boxel field's wear lies the grass down: walked paths stay walked
           vec3 p = vec3(root.x + lp.x * size * 1.6, groundH(root, 0.0) - 0.03 + t * size * mix(0.72, 0.42, alpine) * (1.0 - press * 0.8), root.y + lp.z * size * 1.6);
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared
           float g = gustAt(root);

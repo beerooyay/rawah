@@ -3,7 +3,7 @@ import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
-import { buildLakes, buildTrails, buildSigns, buildStreams, CAR_ORDER } from './features.js';
+import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
 import { Sky, setSun, MOONS, sunDirection } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -31,7 +31,7 @@ import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
-import { HorizonMap, CULL } from './culling.js';
+import { HorizonMap } from './culling.js';
 import { ATV } from './atv.js';
 import { Fishing } from './fishing.js';
 import { Roast } from './roast.js';
@@ -455,7 +455,7 @@ $('btn-restart').onclick = () => {
 // title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
 const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
 const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
-buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pick, extent: world.extent, characters: CHARACTERS });
+buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pick, characters: CHARACTERS });
 function startFresh() {
   Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
   storeJSON('rawah-settings', settings);
@@ -590,7 +590,7 @@ function act() {
       const x = p.x + fx * 2, z = p.z + fz * 2;
       const why = camp.fireProblem(x, z);
       if (why) hud.toast(why, 'warn');
-      else { camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); boxels.wet(x, z, 0.9, 2.6); boxels.wear(x, z, 0.55); }
+      else { camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
     }
   }
   if (pressed.has('KeyZ') && camp.near(p, 'tent', 4.5) && !state.sleeping) startSleep();
@@ -1314,8 +1314,9 @@ function tick(dt, draw = true) {
   atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
   atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
   atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
-  // cold air pools in the valleys at dawn and burns off by midmorning
-  atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
+  // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
+  const damp = boxels.sample(p.x, p.z).u;
+  atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
   sky.update(state.hour, eye, focus, t, weather);
   // snow underfoot bounces light back up into the shadows
   const onSnow = atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, p.y);

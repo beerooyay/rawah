@@ -22,7 +22,8 @@ export class Boxels {
     this.theta = 0;
     this.px = new Uint8Array(n * n * 4);
     this.texture = new THREE.DataTexture(this.px, n, n);
-    this.texture.needsUpdate = true;
+    this.dirty = true;              // set by events and steps; #paint only runs when something changed
+    this.paintT = -1;               // theta of the last repaint — moisture moves slowly, ~12 Hz is plenty
     this.stats = { touched: 0, total: 0, ms: 0, live: 0, events: 0, violations: 0 };
     this.stepAcc = 0;
     this.ell = 1 / Math.acosh(1 + k / (2 * d));   // discrete decay length of the super-solution, in cells
@@ -82,6 +83,7 @@ export class Boxels {
       const i = (cz + dz) * this.n + cx + dx;
       if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) this.u[i] = Math.min(1, this.u[i] + a);
     }
+    this.dirty = true;
     const mass = a * Math.PI * r * r, R = r + this.#cone(mass);
     for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
       const i = (cz + dz) * this.n + cx + dx, dist = Math.hypot(dx, dz);
@@ -93,11 +95,33 @@ export class Boxels {
     this.stats.events++;
   }
 
+  /** Drying event: pull `a` moisture out of every cell in the disc. Removing mass can only shrink the field, so the neighbours' existing cones still certify what arrives later — no new windows needed. */
+  dry(x, z, a, r = 0) {
+    const i0 = this.#idx(x, z); if (i0 < 0) return;
+    const cx = i0 % this.n, cz = (i0 / this.n) | 0;
+    for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+      const i = (cz + dz) * this.n + cx + dx;
+      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length && this.u[i] > 0) {
+        this.u[i] = Math.max(0, this.u[i] - a);
+        if (!this.live.has(i)) this.live.set(i, [0, Math.log(Math.max(this.u[i], 1e-4) / this.eps) / this.k]);   // keep fading whatever is left
+      }
+    }
+    this.dirty = true;
+    this.stats.events++;
+  }
+
+  /** Moisture and wear at a world point, nearest cell. For game reads (mist, stamina), not the shader. */
+  sample(x, z) {
+    const i = this.#idx(x, z);
+    return i < 0 ? { u: 0, w: 0 } : { u: this.u[i], w: this.w[i] };
+  }
+
   /** Wear event: a footstep. No diffusion — the mark fades on its own clock. */
   wear(x, z, a) {
     const i = this.#idx(x, z); if (i < 0) return;
     this.w[i] = Math.min(1, this.w[i] + a);
     this.#wake(i, 0, Math.log(a / this.eps) / this.kWear);
+    this.dirty = true;
     this.stats.events++;
   }
 
@@ -114,6 +138,7 @@ export class Boxels {
       const lap = (l > 0 ? u[i - 1] : u[i]) + (l < n - 1 ? u[i + 1] : u[i]) + (m >= n ? u[i - n] : u[i]) + (m < u.length - n ? u[i + n] : u[i]) - 4 * u[i];
       u[i] = Math.max(0, u[i] + dt * (d * lap - k * u[i]));
       w[i] = Math.max(0, w[i] - dt * kWear * w[i]);
+      this.dirty = true;
       this.stats.touched++; this.stats.total++;
     }
   }
@@ -131,7 +156,7 @@ export class Boxels {
       this.#step(s);
       rem -= s;
     }
-    this.#paint();
+    if (this.dirty && this.theta - this.paintT > 0.08) this.#paint();
     this.stats.ms = this.stats.ms * 0.9 + (performance.now() - t0) * 0.1;
     this.stats.live = this.live.size;
     return this.stats.touched;
@@ -146,6 +171,8 @@ export class Boxels {
     }
     this.texture.needsUpdate = true;
     this.stats.touched = 0;
+    this.dirty = false;
+    this.paintT = this.theta;
   }
 
   /**

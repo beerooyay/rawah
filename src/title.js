@@ -46,32 +46,46 @@ export function buildTitle({ trailheads, pick, characters }) {
   chips('chips-season', SEASONS, () => pick.doy, (v) => { pick.doy = v; });
   chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; });
 
-  // ---- who: each character with the car they drive, parked where the trailhead says
-  const cards = new Map();
-  const where = () => { for (const c of cards.values()) c.where.textContent = `Parked at ${pick.trailhead}`; };
-  chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; where(); });
-  for (const name of Object.keys(characters)) {
-    const root = el('button', 'cast-card');
-    root.setAttribute('aria-pressed', 'false');
-    const art = el('div', 'cast-art');
-    const portrait = el('img', 'portrait');
-    portrait.alt = '';
-    art.append(portrait);
-    const where2 = el('div', 'cast-where');
-    root.append(art, el('div', 'cast-name', cap(name)), where2);
-    root.onclick = () => { pick.character = name; for (const [n, c] of cards) c.root.setAttribute('aria-pressed', String(n === name)); };
-    $('cast').appendChild(root);
-    cards.set(name, { root, where: where2, portrait });
-  }
-  cards.forEach((c, name) => c.root.setAttribute('aria-pressed', String(name === pick.character)));
-  where();
+  // ---- who: one hiker at a time, cycled by arrows, dots or the arrow keys
+  const names = Object.keys(characters);
+  const card = $('cast'), img = card.querySelector('img');
+  const nameEl = card.querySelector('.cast-name'), whereEl = card.querySelector('.cast-where');
+  const shots = {};
+  let cur = 0;
+  const show = (i, dir = 0) => {
+    cur = (i + names.length) % names.length;
+    pick.character = names[cur];
+    nameEl.textContent = cap(names[cur]);
+    whereEl.textContent = `Parked at ${pick.trailhead}`;
+    if (shots[names[cur]]) img.src = shots[names[cur]];
+    img.alt = names[cur];
+    for (const [j, d] of dotEls.entries()) d.classList.toggle('on', j === cur);
+    if (dir) card.animate([{ opacity: 0, transform: `translateX(${12 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 160, easing: 'ease-out' });
+  };
+  const dotEls = names.map((n, i) => {
+    const d = el('button', 'cast-dot');
+    d.setAttribute('aria-label', cap(n));
+    d.onclick = () => show(i, i > cur ? 1 : -1);
+    $('cast-dots').appendChild(d);
+    return d;
+  });
+  $('cast-prev').onclick = () => show(cur - 1, -1);
+  $('cast-next').onclick = () => show(cur + 1, 1);
+  document.addEventListener('keydown', (e) => {
+    if ($('title').classList.contains('hidden')) return;
+    if (e.code === 'ArrowLeft') show(cur - 1, -1);
+    else if (e.code === 'ArrowRight') show(cur + 1, 1);
+  });
+  chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; show(cur); });
+  show(Math.max(0, names.indexOf(pick.character)));
 
-  // characters are drawn once their models arrive, so the menu opens without waiting for them
+  // portraits render once their models arrive, so the menu opens without waiting for them
   const loader = new GLTFLoader();
-  for (const name of Object.keys(characters)) {
+  for (const name of names) {
     loader.loadAsync(characters[name]).then((g) => {
       g.scene.traverse((o) => { for (const mt of [].concat(o.material || [])) if (mt && 'metalness' in mt) mt.metalness = 0; });
-      cards.get(name).portrait.src = renderThumb(g.scene, { yaw: 0.45, lift: 0.2 });
+      shots[name] = renderThumb(g.scene, { w: 400, h: 500, yaw: 0.45, lift: 0.2 });
+      if (names[cur] === name) img.src = shots[name];
     }).catch(() => {});
   }
 }

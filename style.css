@@ -258,9 +258,9 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
 #load-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.25s; }
 #load-text { font: 500 var(--t-sm) var(--sans); color: var(--dim); }
 
-#title { place-items: center start; padding: 6vh 8vw;
+#title { place-items: safe center; padding: 4vh 6vw; overflow-y: auto;
   background: linear-gradient(90deg, rgba(8, 11, 16, 0.92) 0%, rgba(14, 24, 38, 0.7) 45%, rgba(8, 11, 16, 0.1) 100%); }
-.title-inner { max-width: 520px; display: grid; gap: 20px; }
+.title-inner { max-width: 720px; width: 100%; display: grid; gap: 16px; justify-items: center; text-align: center; }
 .title-inner .wordmark { margin: 0 0 2px; width: clamp(220px, 30vw, 380px); }
 .lede { margin: 0; font-size: var(--t-md); line-height: 1.55; color: var(--dim); max-width: 40ch; }
 .field { display: grid; gap: 8px; }
@@ -379,7 +379,7 @@ body.touch #hint { bottom: auto; top: 62px; white-space: normal; max-width: 52vw
   #map-top { top: 8px; left: 8px; right: 64px; }
   #map-close { top: 8px; right: 8px; }
 }
-@media (max-height: 720px) { .title-inner { gap: 12px; } #title .wordmark { width: 260px; } .lede { font-size: var(--t-sm); } .chip { padding: 7px 14px; min-height: 36px; } }
+@media (max-height: 720px) { .title-inner { gap: 10px; } #title .wordmark { width: 250px; } .lede { font-size: var(--t-sm); } .chip { padding: 7px 14px; min-height: 36px; } .cast-card { width: 168px; padding: 10px; } .trip { gap: 8px; padding: 12px 16px; } }
 @media (max-height: 520px) { .lede, .credit, .note { display: none; } .field { gap: 6px; } }
 @media (max-width: 640px) {
   #journal-list { columns: 1; }
@@ -392,24 +392,32 @@ body.touch #hint { bottom: auto; top: 62px; white-space: normal; max-width: 52vw
     transform: translateX(-50%); padding: 8px 16px; border-radius: 999px; background: var(--glass-strong); font: 500 var(--t-xs) var(--sans); color: var(--dim); pointer-events: none; }
 }
 
-/* ---- title: one centred column of chip rows over the live world ---- */
-#title { place-items: safe center; padding: 4vh 6vw; overflow-y: auto; }
-.title-inner { max-width: 720px; width: 100%; display: grid; gap: 16px; justify-items: center; text-align: center; }
 .title-top { display: grid; gap: 10px; justify-items: center; }
 .tr-block { display: grid; gap: 8px; justify-items: center; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.cast { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
-.cast-card { display: grid; gap: 5px; align-content: start; text-align: left; min-height: 0; width: 124px; padding: 10px; border-radius: 16px;
+
+/* ---- title: one hiker at a time, flanked by arrows; trip picks grouped in a panel ---- */
+.caro { display: flex; align-items: center; gap: 14px; }
+.caro-arrow { width: 44px; height: 44px; min-height: 0; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--dim); }
+.caro-arrow:hover, .caro-arrow:focus-visible { color: var(--ink); border-color: var(--accent); }
+.caro-arrow svg { width: 18px; height: 18px; }
+.cast-card { display: grid; gap: 5px; justify-items: center; text-align: center; width: 212px; padding: 14px; border-radius: 18px;
   background: rgba(10, 14, 20, 0.62); border: 1px solid var(--edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-.cast-card[aria-pressed="true"] { border-color: var(--accent); background: rgba(55, 88, 123, 0.5); }
-.cast-art { aspect-ratio: 4 / 5; border-radius: 10px; overflow: hidden;
+.cast-art { width: 100%; aspect-ratio: 4 / 5; border-radius: 12px; overflow: hidden;
   background: linear-gradient(160deg, #1d2b3c, #0b1118); }
 .cast-art img { width: 100%; height: 100%; object-fit: contain; }
-.cast-name { margin-top: 4px; font: 400 var(--t-md)/1.2 var(--display); }
-.cast-car { font: 500 var(--t-sm) var(--sans); color: var(--dim); }
+.cast-name { margin-top: 6px; font: 400 var(--t-lg)/1.2 var(--display); }
 .cast-where { font: 500 var(--t-xs) var(--sans); color: var(--faint); }
+.cast-dots { display: flex; gap: 8px; justify-content: center; }
+.cast-dot { width: 10px; height: 10px; min-height: 0; padding: 0; border-radius: 50%; border: 1.5px solid var(--faint); background: transparent; }
+.cast-dot.on { background: var(--accent); border-color: var(--accent); }
+.trip { display: grid; gap: 12px; padding: 16px 20px; border-radius: 18px; background: rgba(10, 14, 20, 0.5);
+  border: 1px solid var(--edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.trip-row { display: grid; gap: 6px; justify-items: center; }
 @media (max-width: 860px) {
   #title { padding: 4vh 5vw; }
+  .cast-card { width: 176px; padding: 12px; }
+  .caro { gap: 8px; }
 }
 
 /* ------------------------------------------------------------ companion */

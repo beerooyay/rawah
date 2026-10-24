@@ -136,19 +136,30 @@
 
       <div class="tr-block">
         <div class="field-label">Playing as</div>
-        <div id="cast" class="cast" role="group" aria-label="Playing as"></div>
+        <div class="caro">
+          <button id="cast-prev" class="caro-arrow" aria-label="Previous hiker"><svg viewBox="0 0 16 16"><path d="M10.5 2.5 5 8l5.5 5.5" /></svg></button>
+          <div id="cast" class="cast-card" aria-live="polite">
+            <div class="cast-art"><img class="portrait" alt="" draggable="false" /></div>
+            <div class="cast-name"></div>
+            <div class="cast-where"></div>
+          </div>
+          <button id="cast-next" class="caro-arrow" aria-label="Next hiker"><svg viewBox="0 0 16 16"><path d="M5.5 2.5 11 8l-5.5 5.5" /></svg></button>
+        </div>
+        <div id="cast-dots" class="cast-dots" role="group" aria-label="Choose hiker"></div>
       </div>
-      <div class="tr-block">
-        <div class="field-label">When</div>
-        <div id="chips-season" class="chips" role="group" aria-label="When"></div>
-      </div>
-      <div class="tr-block">
-        <div class="field-label">What time</div>
-        <div id="chips-time" class="chips" role="group" aria-label="What time"></div>
-      </div>
-      <div class="tr-block">
-        <div class="field-label">Where</div>
-        <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
+      <div class="trip">
+        <div class="trip-row">
+          <div class="field-label">When</div>
+          <div id="chips-season" class="chips" role="group" aria-label="When"></div>
+        </div>
+        <div class="trip-row">
+          <div class="field-label">What time</div>
+          <div id="chips-time" class="chips" role="group" aria-label="What time"></div>
+        </div>
+        <div class="trip-row">
+          <div class="field-label">Where</div>
+          <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
+        </div>
       </div>
 
       <div class="actions">

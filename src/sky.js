@@ -62,6 +62,7 @@ float noise(vec3 x) {
 // how much cloud one slice of the slab holds at a point: its footprint matches the shadows on the ground,
 // shrinking with height so the tops are smaller than the bases, and eroded so the edges billow
 float slab(vec2 P, float k, float dist) {
+  P += vec2(k * 130.0, k * -85.0);            // wind shear: towers lean downwind as they climb
   float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
   float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
   float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
@@ -92,8 +93,8 @@ void main() {
     vec2 sunH = normalize(uSun.xz + 1e-4) * (260.0 / max(uSun.y, 0.12));
     vec3 acc = vec3(0.0);
     float trans = 1.0;
-    for (int i = 0; i < 5; i++) {
-      float k = (float(i) + 0.5) / 5.0;
+    for (int i = 0; i < 6; i++) {
+      float k = (float(i) + 0.5) / 6.0;
       float tt = (dh + k * slabH) / max(h, 0.015);
       vec2 P = cameraPosition.xz + d.xz * tt;
       float dn = slab(P, k, tt);

@@ -39,6 +39,7 @@ export class GameMap {
     this.lastT = 0;
     this.onTravel = () => {};
     this.onClose = () => {};
+    this.cv = $('map-canvas');
     this.#bind();
   }
 
@@ -104,13 +105,17 @@ export class GameMap {
     this.open = true;
     this.state = s;
     this.mode = 'map';
-    this.view = { cx: s.x ?? 0, cz: s.z ?? 0, zoom: 1.4 };
     this.sel = null; this.hover = null;
     this.query = ''; this.filter = 'all';
     this.vel = { x: 0, z: 0 }; this.ease = null; this.zoomTo = null; this.lastT = 0;
     $('map-search').value = '';
     this.#buildList(s);
     $('map').classList.remove('hidden');
+    // open on the hiker, zoomed so the world always fills the frame
+    const cv = this.cv;
+    const cover = Math.max(cv.clientWidth, cv.clientHeight) / Math.max(1, Math.min(cv.clientWidth, cv.clientHeight)) * 0.94;
+    this.view = { cx: s.x ?? 0, cz: s.z ?? 0, zoom: clamp(Math.max(1.35, cover), 1.35, 2.6) };
+    this.#clampView();
     this.#setMode('map');
     this.#renderCard();
     this.#renderFilters();
@@ -265,19 +270,30 @@ export class GameMap {
 
   /** Glide the view onto a point instead of snapping: picks and find-me feel like a map, not a jump cut. */
   #centerOn(x, z, zoom = this.view.zoom) {
-    this.ease = { x: clamp(x, -this.world.half, this.world.half), z: clamp(z, -this.world.half, this.world.half), zoom: clamp(zoom, 1, MAX_ZOOM) };
+    const lim = this.#lim();
+    this.ease = { x: clamp(x, -lim[0], lim[0]), z: clamp(z, -lim[1], lim[1]), zoom: clamp(zoom, 1, MAX_ZOOM) };
     this.vel.x = this.vel.z = 0;
   }
 
+  /** How far the view's centre may go: the map may drift only a sliver past the world's edge. */
+  #lim() {
+    const cv = this.cv, k = this.#scale(cv), w = this.world;
+    const margin = w.extent * 0.05;
+    return [
+      Math.max(0, w.half + margin - cv.clientWidth / (2 * k)),
+      Math.max(0, w.half + margin - cv.clientHeight / (2 * k)),
+    ];
+  }
+
   #clampView() {
-    const h = this.world.half;
-    this.view.cx = clamp(this.view.cx, -h, h);
-    this.view.cz = clamp(this.view.cz, -h, h);
+    const lim = this.#lim();
+    this.view.cx = clamp(this.view.cx, -lim[0], lim[0]);
+    this.view.cz = clamp(this.view.cz, -lim[1], lim[1]);
   }
 
   /** Zoom keeping the world point under (px, py) put; eased when `glide` so wheels and buttons feel soft. */
   #zoomAt(f, px, py, glide = false) {
-    const cv = $('map-canvas'), w = this.#toWorld(px, py);
+    const cv = this.cv, w = this.#toWorld(px, py);
     const z = clamp(this.view.zoom * f, 1, MAX_ZOOM);
     if (glide) { this.zoomTo = { zoom: z, wx: w[0], wy: w[1], px, py }; this.ease = null; return; }
     this.view.zoom = z;
@@ -301,7 +317,7 @@ export class GameMap {
     if (this.zoomTo) {
       const z = this.zoomTo, t = 1 - Math.exp(-14 * dt);
       const nz = v.zoom + (z.zoom - v.zoom) * t;
-      const cv = $('map-canvas'), k = this.#fit(cv);
+      const cv = this.cv, k = this.#fit(cv);
       v.cx = z.wx - (z.px - cv.clientWidth / 2) / (k * nz);
       v.cz = z.wy - (z.py - cv.clientHeight / 2) / (k * nz);
       v.zoom = nz;
@@ -320,13 +336,13 @@ export class GameMap {
 
   /** CSS pixel on the canvas to world metres. */
   #toWorld(px, py) {
-    const cv = $('map-canvas'), k = this.#scale(cv);
+    const cv = this.cv, k = this.#scale(cv);
     return [this.view.cx + (px - cv.clientWidth / 2) / k, this.view.cz + (py - cv.clientHeight / 2) / k];
   }
 
   /** The nearest place to a canvas point, within `snap` CSS pixels. */
   #placeAt(px, py, snap = 18) {
-    const cv = $('map-canvas'), k = this.#scale(cv);
+    const cv = this.cv, k = this.#scale(cv);
     let best = null, bd = snap;
     for (const d of this.#visible()) {
       const x = cv.clientWidth / 2 + (d.x - this.view.cx) * k, y = cv.clientHeight / 2 + (d.z - this.view.cz) * k;
@@ -338,7 +354,7 @@ export class GameMap {
 
   // ---------------------------------------------------------------- input
   #bind() {
-    const cv = $('map-canvas');
+    const cv = this.cv;
     const pts = new Map();
     let drag = null, pinch = 0, moved = 0;
     const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -442,7 +458,7 @@ export class GameMap {
   #hover(px, py, e) {
     const d = this.#placeAt(px, py, 16);
     this.hover = d;
-    const cv = $('map-canvas');
+    const cv = this.cv;
     cv.classList.toggle('over', !!d);
     const tip = $('tip');
     if (!d) { tip.classList.add('hidden'); this.#draw(); return; }
@@ -486,7 +502,7 @@ export class GameMap {
 
   /** Per-frame analog input: the left stick pans, the right stick pans faster, the triggers zoom. */
   analog(dt, move, look, lt, rt) {
-    const cv = $('map-canvas'), k = this.#scale(cv);
+    const cv = this.cv, k = this.#scale(cv);
     if (lt > 0.05 || rt > 0.05) this.#zoomAt(Math.exp((rt - lt) * dt * 2.2), cv.clientWidth / 2, cv.clientHeight / 2);
     const pan = (vx, vy, sp) => { this.view.cx += vx * sp * dt / k; this.view.cz += vy * sp * dt / k; this.#clampView(); };
     pan(move[0], move[1], 520);
@@ -506,7 +522,7 @@ export class GameMap {
     const dt = Math.min(0.05, this.lastT ? (now - this.lastT) / 1000 : 0);
     this.lastT = now;
     this.#physics(dt);
-    const cv = $('map-canvas'), g = cv.getContext('2d');
+    const cv = this.cv, g = cv.getContext('2d');
     const dpr = devicePixelRatio, W = cv.clientWidth, H = cv.clientHeight;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);

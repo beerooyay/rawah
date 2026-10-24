@@ -9,11 +9,12 @@ import { clamp } from './noise.js';
 // ground). Deep water, trees, boulders and slopes too steep for the engine all
 // stop it.
 //
-// The model: drop a glTF at assets/vehicles/atv.glb and it is used; until
-// then a procedural stand-in is drawn. See MODEL for how it is fitted.
+// The model: point MODEL.file at a glTF (e.g. './assets/vehicles/atv.glb') and
+// it is used; null means the procedural stand-in is drawn without probing.
+// See MODEL for how it is fitted.
 
 const MODEL = {
-  file: './assets/vehicles/atv.glb',
+  file: null,
   length: 1.95,        // metres, nose to tail
   flip: false,         // glTF vehicles face +z and are turned to face -z like the hiker; set true if yours comes in nose-first the other way
 };
@@ -53,6 +54,7 @@ export class ATV {
   /** Replace the stand-in with the glTF, if there is one. */
   async load() {
     try {
+      if (!MODEL.file) return false;
       const head = await fetch(MODEL.file, { method: 'HEAD' });
       if (!head.ok) return false;
       const gltf = await new GLTFLoader().loadAsync(MODEL.file);
