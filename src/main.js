@@ -51,6 +51,15 @@ if (settings.fov === 72) settings.fov = 80;      // the old default: a little wi
 const calendar = new Calendar(settings.doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
+if (DEV) {
+  // local only, for A/B timing a preset: ?aa=0&logdepth=0&shadows=0&dpr=1&grass=30 (grass radius in metres)
+  const u = new URLSearchParams(location.search);
+  if (u.has('aa')) Q.aa = u.get('aa') === '1';
+  if (u.has('logdepth')) Q.logDepth = u.get('logdepth') === '1';
+  if (u.has('shadows')) Q.shadows = u.get('shadows') === '1';
+  if (u.has('dpr')) Q.dpr = Number(u.get('dpr'));
+  if (u.has('grass')) Q.grass = { ...Q.grass, radius: Number(u.get('grass')) };
+}
 settings.shadows ??= Q.shadows;
 if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
