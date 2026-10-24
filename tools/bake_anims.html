@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- Bakes Mixamo clips from a donor model (three.js's Xbot) into data/anims.json:
+     per-bone rotations relative to the donor's bind pose, in character space
+     (facing +z, left on +x), sampled at 30 fps. Retargets onto any Mixamo rig.
+     Run: serve the rawah folder, open tools/bake_anims.html, it posts the JSON to window.result. -->
+<script type="importmap">{ "imports": { "three": "../vendor/three/build/three.module.js", "three/addons/": "../vendor/three/examples/jsm/" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const BONES = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'RightShoulder', 'LeftArm', 'RightArm',
+  'LeftForeArm', 'RightForeArm', 'LeftHand', 'RightHand', 'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase'];
+const CLIPS = { idle: 'idle', walk: 'walk', run: 'run', nod: 'agree', shake: 'headShake' };
+const gltf = await new GLTFLoader().loadAsync('./.cache/Xbot.glb');
+const root = gltf.scene;
+const bones = {};
+root.traverse((o) => { if (o.isBone) { const n = o.name.replace(/^mixamorig[:_]?/, ''); if (BONES.includes(n)) bones[n] = o; } });
+root.updateMatrixWorld(true);
+const bind = {}, hips0 = bones.Hips.getWorldPosition(new THREE.Vector3()).y;
+for (const n of BONES) bind[n] = bones[n].getWorldQuaternion(new THREE.Quaternion());
+const mixer = new THREE.AnimationMixer(root);
+const out = { fps: 30, bones: BONES, clips: {} };
+const r4 = (v) => Math.round(v * 1e4) / 1e4;
+for (const [role, name] of Object.entries(CLIPS)) {
+  const clip = gltf.animations.find((c) => c.name === name);
+  mixer.stopAllAction();
+  const a = mixer.clipAction(clip); a.play();
+  const frames = Math.max(2, Math.round(clip.duration * 30));
+  const q = [], hy = [];
+  for (let f = 0; f < frames; f++) {
+    mixer.setTime((f / frames) * clip.duration);
+    root.updateMatrixWorld(true);
+    for (const n of BONES) {
+      const d = bones[n].getWorldQuaternion(new THREE.Quaternion()).multiply(bind[n].clone().invert());
+      q.push(r4(d.x), r4(d.y), r4(d.z), r4(d.w));
+    }
+    hy.push(r4(bones.Hips.getWorldPosition(new THREE.Vector3()).y / hips0 - 1));
+  }
+  out.clips[role] = { duration: r4(clip.duration), frames, q, hips: hy };
+}
+window.result = JSON.stringify(out);
+</script>

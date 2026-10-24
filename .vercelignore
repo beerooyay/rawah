@@ -1,8 +1,3 @@
-tools/
-devserver.py
-AGENTS.md
-assets/characters/blaize/*.fbx
-assets/characters/grant/*.fbx
-assets/characters/corey/*.fbx
+assets/**/*.fbx
 rawah-landmarks/
 .git/

@@ -16,9 +16,8 @@ function limb(len, r, color) {
 }
 
 export class Avatar {
-  constructor(scene) {
+  constructor(scene, { jacket = 0x3d6b5a, pants = 0x4b4a45, skin = 0xc99a78, pack = 0xb4532a, cap = 0x8a2f24 } = {}) {
     this.root = new THREE.Group();
-    const jacket = 0x3d6b5a, pants = 0x4b4a45, skin = 0xc99a78, pack = 0xb4532a;
     this.hips = new THREE.Group();
     this.hips.position.y = 0.95;
     this.root.add(this.hips);
@@ -39,12 +38,12 @@ export class Avatar {
     this.head.position.y = 0.72;
     const face = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), mat(skin));
     face.position.y = 0.1;
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(0x8a2f24));
-    cap.position.y = 0.12;
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.015, 12, 1, false, 0, Math.PI), mat(0x8a2f24));
+    const capM = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(cap));
+    capM.position.y = 0.12;
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.015, 12, 1, false, 0, Math.PI), mat(cap));
     brim.position.set(0, 0.12, -0.08);
     brim.rotation.y = Math.PI / 2;
-    this.head.add(face, cap, brim);
+    this.head.add(face, capM, brim);
     this.torso.add(this.head);
     this.legL = limb(0.9, 0.075, pants); this.legL.position.set(-0.1, 0, 0);
     this.legR = limb(0.9, 0.075, pants); this.legR.position.set(0.1, 0, 0);
@@ -90,6 +89,14 @@ export class Avatar {
       this.armL.rotation.x = 1.6 + Math.sin(phase * 1.5) * 1.2; this.armR.rotation.x = 1.6 - Math.sin(phase * 1.5) * 1.2;
       this.legL.rotation.x = Math.sin(phase * 2) * 0.4; this.legR.rotation.x = -Math.sin(phase * 2) * 0.4;
       this.torso.rotation.x = -1.1;
+    } else if (hiker.sitting) {
+      // sitting on the ground, knees up, leaning back on the hands
+      this.legL.rotation.x = this.legR.rotation.x = -1.35;
+      this.armL.rotation.x = this.armR.rotation.x = 0.5;
+      this.torso.rotation.x = 0.18;
+      this.hips.position.y = 0.2;
+      this.torso.rotation.z = 0;
+      return;
     } else {
       this.legL.rotation.x = swing; this.legR.rotation.x = -swing;
       this.armL.rotation.x = -swing * 0.8; this.armR.rotation.x = swing * 0.8;
