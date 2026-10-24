@@ -9,6 +9,8 @@ import { clamp } from './noise.js';
 // and breathing that quickens when you're spent. Third person orbits a
 // shoulder-offset camera behind the hiker and keeps it out of the hillside.
 
+const SPRINT_FOV = 11;       // degrees wider while sprinting
+
 export class CameraRig {
   constructor(camera, world, hiker, avatar) {
     this.camera = camera;
@@ -22,6 +24,7 @@ export class CameraRig {
     this.dip = 0; this.dipVel = 0;
     this.roll = 0;
     this.fovKick = 0;
+    this.fovFx = 1;           // how much of the speed widening you get (Settings), 0 = none
     this.breath = 0;
     this.dist = 4.2;          // third-person boom length
     this.boom = 4.2;
@@ -42,7 +45,8 @@ export class CameraRig {
   /** Call when the hiker lands; `fall` in metres. */
   land(fall) { this.dipVel -= Math.min(3.2, 0.8 + fall * 0.55); }
 
-  update(dt, { zoom = 0, sprinting = false, strafe = 0 } = {}) {
+  /** `sprinting`: pushing the pace on foot. `fovBoost`: extra degrees wanted right now, from a vehicle's speed. */
+  update(dt, { zoom = 0, sprinting = false, strafe = 0, fovBoost = 0 } = {}) {
     const h = this.hiker, cam = this.camera;
     h.eye(this._eye);
     const speed = Math.hypot(h.vel.x, h.vel.z);
@@ -69,7 +73,8 @@ export class CameraRig {
     const bobY = (Math.abs(Math.sin(ph)) - 0.64) * bobAmp * 2;   // lowest at each footfall
     const sway = Math.sin(ph) * (0.016 + run * 0.012) * walkK;  // weight shifting foot to foot
     this.roll += ((-strafe * 0.026 + Math.sin(ph) * 0.006 * walkK) - this.roll) * Math.min(1, dt * 6);
-    this.fovKick += ((sprinting ? 6 : 0) - this.fovKick) * Math.min(1, dt * 3);
+    const fovWant = Math.max(sprinting ? SPRINT_FOV : 0, fovBoost) * this.fovFx;
+    this.fovKick += (fovWant - this.fovKick) * Math.min(1, dt * (fovWant > this.fovKick ? 2.4 : 3.5));
     const fov = this.baseFov + this.fovKick;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
 

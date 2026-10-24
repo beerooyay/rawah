@@ -1,6 +1,22 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "rawah", "runtimeExecutable": "python3", "runtimeArgs": ["devserver.py"], "port": 5179 }
+    {
+      "name": "rawah",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "devserver.py"
+      ],
+      "port": 5179
+    },
+    {
+      "name": "rawah-5180",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "devserver.py",
+        "5180"
+      ],
+      "port": 5180
+    }
   ]
 }

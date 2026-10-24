@@ -46,7 +46,8 @@ const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
 // the title screen picks the date (day of year), the starting hour and the trailhead; a new date reloads the world
-const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', doy: SEASONS.autumn.doy, hour: 7.25, trailhead: 'West Branch Trailhead', moon: 'new' });
+const settings = loadJSON('rawah-settings', { sens: 1, fov: 80, fovfx: 1, volume: 0.8, timeScale: 1, quality: 'auto', doy: SEASONS.autumn.doy, hour: 7.25, trailhead: 'West Branch Trailhead', moon: 'new' });
+if (settings.fov === 72) settings.fov = 80;      // the old default: a little wider now
 const calendar = new Calendar(settings.doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
@@ -524,6 +525,8 @@ const bindRange = (id, key, apply, fmt = (v) => v) => {
 };
 bindRange('set-sens', 'sens', null, (v) => `${v.toFixed(2)}×`);
 bindRange('set-fov', 'fov', () => rig.setFov(settings.fov), (v) => `${Math.round(v)}°`);
+bindRange('set-fovfx', 'fovfx', () => { rig.fovFx = settings.fovfx; }, (v) => (v < 0.05 ? 'Off' : `${Math.round(v * 100)}%`));
+rig.fovFx = settings.fovfx;
 bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume), (v) => `${Math.round(v * 100)}%`);
 bindRange('set-time', 'timeScale', null, (v) => `${v.toFixed(1)}×`);
 $('set-quality').value = settings.quality || 'auto';
@@ -1443,7 +1446,8 @@ function tick(dt, draw = true) {
     cullView();
     flora.update(u < 0.55 ? flyFocus : p, 2, dt);
   } else {
-    rig.update(dt, { zoom: map.open ? 0 : zoom, sprinting: atv.riding ? ctl.sprint && atv.speed > 6 : ctl.sprint && hiker.moving > 0.5 && hiker.stamina > 2, strafe: ctl.move.x });
+    // the view opens up with speed: a little when you sprint, and more and more as the quad gets going
+    rig.update(dt, { zoom: map.open ? 0 : zoom, sprinting: !atv.riding && ctl.sprint && hiker.moving > 0.5 && hiker.stamina > 2, strafe: ctl.move.x, fovBoost: atv.riding ? clamp(Math.abs(atv.speed) / 17, 0, 1) ** 1.3 * 16 + (ctl.sprint && atv.speed > 6 ? 4 : 0) : 0 });
     floraTimer += dt;
     cullView();
     flora.update(p, floraTimer > 0.12 ? 1 : 0, dt);
