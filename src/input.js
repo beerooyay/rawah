@@ -163,28 +163,44 @@ export class Input {
     document.body.classList.add('touch');
     const ui = document.createElement('div');
     ui.id = 'touch';
+    // every control is an icon: movement on the left thumb, the action cluster
+    // under the right, camp chores tucked low-left, menus along the top rail
+    const icon = (d) => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+    const IC = {
+      sprint: '<path d="M10 2 4 9h3l-2 6 8-9h-3l2-4z"/>',
+      duck: '<path d="M3 7.5l5 4.5 5-4.5"/>',
+      act: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2.4M8 11.8v2.4M1.8 8h2.4M11.8 8h2.4"/>',
+      hop: '<path d="M8 14V3M3.6 7.4 8 3l4.4 4.4"/>',
+      camp: '<path d="M2 12.5 8 3.5l6 9zM6.5 12.5 8 10l1.5 2.5"/>',
+      fire: '<path d="M8 2c1 2.4 4 3.8 4 7a4 4 0 0 1-8 0c0-1.8 1.4-3.3 2.4-4.8.7.9 1.5 1 1.6-2.2z"/>',
+      rest: '<path d="M12.5 2.8a5.8 5.8 0 1 0 1.7 10.6A6.8 6.8 0 0 1 12.5 2.8z"/>',
+      together: '<circle cx="5.3" cy="5.5" r="1.9"/><circle cx="10.7" cy="5.5" r="1.9"/><path d="M2 12.6c0-2 1.5-3 3.3-3s3.3 1 3.3 3M6.2 12.6c.2-1.8 1.7-3 4.5-3 1.8 0 3.3 1 3.3 3"/>',
+      cam: '<rect x="1.8" y="5" width="8.4" height="6.5" rx="1.4"/><path d="M10.2 8l4-2v5.5l-4-2"/>',
+      tool: '<path d="M10.3 2.4a3.2 3.2 0 0 0-4.1 4.1L2.5 10.2l2.3 2.3 3.7-3.7a3.2 3.2 0 0 0 4.1-4.1l-2 2-1.8-1.8z"/>',
+      map: '<path d="M5 3 8 4.4l3-1.4 3 1.5v8l-3-1.5-3 1.5-3-1.5-3 1.5v-8zM8 4.4v8.6M11 3v7.5"/>',
+      pause: '<path d="M5.4 3.5v9M10.6 3.5v9"/>',
+    };
+    const btn = (code, ic, label, cls = '') => `<button data-code="${code}" class="${cls}" aria-label="${label}">${icon(IC[ic])}</button>`;
     ui.innerHTML = `
       <div class="t-stick"><i></i></div>
-      <div class="t-col">
-        <button data-code="KeyE">Grab</button>
-        <button data-code="KeyQ">Punch</button>
-        <button data-code="KeyR">Hook</button>
-        <button data-code="KeyX">Duck</button>
-        <button data-code="Space" class="big">Hop</button>
+      <div class="t-acts">
+        <div class="t-stack">${btn('ShiftLeft', 'sprint', 'Sprint', 'tog')}${btn('KeyX', 'duck', 'Duck')}</div>
+        ${btn('KeyE', 'act', 'Grab', 'mid')}
+        ${btn('Space', 'hop', 'Hop', 'big')}
       </div>
-      <div class="t-row">
-        <button data-code="ShiftLeft" data-toggle>Fast</button>
-        <button data-code="KeyC">Camp</button>
-        <button data-code="KeyF">Fire</button>
-        <button data-code="KeyZ" data-hold>Rest</button>
+      <div class="t-camp">
+        ${btn('KeyC', 'camp', 'Camp')}
+        ${btn('KeyF', 'fire', 'Fire')}
+        ${btn('KeyZ', 'rest', 'Rest')}
       </div>
       <div class="t-top">
-        <button data-code="KeyH">Together</button>
-        <button data-code="KeyV">Cam</button>
-        <button data-code="KeyT">Tool</button>
-        <button data-code="KeyM">Map</button>
-        <button data-code="Escape">❚❚</button>
+        ${btn('KeyH', 'together', 'Together')}
+        ${btn('KeyV', 'cam', 'Camera')}
+        ${btn('KeyT', 'tool', 'Tool')}
+        ${btn('KeyM', 'map', 'Map')}
+        ${btn('Escape', 'pause', 'Menu')}
       </div>`;
+    ui.querySelector('.tog').dataset.toggle = '';
     root.appendChild(ui);
     const stick = ui.querySelector('.t-stick'), knob = stick.querySelector('i');
     const R = 56;

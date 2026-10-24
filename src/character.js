@@ -22,6 +22,8 @@ export const CHARACTERS = {
   blaize: 'assets/characters/blaize/blaize.glb',
   grant: 'assets/characters/grant/grant.glb',
   corey: 'assets/characters/corey/corey.glb',
+  taylor: 'assets/characters/taylor.glb',
+  trey: 'assets/characters/trey/trey.glb',
 };
 
 // world-space scale for the torso and arms (see #bulk); Corey has the least to start with
@@ -80,7 +82,7 @@ const RETARGET = globalThis.RAWAH_RETARGET ?? true;   // fit each clip to the ri
 const Y_AXIS = new THREE.Vector3(0, 1, 0), X_AXIS = new THREE.Vector3(1, 0, 0);
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
 const UPRIGHT_SKIP = /sit|lie|lying|fall|prone|climb|swim|hang|crawl|kneel|crouch|down|knock|flip|stomp/i;
-const UPRIGHT_WEIGHT = 0.85;
+const UPRIGHT_WEIGHT = 0.97;
 const FLIP_AIR = 2 * 7.4 / 18;   // seconds a flip jump spends in the air (launch speed over gravity)
 
 export class Character {

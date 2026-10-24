@@ -146,8 +146,8 @@ export class Grass {
           float alpine = smoothstep(3330.0, 3560.0, y0);
           vSat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
           vLush = clamp((vSat.g - vSat.r) * 8.0, 0.0, 1.0);
-          float fade = 1.0 - smoothstep(uRadius * 0.6, uRadius, r);
-          float live = step(h1 * 0.8 + h3 * 0.2, grow * 1.7);
+          float fade = 1.0 - smoothstep(uRadius * 0.72, uRadius, r);
+          float live = step(h1 * 0.8 + h3 * 0.2, grow * 2.0);
           // each clump its own shade: some straw-pale, some russet, some dun
           vTone = mix(vec3(1.08, 0.98, 0.86), vec3(0.88, 0.78, 0.7), h3) * (0.85 + h1 * 0.3);
           // buried under the snowpack (only the tallest tufts poke through the edges)

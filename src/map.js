@@ -33,6 +33,10 @@ export class GameMap {
     this.filter = 'all';
     this.query = '';
     this.state = null;
+    this.vel = { x: 0, z: 0 };      // pan inertia, world metres a second
+    this.ease = null;               // the view is gliding here after a pick
+    this.zoomTo = null;             // eased wheel zoom, anchored on the cursor
+    this.lastT = 0;
     this.onTravel = () => {};
     this.onClose = () => {};
     this.#bind();
@@ -103,6 +107,7 @@ export class GameMap {
     this.view = { cx: s.x ?? 0, cz: s.z ?? 0, zoom: 1.4 };
     this.sel = null; this.hover = null;
     this.query = ''; this.filter = 'all';
+    this.vel = { x: 0, z: 0 }; this.ease = null; this.zoomTo = null; this.lastT = 0;
     $('map-search').value = '';
     this.#buildList(s);
     $('map').classList.remove('hidden');
@@ -206,9 +211,9 @@ export class GameMap {
     for (const d of rows.slice(0, 40)) {
       const b = document.createElement('button');
       b.className = `row${this.sel === d ? ' on' : ''}`;
-      b.innerHTML = `<i class="dot ${d.kind}"></i><span class="nm"></span><small></small>`;
+      b.innerHTML = `<i class="dot ${d.kind}"></i><span><span class="nm"></span><small></small></span>`;
       b.querySelector('.nm').textContent = d.name;
-      b.querySelector('small').textContent = dist(d.away);
+      b.querySelector('small').textContent = `${KIND[d.kind] || 'Place'} · ${dist(d.away)}`;
       b.onclick = () => { this.sel = d; this.#renderCard(); this.#renderResults(); this.#centerOn(d.x, d.z, Math.max(this.view.zoom, 2.4)); };
       b.ondblclick = () => { this.sel = d; this.travel(); };
       el.appendChild(b);
@@ -258,9 +263,10 @@ export class GameMap {
   #fit(cv) { return Math.min(cv.clientWidth, cv.clientHeight) / (this.world.extent * 1.02); }
   #scale(cv) { return this.#fit(cv) * this.view.zoom; }   // CSS px per metre
 
+  /** Glide the view onto a point instead of snapping: picks and find-me feel like a map, not a jump cut. */
   #centerOn(x, z, zoom = this.view.zoom) {
-    this.view.cx = x; this.view.cz = z; this.view.zoom = clamp(zoom, 1, MAX_ZOOM);
-    this.#clampView();
+    this.ease = { x: clamp(x, -this.world.half, this.world.half), z: clamp(z, -this.world.half, this.world.half), zoom: clamp(zoom, 1, MAX_ZOOM) };
+    this.vel.x = this.vel.z = 0;
   }
 
   #clampView() {
@@ -269,15 +275,47 @@ export class GameMap {
     this.view.cz = clamp(this.view.cz, -h, h);
   }
 
-  #zoomAt(f, px, py) {
-    const cv = $('map-canvas'), k = this.#scale(cv), w = this.#toWorld(px, py);
-    this.view.zoom = clamp(this.view.zoom * f, 1, MAX_ZOOM);
+  /** Zoom keeping the world point under (px, py) put; eased when `glide` so wheels and buttons feel soft. */
+  #zoomAt(f, px, py, glide = false) {
+    const cv = $('map-canvas'), w = this.#toWorld(px, py);
+    const z = clamp(this.view.zoom * f, 1, MAX_ZOOM);
+    if (glide) { this.zoomTo = { zoom: z, wx: w[0], wy: w[1], px, py }; this.ease = null; return; }
+    this.view.zoom = z;
     const k2 = this.#scale(cv);
     // keep the point under the pointer where it was
     this.view.cx = w[0] - (px - cv.clientWidth / 2) / k2;
     this.view.cz = w[1] - (py - cv.clientHeight / 2) / k2;
+    this.zoomTo = null;
     this.#clampView();
-    void k;
+  }
+
+  /** Per-frame view physics: inertia after a throw, the eased zoom, and the pick glide. Runs inside #draw. */
+  #physics(dt) {
+    const v = this.view;
+    if (Math.abs(this.vel.x) + Math.abs(this.vel.z) > 1) {
+      v.cx -= this.vel.x * dt; v.cz -= this.vel.z * dt;
+      const d = Math.exp(-4 * dt);
+      this.vel.x *= d; this.vel.z *= d;
+      this.#clampView();
+    } else this.vel.x = this.vel.z = 0;
+    if (this.zoomTo) {
+      const z = this.zoomTo, t = 1 - Math.exp(-14 * dt);
+      const nz = v.zoom + (z.zoom - v.zoom) * t;
+      const cv = $('map-canvas'), k = this.#fit(cv);
+      v.cx = z.wx - (z.px - cv.clientWidth / 2) / (k * nz);
+      v.cz = z.wy - (z.py - cv.clientHeight / 2) / (k * nz);
+      v.zoom = nz;
+      if (Math.abs(z.zoom - nz) < 0.002) { v.zoom = z.zoom; this.zoomTo = null; }
+      this.#clampView();
+    }
+    if (this.ease) {
+      const e = this.ease, t = 1 - Math.exp(-8 * dt);
+      v.cx += (e.x - v.cx) * t; v.cz += (e.z - v.cz) * t; v.zoom += (e.zoom - v.zoom) * t;
+      if (Math.hypot(e.x - v.cx, e.z - v.cz) < 1.5 && Math.abs(e.zoom - v.zoom) < 0.005) {
+        v.cx = e.x; v.cz = e.z; v.zoom = e.zoom; this.ease = null;
+      }
+      this.#clampView();
+    }
   }
 
   /** CSS pixel on the canvas to world metres. */
@@ -308,6 +346,7 @@ export class GameMap {
       cv.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, at(e));
       drag = at(e); moved = 0;
+      this.vel.x = this.vel.z = 0; this.ease = null; this.zoomTo = null;   // a hand on the map owns it now
       if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); }
     });
     cv.addEventListener('pointermove', (e) => {
@@ -330,6 +369,15 @@ export class GameMap {
       if (moved > 4) {
         this.view.cx -= dx / k; this.view.cz -= dy / k;
         this.#clampView();
+        const now = performance.now();   // remember the flick, so letting go throws the view
+        if (this.mvT) {
+          const dms = now - this.mvT;
+          if (dms > 0 && dms < 200) {
+            this.vel.x = this.vel.x * 0.7 + ((dx / dms) * 1000 / k) * 0.3;
+            this.vel.z = this.vel.z * 0.7 + ((dy / dms) * 1000 / k) * 0.3;
+          }
+        }
+        this.mvT = now;
         drag = [px, py];
         cv.classList.add('drag');
         this.#draw();
@@ -340,6 +388,7 @@ export class GameMap {
       pts.delete(e.pointerId);
       if (pts.size === 0) {
         cv.classList.remove('drag');
+        this.mvT = 0;
         // a click without a drag picks what is under the pointer
         if (was === 1 && moved <= 4) {
           const [px, py] = at(e), d = this.#placeAt(px, py, 22);
@@ -356,7 +405,7 @@ export class GameMap {
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
       const [px, py] = at(e);
-      this.#zoomAt(Math.exp(-e.deltaY * 0.0015), px, py);
+      this.#zoomAt(Math.exp(-e.deltaY * 0.0015), px, py, true);
       this.#draw();
     }, { passive: false });
     cv.addEventListener('dblclick', (e) => {
@@ -364,8 +413,8 @@ export class GameMap {
       if (d) { this.sel = d; this.travel(); }
     });
 
-    $('map-zin').onclick = () => { this.#zoomAt(1.6, cv.clientWidth / 2, cv.clientHeight / 2); this.#draw(); };
-    $('map-zout').onclick = () => { this.#zoomAt(1 / 1.6, cv.clientWidth / 2, cv.clientHeight / 2); this.#draw(); };
+    $('map-zin').onclick = () => { this.#zoomAt(1.6, cv.clientWidth / 2, cv.clientHeight / 2, true); this.#draw(); };
+    $('map-zout').onclick = () => { this.#zoomAt(1 / 1.6, cv.clientWidth / 2, cv.clientHeight / 2, true); this.#draw(); };
     $('map-find').onclick = () => { if (this.state) { this.#centerOn(this.state.x, this.state.z, Math.max(this.view.zoom, 2.4)); this.#draw(); } };
     $('map-close').onclick = () => this.onClose();
     $('mc-go').onclick = () => this.travel();
@@ -377,8 +426,8 @@ export class GameMap {
     addEventListener('keydown', (e) => {
       if (!this.open || search === document.activeElement) return;
       if (e.key === '/') { e.preventDefault(); search.focus(); return; }
-      if (e.key === '+' || e.key === '=') this.#zoomAt(1.4, cv.clientWidth / 2, cv.clientHeight / 2);
-      else if (e.key === '-') this.#zoomAt(1 / 1.4, cv.clientWidth / 2, cv.clientHeight / 2);
+      if (e.key === '+' || e.key === '=') this.#zoomAt(1.4, cv.clientWidth / 2, cv.clientHeight / 2, true);
+      else if (e.key === '-') this.#zoomAt(1 / 1.4, cv.clientWidth / 2, cv.clientHeight / 2, true);
       else if (e.key === 'Enter') this.travel();
       else if (/^Arrow/.test(e.key)) {
         const s = e.shiftKey ? 500 : 160 / this.view.zoom;
@@ -453,6 +502,10 @@ export class GameMap {
 
   #draw() {
     if (!this.open || this.mode !== 'map') return;
+    const now = performance.now();
+    const dt = Math.min(0.05, this.lastT ? (now - this.lastT) / 1000 : 0);
+    this.lastT = now;
+    this.#physics(dt);
     const cv = $('map-canvas'), g = cv.getContext('2d');
     const dpr = devicePixelRatio, W = cv.clientWidth, H = cv.clientHeight;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }

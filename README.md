@@ -194,6 +194,7 @@ python3 bake_world.py         # ~10 min cold; downloads cache in tools/.cache/
   - Adaptive resolution trades pixels for frame rate, between 60% and 100% of the quality preset.
 - **Sky and weather:** a cloud deck at 4,700 m is drawn from tiling noise. It's lit from the sun's side, with silver linings toward the sun and dark, thick bases in storms. The same density function shades the ground below, along the sun's ray, so cloud shadows are where the clouds are. Rain and snow are GPU particles placed from `gl_InstanceID` in a box that wraps around the camera, in world space.
 - **Distance:**
+  - The far ground is three nested square rings that double in size out to about 60 km (`farTerrain` in `src/terrain.js`). The inner one is the baked 30 km heightmap; past its edge the ridges are a seeded fractal that eases in from the edge, and the outer rings are painted timber and rock. It's built once at load and never re-meshed.
   - Tree impostors reach about 1.9 km on high (1.5 km medium), thinning with range.
   - Beyond them the terrain paints a canopy: crown-sized noise up close, groves and gaps further out, only where the land cover or the satellite colour says forest (`ALBEDO` in `src/terrain.js`). The fine octaves fade out on their own with mipmapping.
   - Valley haze (`uValley` in `src/atmosphere.js`) adds fog that pools in low air and thins with height, so ridges stack in layers. It is heaviest at dawn and burns off by midmorning.

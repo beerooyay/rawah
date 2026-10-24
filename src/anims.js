@@ -71,11 +71,14 @@ function restOf(group) {
 }
 
 const _a = new THREE.Quaternion(), _b = new THREE.Quaternion(), _c = new THREE.Quaternion();
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 // the arm chain, each bone with the one it points at. The clips are authored on a straight T-pose; a rig
 // whose arms rest bent or lowered would carry that bend into every pose, so these bones are first turned
 // (about their own origin) until they point the way the clips' bones do at rest.
 const ARM_CHAIN = [['Shoulder', 'Arm'], ['Arm', 'ForeArm'], ['ForeArm', 'Hand'], ['Hand', 'HandMiddle1']];
+// how far past the clips' rest the upper arms sit, so the arms hang off the ribs instead of hugging them
+const SPREAD = 0.24;
 
 /** For each arm bone of the target, its rest orientation with the bone turned to point where the clips' bone does. */
 export function straighten(srcRest, target) {
@@ -88,6 +91,7 @@ export function straighten(srcRest, target) {
       const bone = target.bones.find((x) => x.name === na);
       if (!sa || !sb || !ta || !tb || !bone) continue;
       d1.copy(tb).sub(ta).normalize(); d2.copy(sb).sub(sa).normalize();
+      if (a === 'Arm') d2.applyAxisAngle(Z_AXIS, side === 'Left' ? SPREAD : -SPREAD);
       out.set(na, new THREE.Quaternion().setFromUnitVectors(d1, d2).multiply(bone.wq));
     }
   }

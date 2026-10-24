@@ -319,7 +319,7 @@ function mergeWood(group) {
 
 const fmtDist = (m) => `${(m / 1609.34).toFixed(1)} mi`;
 
-export function buildSigns(world) {
+export function buildSigns(world, models) {
   const group = new THREE.Group();
   const place = (obj, x, z, faceX, faceZ) => {
     obj.position.set(x, world.height(x, z) - 0.05, z);
@@ -344,16 +344,19 @@ export function buildSigns(world) {
       place(s, x0 + (dx / l) * 3 - (dz / l) * 1.8, z0 + (dz / l) * 3 + (dx / l) * 1.8, -dz / l, dx / l);
     }
   }
-  // the West Branch Trailhead gets the wilderness sign and your car
-  const th = world.places.find((p) => p.kind === 'trailhead' && p.trail === 'West Branch Trail')
-    || world.places.find((p) => p.kind === 'trailhead');
-  if (th) {
-    world.mainTrailhead = th;
+  // every trailhead parks the two cars nose to tail on the road and gives each a start spot beside it.
+  // The default trailhead (West Branch) also gets the wilderness sign
+  const trailheads = world.places.filter((p) => p.kind === 'trailhead');
+  const main = trailheads.find((p) => p.trail === 'West Branch Trail') || trailheads[0];
+  world.mainTrailhead = main;
+  world.starts = {};
+  for (const th of trailheads) {
     let road = null, best = 0, bd = Infinity;
     for (const t of world.trails) {
       if (t.kind === 'trail') continue;
       t.dense.forEach(([x, z], i) => { const d = Math.hypot(x - th.x, z - th.z); if (d < bd) { bd = d; best = i; road = t; } });
     }
+    if (!road) continue;
     const trail = named.find((t) => t.name === th.trail);
     const tp = trail ? trail.dense[Math.min(12, trail.dense.length - 1)] : [th.x + 10, th.z];
     // park on flat ground beside the road, clear of water, trail and trees
@@ -367,7 +370,7 @@ export function buildSigns(world) {
           const x = ox - rz * off * side, z = oz + rx * off * side;
           const brook = world.nearestStream(x, z);
           const near = world.nearestTrail(x, z);
-          if (world.localGrade(x, z) > 0.14 || world.localGrade(x + 2 * rx, z + 2 * rz) > 0.14) continue;
+          if (world.localGrade(x, z) > 0.14 || world.localGrade(x + 2 * rx + CAR_LENGTH * rx, z + 2 * rz + CAR_LENGTH * rz) > 0.14) continue;
           if (brook.stream && brook.d < brook.stream.width / 2 + 7) continue;
           if (world.lakeAt(x, z) || (near.trail && near.d < 3.6)) continue;
           const sc = Math.hypot(x - th.x, z - th.z);
@@ -375,17 +378,26 @@ export function buildSigns(world) {
         }
       }
     }
-    if (spot) {
-      const car = buildCar();
-      place(car, spot.x, spot.z, spot.rx, spot.rz);
-      world.carSpot = { x: spot.x, z: spot.z };
-      // the sign stands where the trail leaves, you start beside the car facing it
+    if (!spot) continue;
+    const cars = CAR_ORDER.map((model, i) => {
+      const x = spot.x + spot.rx * i * CAR_SPACING, z = spot.z + spot.rz * i * CAR_SPACING;
+      place(carModel(models[model]), x, z, spot.rx, spot.rz);
+      // the start spot is on the trail side of the car, a couple of metres off its door
+      return { model, x, z, start: { x: x - spot.rz * 2.4 * -spot.side, z: z + spot.rx * 2.4 * -spot.side, toward: tp } };
+    });
+    world.starts[th.name] = { cars };
+    if (th === main) {
+      // the vault toilet sits at the end of the lot, a few metres behind the cars; its exact spot is approximate
+      const ox = spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3), oz = spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
+      place(landmark(models.outhouse, 2.5), ox, oz, spot.rx, spot.rz);
+    }
+    if (th === main) {
+      // the sign stands where the trail leaves
       const sx = th.x + (tp[0] - th.x) * 0.25, sz = th.z + (tp[1] - th.z) * 0.25;
       const fx = tp[0] - th.x, fz = tp[1] - th.z, fl = Math.hypot(fx, fz) || 1;
-      const big = sign(['RAWAH WILDERNESS', th.name, 'Roosevelt National Forest'], 3.2, 1.6, 2.6, true);
-      place(big, sx - (fz / fl) * 4, sz + (fx / fl) * 4, -fx / fl, -fz / fl);
-      const ex = spot.x - spot.rz * 2.4 * -spot.side, ez = spot.z + spot.rx * 2.4 * -spot.side;
-      world.startSpot = { x: ex, z: ez, toward: tp };
+      place(landmark(models.wildernessSign, 2.4), sx - (fz / fl) * 4, sz + (fx / fl) * 4, -fx / fl, -fz / fl);
+      // the trailhead sign stands at the lot, on the car side
+      place(landmark(models.trailheadSign, 2.2), th.x + (fz / fl) * 6, th.z - (fx / fl) * 6, -fx / fl, -fz / fl);
     }
   }
   mergeWood(group);
@@ -433,26 +445,34 @@ export function buildStreams(world) {
   return { group, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
 }
 
-function buildCar() {
+/** The two cars, nose to tail along the road. Anyone can drive either. */
+export const CAR_ORDER = ['civic', 'maverick'];
+const CAR_LENGTH = 4.6, CAR_SPACING = 3.4;
+
+/** A landmark model from assets/landmarks, scaled to `height` metres tall and standing on the origin. */
+function landmark(template, height) {
+  const box = new THREE.Box3().setFromObject(template);
+  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const s = height / size.y;
+  const inner = template.clone(true);
+  inner.scale.setScalar(s);
+  inner.position.set(-c.x * s, -box.min.y * s, -c.z * s);
   const g = new THREE.Group();
-  const paint = new THREE.MeshLambertMaterial({ color: 0x2f5d50 });
-  const glass = new THREE.MeshPhongMaterial({ color: 0x1b2730, shininess: 90, specular: 0x8899aa });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x1d1d1f });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.75, 4.5), paint);
-  body.position.y = 0.75;
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.62, 2.9), glass);
-  cab.position.set(0, 1.42, -0.3);
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 2.7), paint);
-  roof.position.set(0, 1.76, -0.3);
-  const rack = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.1, 2.2), dark);
-  rack.position.set(0, 1.86, -0.3);
-  g.add(body, cab, roof, rack);
-  for (const [x, z] of [[-0.85, 1.4], [0.85, 1.4], [-0.85, -1.4], [0.85, -1.4]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.26, 12), dark);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(x, 0.36, z);
-    g.add(w);
-  }
+  g.add(inner);
+  g.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
+  return g;
+}
+
+/** A glTF car scaled to CAR_LENGTH metres, nose along +z, standing on its wheels at the origin. */
+function carModel(template) {
+  const box = new THREE.Box3().setFromObject(template);
+  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const s = CAR_LENGTH / size.z;
+  const inner = template.clone(true);
+  inner.scale.setScalar(s);
+  inner.position.set(-c.x * s, -box.min.y * s, -c.z * s);
+  const g = new THREE.Group();
+  g.add(inner);
   g.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
   return g;
 }

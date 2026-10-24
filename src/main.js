@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { World } from './world.js';
-import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture } from './terrain.js';
+import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
-import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
+import { buildLakes, buildTrails, buildSigns, buildStreams, CAR_ORDER } from './features.js';
 import { Sky, setSun } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { buildTitle } from './title.js';
 import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
 import { Hud, keyCap } from './hud.js';
@@ -21,6 +23,7 @@ import { Guide } from './guide.js';
 import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
+import { Boxels } from './boxels.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
 import { Weather, REGIMES } from './weather.js';
 import { Precip } from './precip.js';
@@ -33,9 +36,9 @@ const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
 const DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 
-const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', season: 'autumn' });
-if (!SEASONS[settings.season]) settings.season = 'autumn';
-const calendar = new Calendar(SEASONS[settings.season].doy);
+// the title screen picks the date (day of year), the starting hour and the trailhead; a new date reloads the world
+const settings = loadJSON('rawah-settings', { sens: 1, fov: 72, volume: 0.8, timeScale: 1, quality: 'auto', doy: SEASONS.autumn.doy, hour: 7.25, trailhead: 'West Branch Trailhead' });
+const calendar = new Calendar(settings.doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
 settings.shadows ??= Q.shadows;
@@ -99,6 +102,8 @@ const world = await World.load('./data', (f) => setLoad(f * 0.6));
 setLoad(0.7, 'Raising the Medicine Bow crest…');
 await frame();
 const noiseTex = makeNoiseTexture();
+// the rock photograph for steep faces and the far ridges (ROCK in terrain.js)
+ROCK.value = await new THREE.TextureLoader().loadAsync('./assets/terrain/rock.jpg').then((t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; });
 atmosphere.uCloudTex.value = noiseTex;
 setLoad(0.72, 'Measuring the sky from every cirque…');
 await frame();
@@ -116,7 +121,13 @@ sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const lakes = buildLakes(world);
 scene.add(lakes.group);
 scene.add(buildTrails(world));
-scene.add(buildSigns(world));
+// the two cars (parked nose to tail at every trailhead) and the landmarks: outhouse and signs
+const modelFiles = {
+  civic: './assets/cars/civic.glb', maverick: './assets/cars/maverick.glb',
+  outhouse: './assets/landmarks/outhouse.glb', wildernessSign: './assets/landmarks/wilderness-sign.glb', trailheadSign: './assets/landmarks/trailhead-sign.glb',
+};
+const models = Object.fromEntries(await Promise.all(Object.entries(modelFiles).map(async ([k, u]) => [k, (await new GLTFLoader().loadAsync(u)).scene])));
+scene.add(buildSigns(world, models));
 const streams = buildStreams(world);
 scene.add(streams.group);
 const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
@@ -126,10 +137,19 @@ const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
 const grass = new Grass(terrain, Q.grass, flora.uniforms);
 scene.add(grass.mesh);
+const boxels = new Boxels(world, { n: 512 });
+BOXEL.value = boxels.texture;
+let bxLast = null, bxAcc = 0, bxRain = 0;
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
 const charParam = new URLSearchParams(location.search).get('char');
 const playerName = CHARACTERS[charParam] ? charParam : CHARACTERS[settings.character] ? settings.character : 'blaize';
+// the trailhead chosen on the title screen: its start spot and your car become the world's
+const trailhead = world.places.find((p) => p.kind === 'trailhead' && p.name === settings.trailhead) || world.mainTrailhead;
+world.mainTrailhead = trailhead;
+const parked = world.starts[trailhead.name];
+const yours = parked && parked.cars[0];   // anyone can drive either car: the first one is the one you start beside
+if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours.start; }
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
 party.camera = camera;
@@ -159,9 +179,8 @@ const lakeList = world.lakes.filter((l) => l.name);      // every named pool, fo
 // a name shared by several pools (Twin Lakes, Camp Lake) counts and lists once
 const lakeNames = [...new Map([...lakeList].sort((a, b) => b.area - a.area).map((l) => [l.label, l])).values()];
 const peaks = world.places.filter((p) => p.kind === 'peak');
-const trailhead = world.mainTrailhead || world.places.find((p) => p.kind === 'trailhead');
 const state = {
-  hour: 7.25, day: 1, km: 0,
+  hour: settings.hour, day: 1, km: 0,
   discovered: new Set(),
   paused: true, started: false,
   sleeping: 0, resting: false,
@@ -359,7 +378,7 @@ function begin(fresh) {
   if (fresh) {
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     camp.strike();
-    Object.assign(state, { hour: 7.25, day: 1, km: 0 });
+    Object.assign(state, { hour: settings.hour, day: 1, km: 0 });
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
@@ -391,7 +410,7 @@ function begin(fresh) {
   }
 }
 
-$('btn-start').onclick = () => begin(true);
+$('btn-start').onclick = () => startFresh();
 $('btn-continue').onclick = () => begin(false);
 $('btn-resume').onclick = () => pause(false);
 // starting over takes two presses, so it can't happen by accident
@@ -403,28 +422,24 @@ $('btn-restart').onclick = () => {
   setTimeout(() => { if (performance.now() - restartArmed >= 3900) $('btn-restart').textContent = 'Start over'; }, 4000);
 };
 
-// season: the title-screen chips and the settings select both reload into the new season
-function setSeason(name) {
-  if (name === settings.season) return;
-  settings.season = name;
+// title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
+const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
+const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
+buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pick, extent: world.extent, characters: CHARACTERS });
+function startFresh() {
+  Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
   storeJSON('rawah-settings', settings);
-  if (state.started) save();
+  const changed = pick.doy !== booted.doy || pick.trailhead !== booted.trailhead || pick.character !== booted.character;
+  if (!changed) { begin(true); return; }
+  // the date, trailhead and character are built at boot, so a new choice reloads and starts itself
+  try { sessionStorage.setItem('rawah-autostart', '1'); } catch { /* private mode */ }
   $('loading').classList.remove('hidden');
-  $('load-text').textContent = `Turning the year to ${SEASONS[name].label.split(' · ')[1] || name}…`;
-  location.reload();
+  $('load-text').textContent = 'Setting out…';
+  const url = new URL(location.href);
+  url.searchParams.delete('char');
+  location.href = url.href;
 }
-for (const [key, sz] of Object.entries(SEASONS)) {
-  const chip = document.createElement('button');
-  chip.className = `chip${key === settings.season ? ' on' : ''}`;
-  chip.textContent = sz.label.split(' · ')[0];
-  chip.title = sz.label;
-  chip.onclick = () => setSeason(key);
-  $('season-chips').appendChild(chip);
-  const opt = document.createElement('option');
-  opt.value = key; opt.textContent = sz.label;
-  $('set-season').appendChild(opt);
-}
-// who you play as: the other two walk with you. Changing it reloads (the party is built at boot); Continue picks up your save as the new hiker
+// who you play as, from the settings menu: the other two walk with you. Changing it reloads (the party is built at boot); Continue picks up your save as the new hiker
 function setCharacter(name) {
   if (name === playerName) return;
   settings.character = name;
@@ -438,20 +453,12 @@ function setCharacter(name) {
 }
 const cap = (n) => n[0].toUpperCase() + n.slice(1);
 for (const name of Object.keys(CHARACTERS)) {
-  const chip = document.createElement('button');
-  chip.className = `chip${name === playerName ? ' on' : ''}`;
-  chip.textContent = cap(name);
-  chip.onclick = () => setCharacter(name);
-  $('char-chips').appendChild(chip);
   const opt = document.createElement('option');
   opt.value = name; opt.textContent = cap(name);
   $('set-character').appendChild(opt);
 }
 $('set-character').value = playerName;
 $('set-character').onchange = () => setCharacter($('set-character').value);
-$('season-note').textContent = SEASONS[settings.season].label.split(' · ')[1];
-$('set-season').value = settings.season;
-$('set-season').onchange = () => setSeason($('set-season').value);
 
 // settings controls
 const bindRange = (id, key, apply) => {
@@ -863,6 +870,8 @@ while (flora.update(hiker.pos, 8) > 0) { /* fill the first ring of trees */ }
 setLoad(1, 'Ready');
 $('loading').classList.add('hidden');
 $('title').classList.remove('hidden');
+// a new date, trailhead or character reloaded the page so the world is built for it: start straight away
+if (sessionStorage.getItem('rawah-autostart')) { sessionStorage.removeItem('rawah-autostart'); begin(true); }
 
 
 function tick(dt, draw = true) {
@@ -986,6 +995,16 @@ function tick(dt, draw = true) {
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading);
+  // the ground remembers: footsteps wear it, rain wets it, sun dries it —
+  // every event's certified cone decides which cells the sim may skip
+  if (live) {
+    if (!bxLast) bxLast = { x: p.x, z: p.z };
+    bxAcc += Math.hypot(p.x - bxLast.x, p.z - bxLast.z);
+    bxLast = { x: p.x, z: p.z };
+    if (bxAcc > 1.4 && hiker.grounded) { bxAcc = 0; boxels.wear(p.x, p.z, 0.3); }
+    if (weather.precip > 0.25 && t - bxRain > 2.5) { bxRain = t; boxels.wet(p.x + (Math.random() - 0.5) * 170, p.z + (Math.random() - 0.5) * 170, 0.5, 5); }
+  }
+  boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.update(t);
@@ -1082,7 +1101,10 @@ requestAnimationFrame(loop);
 // ------------------------------------------------------------------ dev hooks (local only)
 if (DEV) {
   window.__rawah = {
-    world, hiker, camp, state, flora, terrain, renderer, scene, camera,
+    world, hiker, camp, state, flora, terrain, renderer, scene, camera, boxels,
+    bench(o) { return boxels.bench(o); },
+    benchQ(o) { return boxels.benchQ(o); },
+    benchMulti(o) { return boxels.benchMulti(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },

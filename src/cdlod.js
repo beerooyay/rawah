@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
-import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR } from './terrain.js';
+import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR, BOXEL_COLOR } from './terrain.js';
 import { withAtmosphere } from './atmosphere.js';
 import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
 
@@ -181,7 +181,8 @@ export class CDLODTerrain {
           }
           #ifdef NEAR_DETAIL
           ${NEAR_COLOR}
-          #endif`);
+          #endif
+          ${BOXEL_COLOR}`);
     };
     mat.customProgramCacheKey = () => 'rawah-cdlod';
 

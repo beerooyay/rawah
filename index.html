@@ -117,19 +117,27 @@
   <!-- ============================================================ title -->
   <div id="title" class="screen hidden">
     <div class="title-inner">
-      <div class="kicker">Medicine Bow Mountains · Colorado</div>
-      <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
-      <p class="lede">Hike fifteen kilometres of the real Rawah Wilderness, from lidar, satellite imagery and OpenStreetMap. Reach the lakes, stand on the summits, and make camp before dark.</p>
-
-      <div class="field">
-        <div class="field-label">Playing as</div>
-        <div id="char-chips" class="chips" role="radiogroup" aria-label="Playing as"></div>
+      <div class="title-top">
+        <div class="kicker">Medicine Bow Mountains · Colorado</div>
+        <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
+        <p class="lede">Hike fifteen kilometres of the real Rawah Wilderness, from lidar, satellite imagery and OpenStreetMap.</p>
       </div>
 
-      <div class="field">
-        <div class="field-label">Season</div>
-        <div id="season-chips" class="chips" role="radiogroup" aria-label="Season"></div>
-        <div id="season-note" class="note"></div>
+      <div class="tr-block">
+        <div class="field-label">Playing as</div>
+        <div id="cast" class="cast" role="group" aria-label="Playing as"></div>
+      </div>
+      <div class="tr-block">
+        <div class="field-label">When</div>
+        <div id="chips-season" class="chips" role="group" aria-label="When"></div>
+      </div>
+      <div class="tr-block">
+        <div class="field-label">What time</div>
+        <div id="chips-time" class="chips" role="group" aria-label="What time"></div>
+      </div>
+      <div class="tr-block">
+        <div class="field-label">Where</div>
+        <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
       </div>
 
       <div class="actions">
@@ -167,7 +175,6 @@
         <div id="settings">
           <h4>World</h4>
           <label class="row"><span>Playing as</span><select id="set-character"></select></label>
-          <label class="row"><span>Season</span><select id="set-season"></select></label>
           <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
           <label class="row"><span>Time speed</span><input type="range" id="set-time" min="0.5" max="6" step="0.5" /></label>
           <h4>Display</h4>

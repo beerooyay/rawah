@@ -89,7 +89,9 @@ export const ALBEDO = /* glsl */ `
           forestW *= smoothstep(0.3, 0.6, wn.y);
           float crowns = texture2D(uNoise, vWPos.xz / 230.0 + 0.37).r * 0.3 + texture2D(uNoise, vWPos.xz / 700.0 + 0.11).r * 0.4 + texture2D(uNoise, vWPos.xz / 2200.0 + 0.62).r * 0.3;
           float crown = smoothstep(0.36, 0.64, crowns);
-          albedo = mix(albedo, mix(albedo * vec3(0.5, 0.56, 0.5), albedo * vec3(1.2, 1.28, 0.98), crown), canopyK * forestW * 0.95);
+          float gold = smoothstep(0.58, 0.76, crowns) * 0.5;
+          vec3 canopy = mix(albedo * vec3(0.42, 0.6, 0.4), albedo * vec3(1.12, 1.36, 0.82), crown) * mix(vec3(1.0), vec3(1.35, 1.12, 0.6), gold);
+          albedo = mix(albedo, canopy, canopyK * forestW * 0.95);
         }
         // steep faces: granite strata and cracks projected sideways
         float faceK = smoothstep(0.8, 0.55, wn.y) * (1.0 - smoothstep(150.0, 900.0, camD));
@@ -101,7 +103,8 @@ export const ALBEDO = /* glsl */ `
           float joint = mix(texture2D(uNoise, vec2(vWPos.x / 1.9, vWPos.y / 19.0)).r, texture2D(uNoise, vec2(vWPos.z / 1.9, vWPos.y / 19.0)).r, wx);
           float chips = mix(texture2D(uNoise, vWPos.xy / 0.9).r, texture2D(uNoise, vWPos.zy / 0.9).r, wx);
           float crack = smoothstep(0.62, 0.7, joint) * 0.8 + smoothstep(0.66, 0.74, bed) * 0.5;
-          vec3 rock = albedo * (0.8 + bed * 0.45) * (0.85 + chips * 0.3) * (1.0 - clamp(crack, 0.0, 1.0) * 0.45);
+          vec3 photo = mix(texture2D(uRock, vWPos.xy / 34.0).rgb, texture2D(uRock, vWPos.zy / 34.0).rgb, wx);
+          vec3 rock = photo * vec3(1.08, 0.98, 0.86) * (0.9 + bed * 0.2) * (1.0 - clamp(crack, 0.0, 1.0) * 0.35);
           albedo = mix(albedo, rock, faceK);
         }
         diffuseColor.rgb = albedo;`;
@@ -183,7 +186,16 @@ export const NEAR_COLOR = /* glsl */ `
           diffuseColor.rgb *= 1.0 - gRing * 0.28 * nearK;
         }`;
 
-export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\n';
+export const ROCK = { value: null };   // rock albedo (assets/terrain/rock.jpg), set once it has loaded
+export const BOXEL = { value: null };  // the living boxel field (src/boxels.js): R wetness, G wear
+
+// the ground remembers: wet cells darken like soaked soil, worn cells lighten into trail
+export const BOXEL_COLOR = /* glsl */ `
+        vec4 bx = texture2D(uBoxel, p / uExtent + 0.5);
+        diffuseColor.rgb *= 1.0 - bx.r * 0.34;
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.15, 1.07, 0.9), bx.g * 0.6);`;
+
+export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n';
 
 export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uColorMap = { value: colorMap };
@@ -191,6 +203,8 @@ export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uHasCover = { value: coverMap ? 1 : 0 };
   shader.uniforms.uNoise = { value: noise };
   shader.uniforms.uExtent = { value: extent };
+  shader.uniforms.uRock = ROCK;
+  shader.uniforms.uBoxel = BOXEL;
 }
 
 /** Lambert for the far horizon mesh: geometry normals, satellite albedo. */
@@ -207,7 +221,22 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         float camD = length(vWPos - cameraPosition);
         vec3 wn = normalize(vWNrm);
-        ${ALBEDO}`);
+        ${ALBEDO}
+        // past the baked map the satellite colour has run out: paint invented ground, rock on the crests
+        // and dark timber in the folds, fading in over the first few km
+        float outK = smoothstep(0.0, 1500.0, max(abs(vWPos.x), abs(vWPos.z)) - uExtent * 0.5);
+        if (outK > 0.0) {
+          float n1 = texture2D(uNoise, vWPos.xz / 2600.0).r, n2 = texture2D(uNoise, vWPos.xz / 240.0).r;
+          vec3 timber = vec3(0.16, 0.3, 0.14) * (0.8 + n2 * 0.4);
+          vec3 rock = texture2D(uRock, vWPos.xz / 700.0).rgb * vec3(1.08, 0.98, 0.86);
+          vec3 tone = mix(timber, rock, smoothstep(0.42, 0.62, n1 + (1.0 - wn.y) * 0.6));
+          tone = mix(tone, vec3(0.8, 0.82, 0.86), smoothstep(0.7, 0.85, wn.y) * smoothstep(0.55, 0.75, n1) * uSnow);
+          diffuseColor.rgb = mix(diffuseColor.rgb, tone, outK);
+        }
+        {
+          vec2 p = vWPos.xz;
+          ${BOXEL_COLOR}
+        }`);
   };
   mat.customProgramCacheKey = () => 'rawah-far-terrain';
   return mat;
@@ -222,43 +251,91 @@ export function coverTexture(data, size) {
   return tex;
 }
 
-/** The distant horizon: a coarse ~60 km mesh, sunk out of sight under the play area. */
+// Distant ground, as nested square rings that double in size (a clipmap, the same idea as cdlod.js).
+// The innermost ring is the baked far heightmap, about 30 km square. Past its edge the relief is
+// invented: a ridged fractal that eases in from the edge, so it reads as the next range over. Beyond
+// about 10 km nothing is measured in detail anyway, and the haze in atmosphere.js does most of the work.
+const RING_HALF = [0, 30000, 60000];   // outer half-sizes (m) of the rings after the baked one
+const RING_M = 256;                    // quads per side of every ring
+
+const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+function hash2(i, j, s) {
+  let h = Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(s, 1442695041) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+function valueNoise(x, z, s) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash2(i, j, s), b = hash2(i + 1, j, s), c = hash2(i, j + 1, s), d = hash2(i + 1, j + 1, s);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+// ridges: each octave folds the noise into a crest, so the range has sharp spines rather than rounded hills
+function ridged(x, z) {
+  let amp = 0.5, f = 1, sum = 0, norm = 0;
+  for (let o = 0; o < 6; o++) {
+    const n = 1 - Math.abs(2 * valueNoise(x * f, z * f, o + 7) - 1);
+    sum += amp * n * n; norm += amp; amp *= 0.5; f *= 2.03;
+  }
+  return sum / norm;
+}
+
+/** The distant ground: baked heights inside, invented ridges past their edge. */
 export function farTerrain(world, material) {
   const { N, cell, h } = world.far;
-  const step = 2, n = N / step, m = n + 1;
-  const half = (N * cell) / 2;
-  const inner = world.half - cell;
-  const pos = new Float32Array(m * m * 3);
-  const nor = new Float32Array(m * m * 3);
+  const dataHalf = (N * cell) / 2;
   const at = (c, r) => h[Math.min(Math.max(r, 0), N - 1) * N + Math.min(Math.max(c, 0), N - 1)];
-  for (let b = 0; b < m; b++) {
-    for (let a = 0; a < m; a++) {
-      const c = a * step, r = b * step, k = (b * m + a) * 3;
-      const x = c * cell - half, z = r * cell - half;
-      const inside = Math.abs(x) < inner && Math.abs(z) < inner;
-      pos[k] = x; pos[k + 2] = z;
-      pos[k + 1] = at(c, r) - (inside ? 400 : 0);
-      const gx = (at(c + step, r) - at(c - step, r)) / (2 * step * cell);
-      const gz = (at(c, r + step) - at(c, r - step)) / (2 * step * cell);
-      const len = Math.hypot(gx, 1, gz);
-      nor[k] = -gx / len; nor[k + 1] = 1 / len; nor[k + 2] = -gz / len;
+  const ground = (x, z) => {
+    const u = Math.min(Math.max((x + dataHalf) / cell, 0), N - 1.001), v = Math.min(Math.max((z + dataHalf) / cell, 0), N - 1.001);
+    const c = Math.floor(u), r = Math.floor(v), fx = u - c, fz = v - r;
+    const a = at(c, r), b = at(c + 1, r), d = at(c, r + 1), e = at(c + 1, r + 1);
+    const base = a + (b - a) * fx + (d - a) * fz + (a - b - d + e) * fx * fz;
+    const out = Math.hypot(Math.max(0, Math.abs(x) - dataHalf), Math.max(0, Math.abs(z) - dataHalf));
+    if (out === 0) return base;
+    // zero at the baked edge, so the rings join without a seam
+    const w = smooth(0, 3000, out);
+    return base + w * (900 * ridged(x / 5000 + 17.3, z / 5000 - 4.1) + 120 * valueNoise(x / 700, z / 700, 3));
+  };
+
+  const group = new THREE.Group();
+  const rings = [dataHalf, ...RING_HALF.slice(1)];
+  const n = RING_M + 1;
+  for (let k = 0; k < rings.length; k++) {
+    const half = rings[k], sp = (2 * half) / RING_M;
+    // the inner ring covers everything under it, so each ring sinks where the one inside it is
+    const sink = k === 0 ? world.half - cell : rings[k - 1] - sp;
+    const pos = new Float32Array(n * n * 3);
+    const nor = new Float32Array(n * n * 3);
+    const e = sp * 0.5;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const x = -half + i * sp, z = -half + j * sp, q = (j * n + i) * 3;
+        const inside = Math.abs(x) < sink && Math.abs(z) < sink;
+        pos[q] = x; pos[q + 2] = z;
+        pos[q + 1] = ground(x, z) - (inside ? 400 : 0);
+        const gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e);
+        const gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+        const len = Math.hypot(gx, 1, gz);
+        nor[q] = -gx / len; nor[q + 1] = 1 / len; nor[q + 2] = -gz / len;
+      }
     }
-  }
-  const idx = new Uint32Array(n * n * 6);
-  let t = 0;
-  for (let b = 0; b < n; b++) {
-    for (let a = 0; a < n; a++) {
-      const A = b * m + a, D = A + 1, B = A + m, Cc = B + 1;
-      idx[t++] = A; idx[t++] = B; idx[t++] = Cc;
-      idx[t++] = A; idx[t++] = Cc; idx[t++] = D;
+    const idx = new Uint32Array(RING_M * RING_M * 6);
+    let t = 0;
+    for (let b = 0; b < RING_M; b++) {
+      for (let a = 0; a < RING_M; a++) {
+        const A = b * n + a, D = A + 1, B = A + n, Cc = B + 1;
+        idx[t++] = A; idx[t++] = B; idx[t++] = Cc;
+        idx[t++] = A; idx[t++] = Cc; idx[t++] = D;
+      }
     }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.matrixAutoUpdate = false;
+    group.add(mesh);
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
-  geo.computeBoundingSphere();
-  const mesh = new THREE.Mesh(geo, material);
-  mesh.matrixAutoUpdate = false;
-  return mesh;
+  return group;
 }
