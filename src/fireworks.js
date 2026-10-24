@@ -223,6 +223,12 @@ function sphere(n) {
   return out;
 }
 
+/** The plane that faces a watcher: their right (level), and the way up the picture, tilted back to meet their eyes. */
+function facing(to, n3) {
+  const u = new THREE.Vector3(to[1], 0, -to[0]).normalize(), w = new THREE.Vector3().crossVectors(n3, u).normalize();
+  return { u, w };
+}
+
 /** A plane with this normal: two perpendicular unit vectors in it. */
 function plane(nx, ny, nz) {
   const n = new THREE.Vector3(nx, ny, nz).normalize();
@@ -261,7 +267,7 @@ function wordPoints(lines) {
 
 const star = (d, speed, col, o = {}) => ({ v: [d[0] * speed, d[1] * speed, d[2] * speed], col, life: 3.2, size: 1.6, ...o });
 
-/** `to`: the horizontal direction toward the watcher, so flat shapes (hearts, rings) face them. */
+/** `to`: the horizontal direction toward the watcher, `n3` the full direction to their eyes, so flat shapes (hearts, words) face them. */
 const STYLES = [
   { name: 'Peony', make: () => {
     const c = PAL[pick(BRIGHT)], c2 = PAL[pick(['white', 'gold', 'cyan'])], out = [];
@@ -286,9 +292,9 @@ const STYLES = [
     for (let i = 0; i < 70; i++) { const t = (i / 70) * Math.PI * 2; out.push(star([u.x * Math.cos(t) + w.x * Math.sin(t), u.y * Math.cos(t) + w.y * Math.sin(t), u.z * Math.cos(t) + w.z * Math.sin(t)], 24, b, { trail: 0.7 })); }
     return out;
   } },
-  { name: 'Heart', make: (to) => {
-    // a vertical plane facing the watcher; the classic heart curve, outlined twice
-    const { u, w } = plane(to[0], 0, to[1]), out = [];
+  { name: 'Heart', make: (to, n3) => {
+    // a plane facing the watcher; the classic heart curve, outlined twice
+    const { u, w } = facing(to, n3), out = [];
     const pt = (t, s) => [s * 16 * Math.pow(Math.sin(t), 3) / 17, s * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 17];
     const c = PAL[pick(['red', 'pink'])];
     for (const [n, s, col] of [[130, 1, c], [70, 0.55, PAL.white]]) {
@@ -326,15 +332,14 @@ const STYLES = [
     for (let i = 0; i < 120; i++) { const t = (i / 120) * Math.PI * 2; out.push(star([u.x * Math.cos(t) + w.x * Math.sin(t), u.y * Math.cos(t) + w.y * Math.sin(t), u.z * Math.cos(t) + w.z * Math.sin(t)], 46, b, { trail: 1, life: 3.4 })); }
     return out;
   } },
-  { name: 'Gay Bois', H: [150, 175], toast: 'Step well back and look up, so you can read it.', make: (to) => {
-    // GAY over BOIS in the colours of the pride flag, standing upright and facing you
-    const pts = wordPoints(['GAY', 'BOIS']), W = 96, K = DRAG * 1.7, out = [];
+  { name: 'Gay Bois', H: [150, 175], toast: 'Step well back and look up, so you can read it.', make: (to, n3) => {
+    // GAY over BOIS in the colours of the pride flag, in a plane tilted back so it faces your eyes square on from the ground
+    const pts = wordPoints(['GAY', 'BOIS']), W = 96, K = DRAG * 1.7, out = [], { u, w } = facing(to, n3);
     const stripes = [PAL.red, PAL.orange, PAL.yellow, PAL.green, PAL.blue, PAL.purple];
-    const rx = to[1], rz = -to[0];                       // the watcher's right
     for (const [x, y, f] of pts) {
       const sx = x * W * K, sy = y * W * K;               // where it ends up, times the drag it will meet
       // one point each (no trail), and dimmed: the stars overlap, and would burn out to white
-      out.push({ v: [rx * sx, sy, rz * sx], col: stripes[Math.min(5, Math.floor(f * 6))].map((c) => c * 0.8), life: 7.5, size: 2.3, g: 0.07, k: 1.7, flash: true });
+      out.push({ v: [u.x * sx + w.x * sy, u.y * sx + w.y * sy, u.z * sx + w.z * sy], col: stripes[Math.min(5, Math.floor(f * 6))].map((c) => c * 0.8), life: 7.5, size: 2.3, g: 0.07, k: 1.7, flash: true });
     }
     return out;
   } },
@@ -560,7 +565,9 @@ export class Fireworks {
     const style = STYLES[s.style], c = new THREE.Vector3(s.x, s.y, s.z);
     let tx = view.p.x - s.x, tz = view.p.z - s.z;
     const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l;
-    const stars = style.make([tx, tz]);
+    // and the way to the watcher's eyes, up included: the shapes that face you tilt back to meet you
+    const n3 = new THREE.Vector3(view.p.x - s.x, view.p.y + 1.7 - s.y, view.p.z - s.z).normalize();
+    const stars = style.make([tx, tz], n3);
     // the break itself: a big soft flash that is gone in a third of a second
     stars.push({ v: [0, 0, 0], col: [0.6, 0.57, 0.5], life: 0.3, size: 13, flash: true, g: 0, k: 1 });
     stars.push({ v: [0, 0, 0], col: stars[0].col.map((c) => c * 0.5), life: 0.8, size: 12, flash: true, g: 0, k: 1 });
