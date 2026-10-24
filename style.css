@@ -260,8 +260,8 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
 
 #title { place-items: safe center; padding: 4vh 6vw; overflow-y: auto;
   background: linear-gradient(90deg, rgba(8, 11, 16, 0.92) 0%, rgba(14, 24, 38, 0.7) 45%, rgba(8, 11, 16, 0.1) 100%); }
-.title-inner { max-width: 720px; width: 100%; display: grid; gap: 16px; justify-items: center; text-align: center; }
-.title-inner .wordmark { margin: 0 0 2px; width: clamp(220px, 30vw, 380px); }
+.title-inner { max-width: 720px; width: 100%; display: grid; gap: 13px; justify-items: center; text-align: center; }
+.title-inner .wordmark { margin: 0 0 2px; width: clamp(200px, 28vw, 330px); }
 .lede { margin: 0; font-size: var(--t-md); line-height: 1.55; color: var(--dim); max-width: 40ch; }
 .field { display: grid; gap: 8px; }
 .field-label { color: var(--faint); }
@@ -301,8 +301,16 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
 #settings { display: grid; gap: 2px; max-width: 560px; }
 #settings h4 { margin: 16px 0 6px; font: 600 var(--t-xs) var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--faint); }
 #settings h4:first-child { margin-top: 0; }
-#settings .row { display: grid; grid-template-columns: 170px 1fr; align-items: center; gap: 16px; min-height: 44px; font-weight: 500; font-size: var(--t-md); }
-#settings .row.switch input { justify-self: start; }
+/* one control language: every row is label + a 44px field; selects, sliders and
+   toggles share the same glass chrome, and sliders report their value */
+#settings .row { display: grid; grid-template-columns: minmax(110px, 170px) 1fr auto; align-items: center; gap: 16px; min-height: 48px; font-weight: 500; font-size: var(--t-md); }
+#settings .row > span { color: var(--dim); }
+#settings select { width: 100%; min-height: 44px; border-radius: 12px; font-size: var(--t-md); padding: 10px 36px 10px 14px;
+  background-color: rgba(255, 255, 255, 0.07); transition: border-color 0.15s, background 0.15s; }
+#settings select:hover { background-color: rgba(255, 255, 255, 0.12); border-color: var(--edge-strong); }
+#settings .val { min-width: 46px; font: 600 var(--t-sm) var(--sans); font-variant-numeric: tabular-nums; color: var(--accent); text-align: right; }
+#settings input[type=range] { height: 44px; }
+#settings .row.switch input { justify-self: end; }
 
 /* controls: the scheme you are using, with a switch to see the others */
 .controls { display: grid; gap: 14px; }
@@ -379,11 +387,12 @@ body.touch #hint { bottom: auto; top: 62px; white-space: normal; max-width: 52vw
   #map-top { top: 8px; left: 8px; right: 64px; }
   #map-close { top: 8px; right: 8px; }
 }
-@media (max-height: 720px) { .title-inner { gap: 10px; } #title .wordmark { width: 250px; } .lede { font-size: var(--t-sm); } .chip { padding: 7px 14px; min-height: 36px; } .cast-card { width: 168px; padding: 10px; } .trip { gap: 8px; padding: 12px 16px; } }
+@media (max-height: 800px) { .title-inner { gap: 9px; } #title .wordmark { width: 240px; } .title-top { gap: 7px; } .lede { font-size: var(--t-sm); } .chip { padding: 7px 14px; min-height: 36px; } .cast-card { width: 168px; padding: 10px; } .cast-art { height: clamp(110px, 21vh, 190px); } .trip { gap: 7px; padding: 11px 16px; } .actions button { padding-top: 11px; padding-bottom: 11px; } }
 @media (max-height: 520px) { .lede, .credit, .note { display: none; } .field { gap: 6px; } }
 @media (max-width: 640px) {
   #journal-list { columns: 1; }
-  #settings .row { grid-template-columns: 1fr 1.4fr; }
+  #settings .row { grid-template-columns: minmax(88px, 1fr) 1.4fr auto; gap: 10px; }
+  #settings .val { min-width: 36px; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .tabs { width: 100%; } .tab { flex: 1; padding: 9px 6px; }
 }
@@ -395,6 +404,14 @@ body.touch #hint { bottom: auto; top: 62px; white-space: normal; max-width: 52vw
 .title-top { display: grid; gap: 10px; justify-items: center; }
 .tr-block { display: grid; gap: 8px; justify-items: center; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+/* roomier screens: the hiker card stands next to the trip picks instead of
+   pushing them and the actions under the fold */
+@media (min-width: 780px) {
+  .title-inner { grid-template-columns: auto 1fr; align-items: center; }
+  .title-top, .actions, .credit { grid-column: 1 / -1; }
+  .tr-block { justify-items: end; }
+  .trip { justify-items: stretch; min-width: 340px; }
+}
 
 /* ---- title: one hiker at a time, flanked by arrows; trip picks grouped in a panel ---- */
 .caro { display: flex; align-items: center; gap: 14px; }
@@ -403,9 +420,10 @@ body.touch #hint { bottom: auto; top: 62px; white-space: normal; max-width: 52vw
 .caro-arrow svg { width: 18px; height: 18px; }
 .cast-card { display: grid; gap: 5px; justify-items: center; text-align: center; width: 212px; padding: 14px; border-radius: 18px;
   background: rgba(10, 14, 20, 0.62); border: 1px solid var(--edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-.cast-art { width: 100%; aspect-ratio: 4 / 5; border-radius: 12px; overflow: hidden;
+.cast-art { width: 100%; height: clamp(120px, 24vh, 230px); border-radius: 12px; overflow: hidden;
   background: linear-gradient(160deg, #1d2b3c, #0b1118); }
-.cast-art img { width: 100%; height: 100%; object-fit: contain; }
+.cast-art img { width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 0.4s ease; }
+.cast-art img.on { opacity: 1; }
 .cast-name { margin-top: 6px; font: 400 var(--t-lg)/1.2 var(--display); }
 .cast-where { font: 500 var(--t-xs) var(--sans); color: var(--faint); }
 .cast-dots { display: flex; gap: 8px; justify-content: center; }

@@ -4,7 +4,7 @@ import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTextu
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
-import { Sky, setSun, MOONS, sunDirection } from './sky.js';
+import { Sky, setSun, MOONS } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { buildTitle } from './title.js';
@@ -170,6 +170,8 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
 }
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
+avatar.ground = (x, z) => world.height(x, z);                           // feet meet the slope
+for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
 party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
@@ -364,7 +366,7 @@ function pause(on) {
   state.paused = on;
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
-  if (on) { renderJournal(); keys.clear(); showTab('journal'); $('bubble').classList.add('hidden'); $('btn-swap').textContent = `Play as ${cap(nextFriend())}`; }
+  if (on) { renderJournal(); keys.clear(); showTab('journal'); $('bubble').classList.add('hidden'); }
   else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
 }
 
@@ -491,15 +493,16 @@ $('set-character').value = playerName;
 $('set-character').onchange = () => setCharacter($('set-character').value);
 
 // settings controls
-const bindRange = (id, key, apply) => {
-  const el = $(id);
-  el.value = settings[key];
-  el.oninput = () => { settings[key] = Number(el.value); apply?.(); storeJSON('rawah-settings', settings); };
+const bindRange = (id, key, apply, fmt = (v) => v) => {
+  const el = $(id), val = $(`val-${id.slice(4)}`);
+  const show = () => { if (val) val.textContent = fmt(settings[key]); };
+  el.value = settings[key]; show();
+  el.oninput = () => { settings[key] = Number(el.value); show(); apply?.(); storeJSON('rawah-settings', settings); };
 };
-bindRange('set-sens', 'sens');
-bindRange('set-fov', 'fov', () => rig.setFov(settings.fov));
-bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume));
-bindRange('set-time', 'timeScale');
+bindRange('set-sens', 'sens', null, (v) => `${v.toFixed(2)}×`);
+bindRange('set-fov', 'fov', () => rig.setFov(settings.fov), (v) => `${Math.round(v)}°`);
+bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume), (v) => `${Math.round(v * 100)}%`);
+bindRange('set-time', 'timeScale', null, (v) => `${v.toFixed(1)}×`);
 $('set-quality').value = settings.quality || 'auto';
 $('set-quality').onchange = () => {
   settings.quality = $('set-quality').value;
@@ -516,7 +519,6 @@ $('set-weather').onchange = () => {
 };
 $('set-moon').value = settings.moon;
 $('set-moon').onchange = () => { settings.moon = $('set-moon').value; sky.moon = MOONS[settings.moon]; storeJSON('rawah-settings', settings); };
-$('set-night').onclick = () => { state.hour = sunDirection(state.hour, _sunTmp).y < -0.05 ? 9 : 22; save(); hud.toast(state.hour === 22 ? 'Night falls…' : 'Morning comes…'); };
 $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (v) { state.hour = v; save(); } $('set-hour').value = ''; };
 {
   const sel = $('set-season');
@@ -599,7 +601,7 @@ function act() {
 }
 
 // ------------------------------------------------------------------ the camp: stools and marshmallows
-const _sp = new THREE.Vector3(), _zero = new THREE.Vector3(0, 0, 0), _v = new THREE.Vector3(), _sunTmp = new THREE.Vector3(), _eye2 = new THREE.Vector3();
+const _sp = new THREE.Vector3(), _zero = new THREE.Vector3(0, 0, 0), _v = new THREE.Vector3(), _eye2 = new THREE.Vector3();
 const _rh = new THREE.Vector3(), _rf = new THREE.Vector3(), _rr = new THREE.Vector3();
 const showChar = (c, on) => { if (!c) return; if (c.group) c.group.visible = on; c.fallback?.root && (c.fallback.root.visible = on); };
 
@@ -1167,7 +1169,6 @@ function swapPlayer() {
   if (!state.started) return;
   setCharacter(nextFriend());
 }
-$('btn-swap').onclick = () => swapPlayer();
 
 // ------------------------------------------------------------------ loop
 const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = new THREE.Color(), _snowBounce = new THREE.Color();

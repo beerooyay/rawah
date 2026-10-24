@@ -66,7 +66,11 @@ float slab(vec2 P, float k, float dist) {
   float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
   float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
   float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
-  return smoothstep(th, th + 0.085 + far * 0.1, f);
+  float dn = smoothstep(th, th + 0.085 + far * 0.1, f);
+  // the rim frays into filaments where the density barely crosses — cumulus edges are ragged, not smooth
+  float rim = smoothstep(0.02, 0.45, dn) * (1.0 - dn) * (1.0 - far);
+  float fray = texture2D(uCloudTex, cloudRot3(P / 850.0 + uCloudOff * 0.00004)).r;
+  return clamp(dn - smoothstep(0.55, 0.85, fray) * rim * 0.8, 0.0, 1.0);
 }
 void main() {
   vec3 d = normalize(vDir);
@@ -105,7 +109,7 @@ void main() {
         vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
         c += uGlow * pow(sd, 5.0) * (1.0 - dn) * dn * 2.0 * (1.0 - uNight) * lit;     // silver lining
         c += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dn);
-        float a = clamp(dn * (0.3 + 0.3 * uThick), 0.0, 1.0);   // each slice thin, so the structure of the ones behind shows through
+        float a = clamp(dn * (0.3 + 0.3 * uThick + 0.14 * k), 0.0, 1.0);   // each slice thin; the billowing tops carry more water than the bases
         acc += trans * a * c;
         trans *= 1.0 - a;
       }

@@ -73,9 +73,14 @@ vec2 cloudWarp(vec2 q) {
 }
 float cloudFbm(vec2 p, int oct) {
   vec2 q = cloudWarp((p + uCloudOff) / 20000.0);
+  q.y *= 1.05;    // a slight pull along the drift, so banks have a grain
   float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, cloudRot1(q) * 2.73 + 0.31).r * 0.24;
   if (oct > 2) f += texture2D(uCloudTex, cloudRot2(q) * 7.1 + 0.57).r * 0.13 + texture2D(uCloudTex, cloudRot3(q) * 19.3 + 0.11).r * 0.07;
   else f += 0.1;
+  // clouds gather into banks: a low field decides where they mass, so the same cover
+  // reads as clumps with blue between, not an even spread. relaxes toward real overcast.
+  float bank = texture2D(uCloudTex, cloudRot3((p + uCloudOff) / 5200.0)).r;
+  f *= mix(1.0, 0.5 + bank, 0.55 * (1.0 - uCloudCover * 0.6));
   return f;
 }
 float cloudDensity(vec2 p, int oct) {
@@ -101,8 +106,12 @@ export function cloudDensityAt(x, z) {
   // the same warp and octave turns as CLOUD_GLSL
   const ux = (x + off.x) / 20000, uy = (z + off.y) / 20000;
   const wx = at(ux * 0.61 + 0.23, uy * 0.61 + 0.41) - 0.5, wy = at(ux * 0.61 + 0.71, uy * 0.61 + 0.13) - 0.5;
-  const u = ux + wx * 0.2, v = uy + wy * 0.2;
-  const f = at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1;
+  const u = ux + wx * 0.2, v = (uy + wy * 0.2) * 1.05;
+  const bx = (x + off.x) / 5200, by = (z + off.y) / 5200;
+  const bank = at(-0.68 * bx - 0.73 * by, 0.73 * bx - 0.68 * by);
+  const cover = atmosphere.uCloudCover.value;
+  const f = (at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1)
+    * (1 + (0.5 + bank - 1) * 0.55 * (1 - cover * 0.6));
   const th = 0.74 + (0.2 - 0.74) * atmosphere.uCloudCover.value;
   const t = Math.min(1, Math.max(0, (f - th) / 0.13));
   return t * t * (3 - 2 * t);

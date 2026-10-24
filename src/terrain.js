@@ -72,6 +72,13 @@ export const ALBEDO = /* glsl */ `
         float tufts = texture2D(uNoise, vWPos.xz / 0.9).r * 0.45 + texture2D(uNoise, vWPos.xz / 3.1 + 0.27).r * 0.35 + texture2D(uNoise, vWPos.xz / 11.0 + 0.61).r * 0.2;
         float tuftK = mix(0.1, 0.34, meadow) * (1.0 - 0.6 * uHasCover * (1.0 - smoothstep(0.02, 0.1, lumA)));
         albedo *= 1.0 + (tufts - 0.5) * tuftK * (0.6 + 0.4 * lumA * 2.0);
+        // the middle distance: between the ground detail and the painted canopy the satellite
+        // texture alone goes flat — brush clumps, talus streaks and gully shading live here
+        float midK = smoothstep(35.0, 90.0, camD) * (1.0 - smoothstep(420.0, 950.0, camD));
+        if (midK > 0.0) {
+          float mid = texture2D(uNoise, vWPos.xz / 9.0 + 0.13).r * 0.5 + texture2D(uNoise, vWPos.xz / 23.0 + 0.47).r * 0.35 + texture2D(uNoise, vWPos.xz / 61.0 + 0.79).r * 0.15;
+          albedo *= 1.0 + (mid - 0.5) * 0.3 * midK * smoothstep(0.55, 0.95, wn.y);
+        }
         // from orbit you only see canopy; up close, under the modelled trees, show the floor
         if (uHasCover > 0.5) {
           vec4 cov = texture2D(uCover, vWPos.xz / uExtent + 0.5);

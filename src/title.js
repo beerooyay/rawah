@@ -1,6 +1,8 @@
+import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { doyOf } from './calendar.js';
 import { renderThumb } from './thumbs.js';
+import { AnimLibrary, retarget, BODY_SCALE } from './anims.js';
 
 // The title screen's four choices, each a row of chips over the live world:
 // the season, the hour, the trailhead and who you play as. Every chip writes
@@ -57,7 +59,9 @@ export function buildTitle({ trailheads, pick, characters }) {
     pick.character = names[cur];
     nameEl.textContent = cap(names[cur]);
     whereEl.textContent = `Parked at ${pick.trailhead}`;
-    if (shots[names[cur]]) img.src = shots[names[cur]];
+    const shot = shots[names[cur]];
+    img.classList.toggle('on', !!shot);
+    if (shot) img.src = shot;
     img.alt = names[cur];
     for (const [j, d] of dotEls.entries()) d.classList.toggle('on', j === cur);
     if (dir) card.animate([{ opacity: 0, transform: `translateX(${12 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 160, easing: 'ease-out' });
@@ -79,13 +83,35 @@ export function buildTitle({ trailheads, pick, characters }) {
   chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; show(cur); });
   show(Math.max(0, names.indexOf(pick.character)));
 
-  // portraits render once their models arrive, so the menu opens without waiting for them
-  const loader = new GLTFLoader();
-  for (const name of names) {
-    loader.loadAsync(characters[name]).then((g) => {
-      g.scene.traverse((o) => { for (const mt of [].concat(o.material || [])) if (mt && 'metalness' in mt) mt.metalness = 0; });
-      shots[name] = renderThumb(g.scene, { w: 400, h: 500, yaw: 0.45, lift: 0.2 });
-      if (names[cur] === name) img.src = shots[name];
-    }).catch(() => {});
+  // portraits render once their models arrive, so the menu opens without waiting for them;
+  // each is photographed mid-idle, posed by the same retarget the game uses
+  const loader = new GLTFLoader(), lib = new AnimLibrary();
+  const idle = lib.load(['Neutral Idle']).then(() => lib.get('Neutral Idle')).catch(() => null);
+  const measure = (model) => {
+    model.updateMatrixWorld(true);
+    const bones = [];
+    model.traverse((o) => { if (o.isBone) bones.push(o); });
+    const hips = bones.find((b) => b.name === 'mixamorigHips');
+    const list = bones.map((b) => ({ name: b.name, parent: b.parent?.isBone ? b.parent.name : null, wq: b.getWorldQuaternion(new THREE.Quaternion()), wp: b.getWorldPosition(new THREE.Vector3()) }));
+    const root = new THREE.Quaternion();
+    hips.parent.getWorldQuaternion(root);
+    return { bones: list, rootQ: root, hips: (hips.getWorldPosition(new THREE.Vector3()).y / model.scale.y) * 100 };
+  };
+  // the hiker on screen loads first, so the card you are looking at fills in first
+  const order = [names[cur], ...names.filter((n) => n !== names[cur])];
+  for (const name of order) {
+    Promise.all([loader.loadAsync(characters[name]), idle]).then(([g, clip]) => {
+      const model = g.scene;
+      model.scale.setScalar(BODY_SCALE);
+      model.traverse((o) => { for (const mt of [].concat(o.material || [])) if (mt && 'metalness' in mt) mt.metalness = 0; });
+      if (clip && lib.srcRest) {
+        const mixer = new THREE.AnimationMixer(model);
+        mixer.clipAction(retarget(clip, lib.srcRest, measure(model))).play();
+        mixer.setTime(1.05);
+        model.updateMatrixWorld(true);
+      }
+      shots[name] = renderThumb(model, { w: 400, h: 500, yaw: 0.45, lift: 0.2 });
+      if (names[cur] === name) { img.src = shots[name]; img.classList.add('on'); }
+    }).catch((err) => console.warn(`portrait for ${name} failed`, err));
   }
 }

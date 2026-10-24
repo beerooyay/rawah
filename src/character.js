@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Avatar } from './avatar.js';
 import { AnimLibrary, BODY_SCALE, CORE, EXTRA, retarget, straighten } from './anims.js';
 import { buildTool } from './tools.js';
-import { clamp } from './noise.js';
+import { clamp, smoothstep } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
 
 // The player's body: a Mixamo-rigged character posed by the animation library.
@@ -97,6 +97,7 @@ export class Character {
     this.wasGrounded = true; this.airKind = '';
     this.prevStance = 'stand'; this.getup = 0; this.guard = 0; this.yoff = 0;
     this.idleT = 0; this.nextFidget = 7 + Math.random() * 6; this.fidget = null; this.fidgetT = 0;
+    this.ground = null; this.feet = null; this.sink = 0; this.sinkW = 0;
     this.gait = 'walk';
     this.hand = null; this.tool = 'fists'; this.toolObj = null; this.grip = null;
     this.target = null; this.fitted = new Map();
@@ -129,6 +130,11 @@ export class Character {
       this.hand = model.getObjectByName('mixamorigRightHand');
       this.hips = model.getObjectByName('mixamorigHips');
       this.arms = [['Left', -1], ['Right', 1]].map(([side, sx]) => ({ sx, bones: ['Arm', 'ForeArm', 'Hand'].map((n) => model.getObjectByName(`mixamorig${side}${n}`)) })).filter((a) => a.bones.every(Boolean));
+      const floorY = model.getWorldPosition(_v1).y;
+      this.feet = ['Left', 'Right'].map((s) => {
+        const bone = model.getObjectByName(`mixamorig${s}Foot`), toe = model.getObjectByName(`mixamorig${s}ToeBase`);
+        return bone && toe ? { bone, toe, sole: bone.getWorldPosition(_v2).y - floorY } : null;
+      }).filter(Boolean);
       this.grip = this.#gripOf();
       this.#bulk(model, name);
       if (this.fallback) this.fallback.root.visible = false;
@@ -240,6 +246,7 @@ export class Character {
     if (w) this.#apply(w);
     this.mixer.update(dt);
     this.#upright(h);
+    this.#ground(dt, h);
     this.#look(dt, h);
     this.#reach(dt, h);
     // a held pose: freeze a one-shot partway through
@@ -295,6 +302,44 @@ export class Character {
         bone.updateMatrixWorld(true);
       }
     }
+  }
+
+  /**
+   * Feet meet the ground. The clips were authored on a flat floor, so on a
+   * slope the downhill foot floats and the uphill one digs through the dirt.
+   * Each planted foot is pitched to the grade under it, and the hips sink or
+   * rise a few centimetres toward the lower sole — the knees fake the rest.
+   * Runs after the mixer like #upright, only while standing or walking.
+   */
+  #ground(dt, h) {
+    const on = this.ground && this.feet?.length && h.grounded && h.mode === 'walk' && h.stance === 'stand' && !h.action && !UPRIGHT_SKIP.test(this.key);
+    this.sinkW += ((on ? 1 : 0) - this.sinkW) * Math.min(1, dt * 7);
+    const back = Math.max(0, 1 - dt * 8);
+    if (this.sinkW < 0.02) { this.sink *= back; if (this.sink) this.group.position.y += this.sink; return; }
+    this.group.updateMatrixWorld(true);
+    let low = Infinity;
+    for (const f of this.feet) {
+      const ankle = f.bone.getWorldPosition(_v1), toe = f.toe.getWorldPosition(_v2);
+      const pen = ankle.y - f.sole - this.ground(ankle.x, ankle.z);   // >0 floating, <0 buried
+      low = Math.min(low, pen);
+      const flat = Math.hypot(toe.x - ankle.x, toe.z - ankle.z);
+      if (flat < 0.04) continue;
+      const w = (1 - smoothstep(0.05, 0.32, pen)) * this.sinkW;       // a swinging foot keeps the clip's angle
+      if (w < 0.03) continue;
+      const cur = Math.atan2(toe.y - ankle.y, flat);
+      const want = Math.atan2(this.ground(toe.x, toe.z) + f.sole - ankle.y, flat);
+      const d = clamp(want - cur, -0.5, 0.5) * w;
+      if (Math.abs(d) < 0.008) continue;
+      _v3.set(toe.x - ankle.x, 0, toe.z - ankle.z).normalize();
+      _v2.crossVectors(Y_AXIS, _v3);                                  // the ankle's horizontal axis
+      _q1.setFromAxisAngle(_v2, d);
+      const world = f.bone.getWorldQuaternion(_q2).premultiply(_q1);
+      const parent = f.bone.parent.getWorldQuaternion(_q3).invert();
+      f.bone.quaternion.copy(parent.multiply(world));
+    }
+    const want = clamp(-low, -0.09, 0.16) * this.sinkW;               // chase the lower sole, knees fake the rest
+    this.sink += (want - this.sink) * Math.min(1, dt * 9);
+    this.group.position.y += this.sink;
   }
 
   #look(dt, h) {
