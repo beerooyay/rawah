@@ -7,14 +7,14 @@ const small = Math.min(screen.width, screen.height) < 820;
 export const PRESETS = {
   high: {
     dpr: 2, aa: true, logDepth: true, shadows: true, shadowMap: 2048, rangeK: 2.3,
-    grass: { radius: 48, spacing: 0.38 },
-    flora: { card: 85, radius: 1900, thin: 1000, impostor: 4096, cap: 320000 },
+    grass: { radius: 58, spacing: 0.35 },
+    flora: { card: 100, radius: 1900, thin: 1000, impostor: 4096, cap: 320000 },
     precip: 8000,
   },
   medium: {
     dpr: 1.5, aa: true, logDepth: true, shadows: true, shadowMap: 2048, rangeK: 2.0,
-    grass: { radius: 34, spacing: 0.46 },
-    flora: { card: 65, radius: 1500, thin: 800, impostor: 4096, cap: 220000 },
+    grass: { radius: 40, spacing: 0.44 },
+    flora: { card: 78, radius: 1500, thin: 800, impostor: 4096, cap: 220000 },
     precip: 5000,
   },
   low: {

@@ -91,7 +91,7 @@ export class Flora {
         return m;
       });
     }
-    const rocks = rockGeometries(), stone = rockMaterial();
+    const rocks = rockGeometries(), stone = rockMaterial(this.world.extent);
     const log = new THREE.CylinderGeometry(0.16, 0.2, 6, 7, 1);
     log.rotateZ(Math.PI / 2);
     const wood = new THREE.MeshLambertMaterial({ color: 0x5d5650 });

@@ -806,9 +806,16 @@ function rideStep(dt, env) {
     if (e.type === 'bump') audio.thud(e.hard);
     else if (e.type === 'splash') { audio.splash(); hud.toast('Too deep for the ATV.', 'warn'); }
   }
-  // tires carve wear into the ground the boxels remember
+  // tires carve wear into the ground the boxels remembers — and twin tread trenches while the snow lasts
   rideD += Math.abs(atv.speed) * dt;
-  if (rideD > 2.2) { rideD = 0; boxels.wear(atv.pos.x, atv.pos.z, 0.35); }
+  if (rideD > 2.2) {
+    rideD = 0; boxels.wear(atv.pos.x, atv.pos.z, 0.35);
+    if (onSnowAt(atv.pos.y) > 0.3) {
+      const sx = -Math.cos(atv.yaw), sz = Math.sin(atv.yaw);
+      world.sculpt.press(atv.pos.x + sx * 0.45, atv.pos.z + sz * 0.45, 0.4, 0.05);
+      world.sculpt.press(atv.pos.x - sx * 0.45, atv.pos.z - sz * 0.45, 0.4, 0.05);
+    }
+  }
   audio.engine(true, clamp(Math.abs(atv.speed) / 18, 0, 1), Math.abs(ctl.move.y));
   lookIdle = Math.abs(ctl.lookX) + Math.abs(ctl.lookY) > 0.002 ? 0 : lookIdle + dt;
   if (lookIdle > 0.5 && atv.speed > 1) {
@@ -1021,6 +1028,11 @@ function freezingLevel(hour) {
   return 2700 + (tempC(hour, 2700) - 0.5) / 6.5 * 1000;
 }
 
+/** How much snow lies at an altitude right now: the weather's fresh cover plus the seasonal pack, smoothed over the line. */
+function onSnowAt(y) {
+  return atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, y);
+}
+
 function locate(p, cv) {
   const zone = cv.snag > 0.35 ? 'Cameron Peak Fire burn (2020)' : 'Rawah Wilderness';
   const lake = world.nearWater(p.x, p.z, 40);
@@ -1216,9 +1228,13 @@ function tick(dt, draw = true) {
     const events = state.cut ? cutStep(dt, env) : state.seat >= 0 ? seatedStep(dt, env) : atv.riding ? rideStep(dt, env) : hiker.update(dt, ctl, env);
     state.km += Math.hypot(p.x - before.x, p.z - before.z) / 1000;
     for (const e of events) {
-      if (e.type === 'step') audio.step(e.surface, e.speed);
+      if (e.type === 'step') {
+        audio.step(e.surface, e.speed);
+        if (e.surface === 'water') lakes.ripple(p.x, p.z, 0.8);
+        else if (e.surface === 'snow' || onSnowAt(p.y) > 0.35) world.sculpt.press(p.x, p.z, 0.55, 0.05);
+      }
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
-      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); }
+      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); }
       else if (e.type === 'grab') audio.step('rock', 2);
       else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -1253,6 +1269,11 @@ function tick(dt, draw = true) {
   }, shaped);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
+  // the friends press snow too, a print every stride or so
+  if (live && onSnowAt(p.y) > 0.35) for (const a of party.actors) {
+    const d = a._px === undefined ? 99 : Math.hypot(a.x - a._px, a.z - a._pz);
+    if (d > 1.1) { world.sculpt.press(a.x, a.z, 0.5, 0.04); a._px = a.x; a._pz = a.z; }
+  }
   if (fishing.locked && live) {
     const eyeP = hiker.eye(_eye2), dx = fishing.focus.x - eyeP.x, dz = fishing.focus.z - eyeP.z, dy = fishing.focus.y - eyeP.y;
     const k = Math.min(1, dt * 2.5), horiz = Math.hypot(dx, dz);
@@ -1319,7 +1340,7 @@ function tick(dt, draw = true) {
   atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
   sky.update(state.hour, eye, focus, t, weather);
   // snow underfoot bounces light back up into the shadows
-  const onSnow = atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, p.y);
+  const onSnow = onSnowAt(p.y);
   sky.hemi.groundColor.lerp(_snowBounce.setScalar(0.55 * sky.light + 0.04), onSnow * 0.7);
   // eye adaptation: open up in flat grey light and at dusk, settle back in full sun
   const lum = sky.sun.intensity * Math.max(0, sky.sunDir.y) * (1 - sky.sunBlock * 0.8) + sky.hemi.intensity * 0.8 + onSnow * sky.light * 0.8;
@@ -1345,6 +1366,7 @@ function tick(dt, draw = true) {
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
+  lakes.uniforms.uRain.value = weather.precip;
   lakes.update(t);
   streams.update(t);
 

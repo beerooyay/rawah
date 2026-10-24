@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
 import { rng } from './trees.js';
 import { valueNoise } from './noise.js';
+import { ROCK, BOXEL } from './terrain.js';
 
 // Rock for the Rawah: pale pink-grey Precambrian granite and gneiss that
 // weathers into angular blocks, flat slabs and teeth. Three shapes, a few
@@ -17,7 +18,7 @@ const LICHEN = [new THREE.Color(0x76803f), new THREE.Color(0xb27a2c)];
 /** A faceted stone: `sx, sy, sz` stretch it, `planes` shaves it, `cut` is how far in the first planes bite. */
 function stone(seed, { sx = 1, sy = 0.75, sz = 1, planes = 9, cut = 0.72, flat = -0.5, tilt = 0 }) {
   const R = rng(seed);
-  const g = new THREE.IcosahedronGeometry(1, 2);
+  const g = new THREE.IcosahedronGeometry(1, 3);
   const p = g.attributes.position;
   const cuts = [];
   for (let k = 0; k < planes; k++) {
@@ -45,7 +46,8 @@ function stone(seed, { sx = 1, sy = 0.75, sz = 1, planes = 9, cut = 0.72, flat =
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const band = 0.5 + 0.5 * Math.sin(y * 7 + valueNoise(x * 2, z * 2, seed + 3) * 4);
     const mottled = valueNoise(x * 6 + seed, z * 6, seed + 9);
-    c.copy(base).multiplyScalar(0.62 + band * 0.22 + mottled * 0.3 + Math.max(0, nor.getY(i)) * 0.1);
+    const crack = Math.abs(valueNoise(x * 9 + seed * 3, z * 9, seed + 13) - 0.5) < 0.045 ? 0.78 : 1;
+    c.copy(base).multiplyScalar((0.62 + band * 0.22 + mottled * 0.3 + Math.max(0, nor.getY(i)) * 0.1) * (0.78 + 0.22 * Math.min(1, Math.max(0, y + 0.6))) * crack);
     if (nor.getY(i) > 0.3 && valueNoise(x * 4, z * 4, seed + 21) > 0.55) c.lerp(LICHEN[(seed >> 1) & 1], 0.55);
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
   }
@@ -64,9 +66,22 @@ export function rockGeometries() {
   };
 }
 
-export function rockMaterial() {
+export function rockMaterial(extent = 1) {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  mat.onBeforeCompile = (shader) => withAtmosphere(shader, { weather: 1, occlusion: 0.8 });
+  mat.onBeforeCompile = (shader) => {
+    withAtmosphere(shader, { weather: 1, occlusion: 0.8 });
+    shader.uniforms.uRock = ROCK;
+    shader.uniforms.uBoxel = BOXEL;
+    shader.uniforms.uRExtent = { value: extent };
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec3 rwp = (uViewInv * vec4(vFogView, 1.0)).xyz;
+        // real granite grain from the terrain's rock sheet, and the boxel field's damp darkening the stone
+        diffuseColor.rgb *= mix(vec3(1.0), texture2D(uRock, rwp.xz * 0.22 + rwp.y * 0.1).rgb, 0.55);
+        diffuseColor.rgb *= 1.0 - texture2D(uBoxel, rwp.xz / uRExtent + 0.5).r * 0.32;
+      }`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\nuniform float uRExtent;');
+  };
   mat.customProgramCacheKey = () => 'rawah-rock';
   return mat;
 }

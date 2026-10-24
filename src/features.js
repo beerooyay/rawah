@@ -45,7 +45,8 @@ export function buildLakes(world) {
     normalScale: new THREE.Vector2(0.55, 0.55), transparent: true, opacity: 0.9,
   });
   // uIceLine: lakes whose surface is above it are frozen over (the calendar moves it)
-  const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 } };
+  const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
+    uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     withAtmosphere(shader, { occlusion: 0.5 });
@@ -53,9 +54,28 @@ export function buildLakes(world) {
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nvarying float vLevel;\nvarying vec2 vIceUv;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
+        if (ice < 0.5) {
+          // rings spread from whatever has touched the water; rain dimples the surface while it falls
+          float vdist = length(vViewPosition);
+          vec2 push = vec2(0.0);
+          for (int i = 0; i < 10; i++) {
+            vec4 rg = uRings[i];
+            float age = uT - rg.z;
+            if (rg.w <= 0.0 || age < 0.0 || age > 4.0) continue;
+            vec2 rel = vIceUv - rg.xy;
+            float d = length(rel);
+            float ring = exp(-pow((d - age * 1.15) * 2.6, 2.0)) * exp(-age * 1.0) * exp(-d * 0.1) * rg.w;
+            push += (rel / max(d, 0.05)) * ring * cos((d - age * 1.15) * 16.0) * 0.55;
+          }
+          push += vec2(sin(vIceUv.y * 9.0 + uT * 6.0) + sin(vIceUv.x * 11.0 - uT * 5.2), cos(vIceUv.x * 8.0 - uT * 5.6) + cos(vIceUv.y * 10.0 + uT * 6.2)) * uRain * 0.13 * exp(-vdist * 0.02);
+          if (dot(push, push) > 1e-6) {
+            vec3 wn = (viewMatrix * vec4(push.x, 0.0, push.y, 0.0)).xyz;
+            normal = normalize(normal - normalize(wn) * clamp(length(push), 0.0, 0.5));
+          }
+        }
         if (ice > 0.5) {
           // snow-dusted lake ice: wind-scoured grey-blue patches and pressure cracks
           normal = normalize(mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), 0.9));
@@ -95,9 +115,12 @@ export function buildLakes(world) {
   mesh.renderOrder = 1;
   mesh.receiveShadow = true;
   group.add(mesh);
+  let ripI = 0;
   return {
     group, uniforms,
-    update(t) { normalMap.offset.set(t * 0.004, t * 0.0025); },
+    update(t) { uniforms.uT.value = t; normalMap.offset.set(t * 0.004, t * 0.0025); },
+    /** A ring spreading from something touching the water: footsteps, splashes, fish. */
+    ripple(x, z, amp = 1) { uniforms.uRings.value[ripI++ % 10].set(x, z, uniforms.uT.value, amp); },
   };
 }
 

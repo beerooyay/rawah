@@ -50,6 +50,8 @@ export class Sculpt {
     this.freeSlots = Array.from({ length: SIDE * SIDE }, (_, i) => SIDE * SIDE - 1 - i);
     this.count = 0;                                    // chunks in use
     this.touched = false;                              // a cell changed since the last flush
+    this.soft = false;                                 // only quiet presses changed since the last flush — uploads throttle to 2 Hz
+    this.lastSoft = 0;
     this.rect = null;                                  // metres touched since `takeRect`
 
     const idx = new THREE.DataTexture(this.index, this.cn, this.cn, THREE.RedIntegerFormat, THREE.UnsignedShortType);
@@ -107,8 +109,9 @@ export class Sculpt {
    * Run `fn(current, wx, wz, weight)` over every cell within `radius` of
    * (x, z), weight easing from 1 at the centre to 0 at the edge, and keep what
    * it returns, within LIMIT. Returns false when the atlas had no room.
+   * `quiet` marks a soft press: no rect (nothing standing needs re-settling) and a throttled upload.
    */
-  paint(x, z, radius, fn) {
+  paint(x, z, radius, fn, quiet = false) {
     const u = (x + this.half) / EC, v = (z + this.half) / EC, r = radius / EC;
     const i0 = Math.max(0, Math.floor(u - r)), i1 = Math.min(this.cn * CHUNK - 1, Math.ceil(u + r));
     const j0 = Math.max(0, Math.floor(v - r)), j1 = Math.min(this.cn * CHUNK - 1, Math.ceil(v + r));
@@ -123,10 +126,10 @@ export class Sculpt {
         const k = this.#base(slot) + (j - cz * CHUNK) * ATLAS + (i - cx * CHUNK);
         const wx = i * EC - this.half, wz = j * EC - this.half;
         const next = Math.max(-LIMIT, Math.min(LIMIT, fn(this.atlas[k], wx, wz, smooth(1 - d))));
-        if (next !== this.atlas[k]) { this.atlas[k] = next; this.touched = true; }
+        if (next !== this.atlas[k]) { this.atlas[k] = next; if (quiet) this.soft = true; else this.touched = true; }
       }
     }
-    if (this.touched) {
+    if (!quiet && this.touched) {
       const r2 = this.rect || (this.rect = { x0: Infinity, z0: Infinity, x1: -Infinity, z1: -Infinity });
       r2.x0 = Math.min(r2.x0, x - radius); r2.x1 = Math.max(r2.x1, x + radius);
       r2.z0 = Math.min(r2.z0, z - radius); r2.z1 = Math.max(r2.z1, z + radius);
@@ -137,9 +140,16 @@ export class Sculpt {
   /** Send changed cells to the GPU. Call once a frame. */
   flush() {
     this.uniforms.uEditOn.value = this.count ? 1 : 0;
-    if (!this.touched) return;
-    this.touched = false;
+    const now = performance.now();
+    if (!this.touched && !(this.soft && now - this.lastSoft > 500)) return;
+    this.touched = false; this.soft = false; this.lastSoft = now;
     this.textures.atlas.needsUpdate = true;
+  }
+
+  /** A footprint pressed into soft ground: packs down to a floor, never digs — and never lifts what was carved deeper. */
+  press(x, z, radius = 0.55, depth = 0.045) {
+    const floor = -(depth * 3.2);
+    this.paint(x, z, radius, (cur, wx, wz, wt) => (cur > floor ? Math.max(floor, cur - depth * wt) : cur), true);
   }
 
   /** The area changed since the last call, for things standing on it to re-settle; null when none. */
