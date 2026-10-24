@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
+import { tubeMesh } from './fireworks.js';
 
-// The hand tools, built from boxes and flat extrusions: an axe and a machete.
+// The hand tools, built from boxes and flat extrusions: an axe and a machete (and a firework tube).
 // Each is modelled in metres with the grip at the origin, the head along +Y and
 // the cutting edge toward +X, so one transform puts it in a hand (character.js)
 // and another in front of the camera (props.js).
 
-export const TOOLS = ['fists', 'axe', 'machete', 'mind'];
-export const TOOL_NAME = { fists: 'Bare hands', axe: 'Axe', machete: 'Machete', mind: 'Telekinesis' };
+export const TOOLS = ['fists', 'axe', 'machete', 'fireworks', 'mind'];
+export const TOOL_NAME = { fists: 'Bare hands', axe: 'Axe', machete: 'Machete', fireworks: 'Fireworks', mind: 'Telekinesis' };
 
 let mats = null;
 function materials() {
@@ -38,6 +39,11 @@ export function buildTool(kind) {
     haft.position.y = 0.2;
     part(plate([[-0.035, 0.44], [-0.035, 0.58], [0.03, 0.58], [0.135, 0.64], [0.145, 0.37], [0.03, 0.44]], 0.032), m.steel);
     part(plate([[0.135, 0.64], [0.15, 0.505], [0.145, 0.37], [0.125, 0.4], [0.128, 0.61]], 0.034), m.edge);
+  } else if (kind === 'fireworks') {
+    // a mortar tube held by its middle
+    const tube = tubeMesh(0);
+    tube.position.y = -0.15;
+    g.add(tube);
   } else if (kind === 'machete') {
     // a long, broad blade with a clipped point, and a black handle
     const handle = part(new THREE.BoxGeometry(0.03, 0.14, 0.026), m.grip);

@@ -176,6 +176,55 @@ export class Audio {
     this.#burst(0.05, 420, 2, 0.15, 'bandpass', 0.02);
   }
 
+  // ---- fireworks. `v` is loudness 0..1 by distance, `when` seconds from now (the bang arrives late)
+
+  /** A fuse burning: a thin dry hiss. */
+  hiss(v = 1) {
+    if (!this.ctx) return;
+    this.#burst(0.15, 5200 + Math.random() * 1600, 0.7, 0.06 * v, 'highpass', 0, this.white);
+    if (Math.random() < 0.5) this.#burst(0.03, 3200, 4, 0.05 * v, 'bandpass', Math.random() * 0.1);
+  }
+
+  /** The thump of a shell leaving its tube. */
+  mortar(v = 1, when = 0) {
+    if (!this.ctx) return;
+    this.#burst(0.4, 105, 0.8, 0.9 * v, 'lowpass', when, this.noise);
+    this.#burst(0.2, 520, 0.6, 0.3 * v, 'bandpass', when + 0.01);
+    this.#burst(0.08, 3000, 1, 0.16 * v, 'bandpass', when);
+  }
+
+  /** The shell's rising whistle, `e.dur` seconds. */
+  whistle(v = 1, when = 0, e = {}) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime + when, dur = e.dur || 2.4;
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(1300, t);
+    o.frequency.exponentialRampToValueAtTime(2700, t + dur);
+    f.type = 'bandpass'; f.frequency.value = 2000; f.Q.value = 2;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.03 * v, t + 0.25);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f).connect(g).connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+
+  /** The break: a hard crack, then the deep boom rolling off. */
+  boom(v = 1, when = 0) {
+    if (!this.ctx) return;
+    this.#burst(0.14, 2600, 0.8, 0.55 * v, 'bandpass', when, this.white);
+    this.#burst(1.4, 85, 0.7, 1.0 * v, 'lowpass', when, this.noise);
+    this.#burst(0.7, 260, 0.6, 0.5 * v, 'lowpass', when + 0.03, this.noise);
+    this.#burst(1.8, 55, 0.6, 0.5 * v, 'lowpass', when + 0.15, this.noise);       // the echo off the valley
+  }
+
+  /** Crackling stars: `e.n` little pops over a second or two. */
+  crackle(v = 1, when = 0, e = {}) {
+    if (!this.ctx) return;
+    const n = e.n || 20;
+    for (let i = 0; i < n; i++) this.#burst(0.03, 2200 + Math.random() * 2600, 2, (0.1 + Math.random() * 0.14) * v, 'bandpass', when + Math.pow(Math.random(), 1.4) * 2.2, this.white);
+  }
+
   /** Flies circling: `v` 0..1 by how close you are. */
   buzz(v) {
     if (!this.ctx) return;

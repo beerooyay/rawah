@@ -65,6 +65,7 @@ export const VM = {
   axe: { rest: [0.3, -0.34, -0.55, -0.35, 1.0, -0.3], back: [0.32, -0.1, -0.42, 0.6, 1.0, -0.35], hit: [0.12, -0.36, -0.72, -1.4, 1.0, -0.1] },
   axeR: SIDE.R,
   axeL: SIDE.L,
+  fireworks: { rest: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15], back: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15], hit: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15] },
   machete: { rest: [0.3, -0.32, -0.52, -0.5, 1.2, -0.5], back: [0.4, -0.08, -0.4, 0.4, 1.0, -0.9], hit: [0.02, -0.34, -0.7, -1.2, 1.4, 0.4] },
 };
 
@@ -86,7 +87,7 @@ export class Props {
     this.vm = new THREE.Group();
     this.vm.visible = false;
     this.vmTools = {};
-    for (const k of ['axe', 'machete']) { const t = buildTool(k); t.visible = false; this.vm.add(t); this.vmTools[k] = t; }
+    for (const k of ['axe', 'machete', 'fireworks']) { const t = buildTool(k); t.visible = false; this.vm.add(t); this.vmTools[k] = t; }
     camera.add(this.vm);
     this.vmRock = new THREE.Group();   // the stone you carry, seen from your own eyes
     camera.add(this.vmRock);
@@ -124,7 +125,7 @@ export class Props {
   cycleTool() {
     if (this.carry) { this.hud.toast('Put the stone down first.'); return; }
     this.setTool(TOOLS[(TOOLS.indexOf(this.tool) + 1) % TOOLS.length]);
-    this.hud.toast(this.tool === 'mind' ? 'Telekinesis · [Click] lift · [R] sink · [E] level · [Wheel] size' : `${TOOL_NAME[this.tool]}${this.tool === 'fists' ? '' : ' · [Click] to swing'}`);
+    this.hud.toast(this.tool === 'mind' ? 'Telekinesis · [Click] lift · [R] sink · [E] level · [Wheel] size' : this.tool === 'fireworks' ? 'Fireworks · [Click] set one down · [R] light · [I] style' : `${TOOL_NAME[this.tool]}${this.tool === 'fists' ? '' : ' · [Click] to swing'}`);
   }
 
   /** A swing connected (the hiker's `strike` event with kind chop or slash). */
@@ -619,7 +620,7 @@ export class Props {
   // ------------------------------------------------------------------ first-person tool
   #viewmodel(dt) {
     const first = this.rig.mode === 'first', tool = this.tool;
-    this.vm.visible = first && (tool === 'axe' || tool === 'machete');
+    this.vm.visible = first && (tool === 'axe' || tool === 'machete' || tool === 'fireworks');
     this.vmRock.visible = first;
     if (!this.vm.visible) return;
     const a = this.hiker.action;

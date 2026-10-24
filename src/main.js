@@ -39,6 +39,7 @@ import { Wood } from './wood.js';
 import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
+import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -189,6 +190,7 @@ const wood = new Wood(world, flora, scene, props);
 props.wood = wood;
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
+const fireworks = new Fireworks(world, scene);
 const breakfast = new Breakfast(coffee.stand, scene);
 let coffeeBoost = 0;     // stamina from a sip, still working its way in
 const hud = new Hud(world);
@@ -417,7 +419,7 @@ function renderControls(el, mode) {
   const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
   el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
     <dl>${rows[mode].map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>
-    <p class="more">Tools (${mode === 'touch' ? t('Tool') : mode === 'pad' ? p('R3') : k('T')}): hands, axe, machete, telekinesis. Telekinesis lifts, sinks and levels the ground; the wheel sets the brush size.</p>`;
+    <p class="more">Tools (${mode === 'touch' ? t('Tool') : mode === 'pad' ? p('↑') : k('T')}): hands, axe, machete, fireworks, telekinesis. Fireworks: click sets a tube down, ${mode === 'kbm' ? k('R') : 'Cook'} lights it, and tubes beside it catch. Telekinesis lifts, sinks and levels the ground; the wheel sets the brush size.</p>`;
   for (const b of el.querySelectorAll('.seg button')) b.onclick = () => renderControls(el, b.dataset.mode);
 }
 function openControls() { renderControls($('controls-title'), null); $('controls-sheet').classList.remove('hidden'); }
@@ -430,6 +432,7 @@ function begin(fresh) {
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     camp.strike();
     wood.reset();
+    fireworks.clear();
     Object.assign(state, { hour: settings.hour, day: 1, km: 0 });
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
@@ -592,7 +595,7 @@ function act() {
   if (pressed.has('KeyB') && !atv.riding && !state.cut && !togetherOpen) {
     fishing.toggle({ pos: p, yaw: hiker.yaw, mode: hiker.mode, grounded: hiker.grounded });
   }
-  if (pressed.has('KeyN') && !atv.riding && !fishing.busy && !state.cut) marshmallow();
+  if (pressed.has('KeyN') && !atv.riding && !fishing.busy && !state.cut && hiker.tool !== 'fireworks') marshmallow();
   if (state.cut || fishing.locked || atv.riding || state.seat >= 0) return;
   if (pressed.has('KeyC')) {
     if (camp.near(p, 'tent', 4)) {
@@ -711,12 +714,27 @@ function camping() {
   if (atv.riding || fishing.busy || state.cut || hiker.mode !== 'walk') return;
   const fireNear = camp.fire && Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) < 4.5;
   const heading = rig.mode === 'first' ? hiker.yaw : avatar.heading;
-  if (pressed.has('KeyK') && state.seat < 0) {
+  if (pressed.has('KeyK') && state.seat < 0 && hiker.tool !== 'fireworks') {
     if (fireNear || wood.carried <= 0) { if (coffee.rigged ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos)) save(); }
     else if (wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
   }
   if (pressed.has('KeyJ') && state.seat < 0 && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
   if (pressed.has('KeyO') && !state.sleeping) coffee.sip();
+}
+
+/** The fireworks tool: [Click] (or [N]) sets a tube down, [R] (or [K]) lights the one you are by, [I] changes style, [U] takes the unlit ones back. */
+function fireworksInput() {
+  if (hiker.tool !== 'fireworks' || atv.riding || fishing.busy || state.cut || state.seat >= 0 || hiker.mode !== 'walk') return;
+  if (pressed.has('KeyI')) hud.toast(`Firework: ${fireworks.nextStyle()}`);
+  if (pressed.has('Mouse0') || pressed.has('KeyQ') || pressed.has('KeyN')) {
+    const why = fireworks.place(hiker.pos, hiker.yaw);
+    if (why) hud.toast(why, 'warn');
+    else if (input.mode !== 'kbm') fireworks.nextStyle();     // no style key on a pad or touch: they come round in turn
+  }
+  if (pressed.has('KeyR') || pressed.has('Mouse2') || pressed.has('KeyK')) {
+    if (!fireworks.light(hiker.pos, hiker.yaw)) hud.toast('Set a tube down first, then stand next to it to light it.');
+  }
+  if (pressed.has('KeyU') && fireworks.pickUp(hiker.pos)) hud.toast('Picked up.');
 }
 
 // ------------------------------------------------------------------ "want to smash?"
@@ -1260,9 +1278,10 @@ function tick(dt, draw = true) {
   ctl.crouch = live && pressed.has('KeyX');
   // a blade keeps swinging while the button is held; fists still take one press per punch
   const held = hiker.tool === 'axe' || hiker.tool === 'machete';
-  ctl.punch = live && !mindOn && (held ? (keys.has('KeyQ') || keys.has('Mouse0')) : (pressed.has('KeyQ') || pressed.has('Mouse0')));
+  const fwOn = hiker.tool === 'fireworks';
+  ctl.punch = live && !mindOn && !fwOn && (held ? (keys.has('KeyQ') || keys.has('Mouse0')) : (pressed.has('KeyQ') || pressed.has('Mouse0')));
   if (ctl.punch && props.throwStone()) ctl.punch = false;
-  ctl.hook = live && !mindOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
+  ctl.hook = live && !mindOn && !fwOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
   ctl.stomp = live && pressed.has('KeyG');
   // fishing: the lean (A/D or a mouse swing), the reel (held Space) and the hook (Space pressed)
   const fishInp = { x: clamp(ctl.move.x + (ctl.lookX / Math.max(dt, 0.001)) / 3, -1, 1), reel: live && keys.has('Space'), hook: live && pressed.has('Space') };
@@ -1299,6 +1318,7 @@ function tick(dt, draw = true) {
     }
     act();
     camping();
+    fireworksInput();
     // caught out in it: rain soaks you (less under thick forest), wet snow too
     const soak = weather.precip * (1 - weather.snowK * 0.6) * (1 - world.coverAt(p.x, p.z, 0) * 0.5);
     if (soak > 0.2 && hiker.mode !== 'swim') hiker.wet = Math.max(hiker.wet, 30 * soak);
@@ -1371,6 +1391,11 @@ function tick(dt, draw = true) {
     if (coffeeBoost > 0 && !state.paused) { const d = Math.min(coffeeBoost, 14 * dt); hiker.stamina = Math.min(100, hiker.stamina + d); coffeeBoost -= d; }
     dump.update(state.paused ? 0 : dt, p);
     for (const e of dump.events) audio[e.name]?.(e.v);
+    for (const e of fireworks.update(state.paused ? 0 : dt, { p: hiker.pos, camera, scale: flameScale() })) {
+      if (e.type === 'toast') hud.toast(e.text);
+      else if (e.type === 'sound') audio[e.name]?.(e.v, e.delay || 0, e);
+      else if (e.type === 'shake') { if (e.amount > 0.05) rig.land(4 * e.amount); }
+    }
   }
   // the friends press snow too, a print every stride or so
   if (live && onSnowAt(p.y) > 0.35) for (const a of party.actors) {
@@ -1499,6 +1524,7 @@ function tick(dt, draw = true) {
       hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '', wood.carried > 0 ? `Firewood ×${wood.carried}` : '', coffee.cup.sips > 0 ? `Coffee ×${coffee.cup.sips}` : '']
       .filter(Boolean).join(' · ');
     let hint = hiker.hint || props.hint;
+    if (!hint && hiker.tool === 'fireworks') hint = fireworks.toolHint(p);
     if (!hint && wood.hint) hint = wood.hint;
     if (!hint && breakfast.hint) hint = breakfast.hint;
     if (!hint && (coffee.hint || breakfast.tip)) hint = [coffee.hint, breakfast.tip].filter(Boolean).join('  ·  ');
@@ -1577,7 +1603,7 @@ if (DEV) {
     bench(o) { return boxels.bench(o); },
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
-    begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
+    begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
