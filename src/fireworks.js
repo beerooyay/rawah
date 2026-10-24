@@ -135,10 +135,10 @@ class Stars {
       if (this.next + per > this.n) this.next = 0;
       for (let j = 0; j < per; j++) {
         const i = this.next + j;
-        this.pos.setXYZ(i, c.x, c.y, c.z);
+        this.pos.setXYZ(i, c.x + (s.o ? s.o[0] : 0), c.y + (s.o ? s.o[1] : 0), c.z + (s.o ? s.o[2] : 0));
         this.vel.setXYZW(i, s.v[0], s.v[1], s.v[2], j && s.flash ? 0 : s.life);
         this.col.setXYZW(i, s.col[0], s.col[1], s.col[2], s.size);
-        this.info.setXYZW(i, birth, j, s.strobe || 0, s.trail ?? 1);
+        this.info.setXYZW(i, birth + (s.delay || 0), j, s.strobe || 0, s.trail ?? 1);
         this.phys.setXY(i, s.g ?? 1, s.k ?? 1);
       }
       this.next += per;
@@ -265,6 +265,25 @@ function wordPoints(lines) {
   return _words;
 }
 
+/** A cartoon doodle in stars: a filled silhouette sampled on a grid, in units of its own height (y up, 1 = top to bottom). Cached. */
+let _doodle = null;
+function doodle() {
+  if (_doodle) return _doodle;
+  const pts = [], balls = [[-0.115, -0.36], [0.115, -0.36]], th = -0.3, c = Math.cos(th), sn = Math.sin(th);
+  const rot = (x, y) => [x * c - y * sn, x * sn + y * c];
+  for (let y = -0.5; y <= 0.5; y += 0.02) for (let x = -0.2; x <= 0.2; x += 0.02) {
+    const ball = balls.some(([bx, by]) => (x - bx) ** 2 + (y - by) ** 2 <= 0.125 ** 2);
+    const head = x * x + (y - 0.34) ** 2 <= 0.115 ** 2;
+    const shaft = Math.abs(x) <= 0.09 && y >= -0.3 && y <= 0.34;
+    if (!(ball || head || shaft)) continue;
+    const [rx, ry] = rot(x, y);
+    pts.push({ x: rx, y: ry, kind: head ? 2 : shaft ? 1 : 0 });
+  }
+  const tip = rot(0, 0.455), dir = rot(0, 1);
+  _doodle = { pts, tip, dir };
+  return _doodle;
+}
+
 const star = (d, speed, col, o = {}) => ({ v: [d[0] * speed, d[1] * speed, d[2] * speed], col, life: 3.2, size: 1.6, ...o });
 
 /** `to`: the horizontal direction toward the watcher, `n3` the full direction to their eyes, so flat shapes (hearts, words) face them. */
@@ -340,6 +359,25 @@ const STYLES = [
       const sx = x * W * K, sy = y * W * K;               // where it ends up, times the drag it will meet
       // one point each (no trail), and dimmed: the stars overlap, and would burn out to white
       out.push({ v: [u.x * sx + w.x * sy, u.y * sx + w.y * sy, u.z * sx + w.z * sy], col: stripes[Math.min(5, Math.floor(f * 6))].map((c) => c * 0.8), life: 7.5, size: 2.3, g: 0.07, k: 1.7, flash: true });
+    }
+    return out;
+  } },
+  { name: 'Penis', H: [145, 170], toast: 'Step back and look up. Take a good look.', make: (to, n3) => {
+    // a cartoon doodle in pink stars, tilted to face you; once it has formed, white streams spray from the tip across the sky
+    const { pts, tip, dir } = doodle(), { u, w } = facing(to, n3), S = 70, K = DRAG * 1.7, out = [];
+    const tone = [[1, 0.42, 0.5], [1, 0.55, 0.45], [1, 0.25, 0.4]];
+    const at = (x, y) => [u.x * x + w.x * y, u.y * x + w.y * y, u.z * x + w.z * y];
+    for (const p of pts) {
+      const v = at(p.x * S * K, p.y * S * K);
+      out.push({ v, col: tone[p.kind].map((c) => c * 0.62), life: 7.5, size: 2.2, g: 0.07, k: 1.7, flash: true });
+    }
+    // the streams: white comets with long tails, thrown up and across from the tip, a few at a time over most of a second
+    const o = at(tip[0] * S, tip[1] * S);
+    out.push({ v: [0, 0, 0], o, col: [0.8, 0.8, 0.8], life: 0.4, size: 12, flash: true, g: 0, k: 1, delay: 1.2 });
+    for (let i = 0; i < 190; i++) {
+      const a = rnd(-0.6, 0.6) + 0.45 + Math.atan2(dir[0], dir[1]), sp = rnd(34, 76), side = rnd(-0.12, 0.12);
+      const d = at(Math.sin(a), Math.cos(a));
+      out.push({ v: [d[0] * sp + n3.x * sp * side, d[1] * sp + n3.y * sp * side, d[2] * sp + n3.z * sp * side], o, col: [0.95, 0.95, 0.95], life: rnd(2.6, 3.6), size: 1.6, g: 1.1, k: 0.35, trail: 2.4, delay: 1.2 + Math.pow(i / 190, 0.8) * 1.1 });
     }
     return out;
   } },
