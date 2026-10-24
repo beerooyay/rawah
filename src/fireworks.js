@@ -24,7 +24,7 @@ const REACH = 3.2;          // how far you can reach to light one
 
 const PAL = {
   red: [1, 0.14, 0.1], orange: [1, 0.45, 0.08], gold: [1, 0.78, 0.25], green: [0.25, 1, 0.3], blue: [0.25, 0.5, 1],
-  purple: [0.72, 0.28, 1], pink: [1, 0.32, 0.72], cyan: [0.25, 0.95, 1], white: [1, 0.96, 0.88],
+  purple: [0.72, 0.28, 1], pink: [1, 0.32, 0.72], cyan: [0.25, 0.95, 1], white: [1, 0.96, 0.88], yellow: [1, 0.92, 0.2],
 };
 const BRIGHT = ['red', 'orange', 'gold', 'green', 'blue', 'purple', 'pink', 'cyan'];
 const rnd = (a = 0, b = 1) => a + Math.random() * (b - a);
@@ -231,6 +231,34 @@ function plane(nx, ny, nz) {
   return { u, w };
 }
 
+/**
+ * Words drawn in stars. The text is painted to a canvas once and sampled on a grid; each lit pixel becomes a star
+ * that flies to its place in a flat plane facing the watcher. Every star slows to a stop at a distance proportional
+ * to its launch speed, so the picture keeps its shape as it opens out and then hangs there, drifting down slowly.
+ */
+let _words = null;
+function wordPoints(lines) {
+  if (_words) return _words;
+  const cv = document.createElement('canvas');
+  cv.width = 760; cv.height = 150 * lines.length + 40;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '170px "Paytone One", Impact, "Arial Black", sans-serif';
+  lines.forEach((t, i) => g.fillText(t, cv.width / 2, 20 + 75 + i * 150));
+  const { data, width, height } = g.getImageData(0, 0, cv.width, cv.height);
+  const pts = [], STEP = 6;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (let y = STEP / 2; y < height; y += STEP) for (let x = STEP / 2; x < width; x += STEP) {
+    if (data[((y | 0) * width + (x | 0)) * 4 + 3] < 128) continue;
+    pts.push([x, y]);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  // centred, in units of the text's own width (1 = whole width), y up
+  const w = x1 - x0;
+  _words = pts.map(([x, y]) => [(x - (x0 + x1) / 2) / w, -(y - (y0 + y1) / 2) / w, (y - y0) / (y1 - y0)]);
+  return _words;
+}
+
 const star = (d, speed, col, o = {}) => ({ v: [d[0] * speed, d[1] * speed, d[2] * speed], col, life: 3.2, size: 1.6, ...o });
 
 /** `to`: the horizontal direction toward the watcher, so flat shapes (hearts, rings) face them. */
@@ -296,6 +324,18 @@ const STYLES = [
     for (const d of sphere(170)) out.push(star(d, 22, a, { trail: 0.8, life: 3.4 }));
     const { u, w } = plane(rnd(-0.4, 0.4), 1, rnd(-0.4, 0.4));
     for (let i = 0; i < 120; i++) { const t = (i / 120) * Math.PI * 2; out.push(star([u.x * Math.cos(t) + w.x * Math.sin(t), u.y * Math.cos(t) + w.y * Math.sin(t), u.z * Math.cos(t) + w.z * Math.sin(t)], 46, b, { trail: 1, life: 3.4 })); }
+    return out;
+  } },
+  { name: 'Gay Bois', H: [150, 175], toast: 'Step well back and look up, so you can read it.', make: (to) => {
+    // GAY over BOIS in the colours of the pride flag, standing upright and facing you
+    const pts = wordPoints(['GAY', 'BOIS']), W = 96, K = DRAG * 1.7, out = [];
+    const stripes = [PAL.red, PAL.orange, PAL.yellow, PAL.green, PAL.blue, PAL.purple];
+    const rx = to[1], rz = -to[0];                       // the watcher's right
+    for (const [x, y, f] of pts) {
+      const sx = x * W * K, sy = y * W * K;               // where it ends up, times the drag it will meet
+      // one point each (no trail), and dimmed: the stars overlap, and would burn out to white
+      out.push({ v: [rx * sx, sy, rz * sx], col: stripes[Math.min(5, Math.floor(f * 6))].map((c) => c * 0.8), life: 7.5, size: 2.3, g: 0.07, k: 1.7, flash: true });
+    }
     return out;
   } },
   { name: 'Spiral', make: (to) => {
@@ -482,7 +522,7 @@ export class Fireworks {
     t.mesh.updateMatrixWorld(true);
     const top = new THREE.Vector3(0, 0.31, 0).applyMatrix4(t.mesh.matrixWorld);
     const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(t.mesh.quaternion);
-    const H = rnd(105, 150), T = 2.5 + H / 120;
+    const st = STYLES[t.style], H = st.H ? rnd(st.H[0], st.H[1]) : rnd(105, 150), T = 2.5 + H / 120;
     this.shells.push({ x0: top.x, y0: top.y, z0: top.z, dx: dir.x / dir.y, dz: dir.z / dir.y, H, T, t: 0, style: t.style, trail: 0, x: top.x, y: top.y, z: top.z });
     // the muzzle: a flash and a spray of sparks
     for (let i = 0; i < 70; i++) {
@@ -494,7 +534,7 @@ export class Fireworks {
     const d = Math.hypot(top.x - view.p.x, top.z - view.p.z);
     this.events.push({ type: 'sound', name: 'mortar', v: clamp(1.1 - d / 120, 0.15, 1), delay: d / SOUND });
     this.events.push({ type: 'sound', name: 'whistle', v: clamp(1 - d / 160, 0.1, 1), dur: T * 0.85, delay: d / SOUND });
-    if (this.t - this.volley > 6) { this.volley = this.t; this.events.push({ type: 'toast', text: 'Look up!' }); }
+    if (this.t - this.volley > 6) { this.volley = this.t; this.events.push({ type: 'toast', text: st.toast || 'Look up!' }); }
     this.events.push({ type: 'shake', amount: clamp(1 - d / 25, 0, 1) });
   }
 
@@ -529,7 +569,7 @@ export class Fireworks {
     this.#flash(s.x, s.y, s.z, col, 1, 0.9);
     const d = Math.hypot(s.x - view.p.x, s.y - view.p.y, s.z - view.p.z), delay = d / SOUND;
     this.events.push({ type: 'sound', name: 'boom', v: clamp(1.15 - d / 600, 0.2, 1), delay });
-    if (style.name === 'Strobe' || style.name === 'Chrysanthemum' || style.name === 'Willow') this.events.push({ type: 'sound', name: 'crackle', v: clamp(1 - d / 500, 0.15, 1), delay: delay + 0.25, n: style.name === 'Strobe' ? 40 : 18 });
+    if (style.name === 'Strobe' || style.name === 'Chrysanthemum' || style.name === 'Willow' || style.name === 'Gay Bois') this.events.push({ type: 'sound', name: 'crackle', v: clamp(1 - d / 500, 0.15, 1), delay: delay + 0.25, n: style.name === 'Strobe' ? 40 : 18 });
   }
 
   /** Light the trees and ground for a moment. The nearest unused of three lights takes it. */
