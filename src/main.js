@@ -51,6 +51,7 @@ if (settings.fov === 72) settings.fov = 80;      // the old default: a little wi
 const calendar = new Calendar(settings.doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
+if (settings.depth === 'extended') Q.logDepth = true;
 if (DEV) {
   // local only, for A/B timing a preset: ?aa=0&logdepth=0&shadows=0&dpr=1&grass=30 (grass radius in metres)
   const u = new URLSearchParams(location.search);
@@ -538,6 +539,13 @@ bindRange('set-fovfx', 'fovfx', () => { rig.fovFx = settings.fovfx; }, (v) => (v
 rig.fovFx = settings.fovfx;
 bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume), (v) => `${Math.round(v * 100)}%`);
 bindRange('set-time', 'timeScale', null, (v) => `${v.toFixed(1)}×`);
+$('set-depth').value = settings.depth === 'extended' ? 'extended' : 'standard';
+$('set-depth').onchange = () => {
+  settings.depth = $('set-depth').value;
+  storeJSON('rawah-settings', settings);
+  if (state.started) save();
+  location.reload();     // the depth buffer is chosen when the renderer is made
+};
 $('set-quality').value = settings.quality || 'auto';
 $('set-quality').onchange = () => {
   settings.quality = $('set-quality').value;

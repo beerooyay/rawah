@@ -1,18 +1,21 @@
 // Quality tiers. "auto" picks low on phones, medium on tablets and touch
 // laptops, high on desktops. Everything that costs GPU time scales from here.
+// `logDepth` is a logarithmic depth buffer: far-view precision by writing every fragment's depth,
+// which turns off early depth rejection and more than doubled the frame time on a laptop GPU. It is
+// off in every preset; Settings -> Distance depth -> Extended turns it on (camera.near/far change with it).
 
 export const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 const small = Math.min(screen.width, screen.height) < 820;
 
 export const PRESETS = {
   high: {
-    dpr: 2, aa: true, logDepth: true, shadows: true, shadowMap: 2048, rangeK: 2.3,
+    dpr: 2, aa: true, logDepth: false, shadows: true, shadowMap: 2048, rangeK: 2.3,
     grass: { radius: 58, spacing: 0.35 },
     flora: { card: 100, radius: 1900, thin: 1000, impostor: 4096, cap: 320000 },
     precip: 8000,
   },
   medium: {
-    dpr: 1.5, aa: true, logDepth: true, shadows: true, shadowMap: 2048, rangeK: 2.0,
+    dpr: 1.5, aa: true, logDepth: false, shadows: true, shadowMap: 2048, rangeK: 2.0,
     grass: { radius: 40, spacing: 0.44 },
     flora: { card: 78, radius: 1500, thin: 800, impostor: 4096, cap: 220000 },
     precip: 5000,
