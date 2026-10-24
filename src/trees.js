@@ -263,6 +263,8 @@ class Builder {
         this.idx.push(a, c, b, b, c, d);
       }
     }
+    // remembered so a tree being felled can swap this prism for a finer trunk it can carve (cuts.js)
+    if (!this.trunkInfo) this.trunkInfo = { h, r0, r1, bark, lean: lean ? { x: lean.x, z: lean.z } : null, idxStart: this.idx.length - rows * seg * 6, idxEnd: this.idx.length };
   }
 
   geometry() {
@@ -274,6 +276,7 @@ class Builder {
     g.setIndex(this.idx);
     g.computeBoundingBox();
     g.computeBoundingSphere();
+    g.userData.trunk = this.trunkInfo || null;
     return g;
   }
 }
