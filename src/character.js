@@ -228,8 +228,11 @@ export class Character {
     this.firstPerson = on;
     this.fallback?.setFirstPerson(on);
     if (this.toolObj) this.toolObj.visible = !on;
+    // the hand tool's materials are shared with the one hanging off the camera (props.js): leave them alone
+    const tool = new Set();
+    this.toolObj?.traverse((o) => tool.add(o));
     this.group?.traverse((o) => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || tool.has(o)) return;
       for (const m of [].concat(o.material)) { m.colorWrite = !on; m.depthWrite = !on; }
     });
   }

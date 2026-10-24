@@ -18,8 +18,12 @@ const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
  * { ang, D, y0, slope } in the geometry's own units: the direction (about +Y, from +x toward +z), how
  * deep the wedge goes in, the height of its floor, and the rise of its roof per unit of depth.
  * Returns a new geometry with the trunk replaced, or null if the species has no trunk to carve.
+ *
+ * `mode` 'whole' is the tree being cut. When it falls it splits where the notches are (they share one height):
+ * 'log' is everything above the cut, moved down so its foot is at y = 0, with a flat cut face under it;
+ * 'stump' is the trunk below the cut with a flat, pale top.
  */
-export function carvedTree(geo, notches) {
+export function carvedTree(geo, notches, mode = 'whole') {
   const T = geo.userData.trunk;
   if (!T) return null;
   const { h: H, r0, r1, bark, lean } = T;
@@ -27,6 +31,7 @@ export function carvedTree(geo, notches) {
   const [u0, v0, du, dv] = barkUV(bark), [pu0, pv0, pdu, pdv] = barkUV('aspen');
 
   const pos = [], nor = [], uv = [], col = [], idx = [];
+  const shift = mode === 'log' ? notches[0]?.y0 ?? 0 : 0;
   // strips[group][row][column] = vertex index; groups are joined by coincident rows, not shared vertices
   const strip = (rows, norm, tex, shade) => {
     const base = pos.length / 3;
@@ -34,7 +39,7 @@ export function carvedTree(geo, notches) {
       for (let i = 0; i <= NA; i++) {
         const [r, y] = rows[j][i], a = (i / NA) * Math.PI * 2;
         const t = y / H, lx = lean ? lean.x * t * t : 0, lz = lean ? lean.z * t * t : 0;
-        pos.push(Math.cos(a) * r + lx, y, Math.sin(a) * r + lz);
+        pos.push(Math.cos(a) * r + lx, y - shift, Math.sin(a) * r + lz);
         const n = norm(i, j, a);
         nor.push(n[0], n[1], n[2]);
         const [u, v] = tex(i, j, y);
@@ -49,6 +54,17 @@ export function carvedTree(geo, notches) {
         idx.push(a, c, b, b, c, d);
       }
     }
+  };
+  // a flat disc: a centre vertex and a ring of [r, y], all facing `n`
+  const fan = (ring, n, shade) => {
+    const base = pos.length / 3, y = ring[0][1], t = y / H, lx = lean ? lean.x * t * t : 0, lz = lean ? lean.z * t * t : 0;
+    pos.push(lx, y - shift, lz); nor.push(...n); uv.push(pu0 + pdu * 0.5, pv0 + pdv * 0.5); col.push(...shade);
+    for (let i = 0; i <= NA; i++) {
+      const a = (i / NA) * Math.PI * 2, [r] = ring[i];
+      pos.push(Math.cos(a) * r + lx, y - shift, Math.sin(a) * r + lz); nor.push(...n);
+      uv.push(pu0 + pdu * (0.5 + 0.45 * Math.cos(a)), pv0 + pdv * (0.5 + 0.45 * Math.sin(a))); col.push(...shade);
+    }
+    for (let i = 0; i < NA; i++) idx.push(base, base + 1 + i, base + 2 + i);
   };
   const radial = (i, j, a) => { const l = Math.hypot(Math.cos(a), 0.15, Math.sin(a)); return [Math.cos(a) / l, 0.15 / l, Math.sin(a) / l]; };
   const barkTex = (i, j, y) => [u0 + du * (i / NA), v0 + dv * (y / H)];
@@ -90,34 +106,39 @@ export function carvedTree(geo, notches) {
   for (let i = 0; i <= NA; i++) if (yTop[i] === undefined) yTop[i] = y0(i);
   for (let j = 0; j <= ABOVE; j++) above.push(Array.from({ length: NA + 1 }, (_, i) => { const y = yTop[i] + (H - yTop[i]) * (j / ABOVE); return [R(y), y]; }));
 
-  strip(below, radial, barkTex, [BARK, BARK, BARK]);
-  // dark in the crease, paler toward the bark
-  strip(floor, () => [0, 1, 0], woodTex, (i, j) => PALE.map((v) => v * (j ? 0.42 : 0.95)));
+  if (mode !== 'log') strip(below, radial, barkTex, [BARK, BARK, BARK]);
+  if (mode === 'whole') {
+    // dark in the crease, paler toward the bark
+    strip(floor, () => [0, 1, 0], woodTex, (i, j) => PALE.map((v) => v * (j ? 0.42 : 0.95)));
+  } else if (mode === 'stump') fan(floor[0], [0, 1, 0], PALE.map((v) => v * 0.95));
+  else fan(floor[1], [0, -1, 0], PALE.map((v) => v * 0.8));
   // the roof faces down and out into the void: normal (rise, -1) in (outward, up), turned to each column's own direction
-  strip(roof, (i, j, a) => {
+  if (mode !== 'stump') strip(roof, (i, j, a) => {
     const c = cols[i];
     if (!c) return radial(i, j, a);
     const k = 1 / Math.hypot(c.n.slope, 1), ca = Math.cos(c.n.ang), sa = Math.sin(c.n.ang);
     return [ca * c.n.slope * k, -k, sa * c.n.slope * k];
   }, woodTex, (i, j) => PALE.map((v) => v * (0.38 + 0.45 * (j / ROOF))));
-  strip(above, radial, barkTex, [BARK, BARK, BARK]);
+  if (mode !== 'stump') strip(above, radial, barkTex, [BARK, BARK, BARK]);
 
   // the old trunk's triangles go; everything else (branches, crown) is kept as it was
   const A = geo.attributes, n0 = A.position.count, old = geo.index.array;
   const keep = [];
-  for (let k = 0; k < old.length; k++) if (k < T.idxStart || k >= T.idxEnd) keep.push(old[k]);
+  if (mode !== 'stump') for (let k = 0; k < old.length; k++) if (k < T.idxStart || k >= T.idxEnd) keep.push(old[k]);
   const out = new THREE.BufferGeometry();
-  const cat = (a, b, size) => { const f = new Float32Array(a.length + b.length); f.set(a); f.set(b, a.length); return new THREE.BufferAttribute(f, size); };
-  out.setAttribute('position', cat(A.position.array, pos, 3));
-  out.setAttribute('normal', cat(A.normal.array, nor, 3));
-  out.setAttribute('uv', cat(A.uv.array, uv, 2));
-  out.setAttribute('color', cat(A.color.array, col, 3));
+  const none = new Float32Array(0), cat = (a, b, size) => { const f = new Float32Array(a.length + b.length); f.set(a); f.set(b, a.length); return new THREE.BufferAttribute(f, size); };
+  const oldPos = mode === 'stump' ? none : mode === 'log' ? A.position.array.map((v, k) => (k % 3 === 1 ? v - shift : v)) : A.position.array;
+  const n1 = mode === 'stump' ? 0 : n0;
+  out.setAttribute('position', cat(oldPos, pos, 3));
+  out.setAttribute('normal', cat(mode === 'stump' ? none : A.normal.array, nor, 3));
+  out.setAttribute('uv', cat(mode === 'stump' ? none : A.uv.array, uv, 2));
+  out.setAttribute('color', cat(mode === 'stump' ? none : A.color.array, col, 3));
 
   // face every new triangle the way its vertex normals point, so the double-sided lighting never flips
   const P = out.attributes.position.array, N = out.attributes.normal.array;
   const fin = keep.slice();
   for (let k = 0; k < idx.length; k += 3) {
-    let [a, b, c] = [idx[k] + n0, idx[k + 1] + n0, idx[k + 2] + n0];
+    let [a, b, c] = [idx[k] + n1, idx[k + 1] + n1, idx[k + 2] + n1];
     const e1 = [P[b * 3] - P[a * 3], P[b * 3 + 1] - P[a * 3 + 1], P[b * 3 + 2] - P[a * 3 + 2]], e2 = [P[c * 3] - P[a * 3], P[c * 3 + 1] - P[a * 3 + 1], P[c * 3 + 2] - P[a * 3 + 2]];
     const nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
     if (nx * N[a * 3] + ny * N[a * 3 + 1] + nz * N[a * 3 + 2] < 0) [b, c] = [c, b];

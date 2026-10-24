@@ -22,6 +22,8 @@ const BRUSH = ['krumm', 'willow'];
 const NAME = { spruce: 'spruce', fir: 'subalpine fir', lodgepole: 'lodgepole pine', aspen: 'aspen', snag: 'snag', krumm: 'krummholz', willow: 'willow' };
 // felling an axe like a woodsman: three strokes undercut one side of the trunk, three the other, and it goes
 const TREE_HITS = 6;
+const CUT_H = 0.8;               // where the wedges go, metres up the trunk: the tree breaks here and the stump is this tall
+const MAX_CUT_STUMPS = 400;
 const CARRY_MAX = 0.55;        // rock scale you can lift
 const PUSH_MIN = CARRY_MAX;
 const PUSH_MAX = 1.45;         // rock scale you can shove; bigger is bedrock
@@ -38,25 +40,24 @@ const sm = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t
 
 /**
  * The sideways felling swing, seen from your own eyes: the handle level and pointing ahead, the head flat,
- * the edge leading across the trunk. `R` comes in from the right and sweeps left; `L` is its mirror image
- * (every position and every turn reflected across the middle of the view), from the left sweeping right.
+ * the edge leading across the trunk. `R` comes in from the right and sweeps left; `L` comes in from the left and
+ * sweeps right, every position mirrored and the head turned so the edge still leads.
  */
 const SIDE = (() => {
-  const up = new THREE.Vector3(0, 1, 0), mir = new THREE.Matrix4().makeScale(-1, 1, 1);
+  const up = new THREE.Vector3(0, 1, 0);
   const euler = (m) => { const e = new THREE.Euler().setFromRotationMatrix(m, 'YXZ'); return [e.x, e.y, e.z]; };
-  const pose = (x, y, z, hx, hz, flip) => {
-    const h = new THREE.Vector3(hx, 0.05, hz).normalize(), e = new THREE.Vector3().crossVectors(up, h).normalize(), n = new THREE.Vector3().crossVectors(e, h);
-    const m = new THREE.Matrix4().makeBasis(e, h, n);
-    if (!flip) return [x, y, z, ...euler(m)];
-    const c = mir.clone().multiply(m).multiply(mir);         // reflect the whole pose across the view's centre line
-    return [-x, y, z, ...euler(c)];
+  // `lead` is which way the edge goes: -1 sweeps toward the left, +1 toward the right. The axe's edge is on its +X side, so the
+  // left-handed swing is not the right one reflected (that would put the edge behind the head): it turns the head over instead.
+  const pose = (x, y, z, hx, hz, lead) => {
+    const h = new THREE.Vector3(hx, 0.05, hz).normalize(), e = new THREE.Vector3().crossVectors(up, h).normalize().multiplyScalar(-lead), n = new THREE.Vector3().crossVectors(e, h);
+    return [x, y, z, ...euler(new THREE.Matrix4().makeBasis(e, h, n))];
   };
-  const set = (flip) => ({
+  const set = (side) => ({
     rest: [0.3, -0.34, -0.55, -0.35, 1.0, -0.3],
-    back: pose(0.46, -0.2, -0.52, 0.7, -0.7, flip),
-    hit: pose(-0.14, -0.28, -0.72, -0.3, -0.95, flip),
+    back: pose(side * 0.46, -0.2, -0.52, side * 0.7, -0.7, -side),
+    hit: pose(-side * 0.14, -0.28, -0.72, -side * 0.3, -0.95, -side),
   });
-  return { R: set(false), L: set(true) };
+  return { R: set(1), L: set(-1) };
 })();
 
 /** Held in front of the camera, [x, y, z, rotX, rotY, rotZ] at rest, drawn back, and at the moment of the blow. */
@@ -76,6 +77,7 @@ export class Props {
     this.rocks = [];                   // loose rocks in the world
     this.falling = []; this.lying = [];
     this.damage = new Map();           // tree key -> swings taken
+    this.cutStumps = [];               // stumps of trees felled with wedges, each its own mesh
     this.cutting = new Map();          // tree key -> a standing tree with wedges in it (see #makeCut)
     this.pushT = 0; this.dt = 1 / 60; this.tick = 0; this.told = new Set();
     this.hint = '';
@@ -202,31 +204,56 @@ export class Props {
     return rec;
   }
 
-  /** Rebuild the trunk with the wedges as deep as the strokes so far. */
-  #carve(rec) {
-    const src = this.flora.meshes[rec.kind][rec.vi].geometry, T = src.userData.trunk;
-    if (!T) return;
+  /** The two wedges as deep as the strokes so far, in the tree geometry's own units. Both floors share one height: where it will break. */
+  #notches(rec) {
+    const T = this.flora.meshes[rec.kind][rec.vi].geometry.userData.trunk;
     const u = clamp(rec.taken / TREE_HITS, 0, 1), rot = rec.r * Math.PI * 2, co = Math.cos(rot), si = Math.sin(rot);
-    const notch = (dx, dz, f, y0w) => {
-      const y0 = y0w / rec.s, R0 = T.r0 + (T.r1 - T.r0) * (y0 / T.h);
+    const notch = (dx, dz, f) => {
+      const y0 = CUT_H / rec.s, R0 = T.r0 + (T.r1 - T.r0) * (y0 / T.h);
       // world direction to the geometry's own: the instance is turned by `rot` about Y
       const lx = dx * co - dz * si, lz = dx * si + dz * co;
       return { ang: Math.atan2(lz, lx), D: f > 0 ? R0 * (0.15 + 0.4 * f) : 0, y0, slope: 1.05 };
     };
-    const g = carvedTree(src, [notch(rec.sides[0], rec.sides[1], clamp(u * 2, 0, 1), 0.75), notch(rec.sides[2], rec.sides[3], clamp((u - 0.5) * 2, 0, 1), 0.85)]);
+    return [notch(rec.sides[0], rec.sides[1], clamp(u * 2, 0, 1)), notch(rec.sides[2], rec.sides[3], clamp((u - 0.5) * 2, 0, 1))];
+  }
+
+  /** Rebuild the trunk with the wedges as deep as the strokes so far. */
+  #carve(rec) {
+    const src = this.flora.meshes[rec.kind][rec.vi].geometry;
+    if (!src.userData.trunk) return;
+    const g = carvedTree(src, this.#notches(rec));
     if (!g) return;
     rec.mesh.geometry = g;
     rec.geo?.dispose();
     rec.geo = g;
   }
 
+  /** The cut is through: the trunk below it stays as a stump with a flat top; everything above falls from the notches. */
   #fell(rec, dx, dz) {
     this.cutting.delete(rec.key);
-    const { mesh, kind, vi, x, e, z, s, r } = rec;
-    const shade = 0.82 + r * 0.3, height = this.flora.meshes[kind][vi].geometry.boundingBox.max.y;
-    const a = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.5;
-    this.falling.push({ mesh, geo: rec.geo, kind, vi, x, y: e - 0.15, z, s, r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * s * 0.055, 2.1, 3.4), H: height * s });
-    this.#stump(x, e, z, s);
+    const { kind, vi, x, e, z, s, r } = rec, src = this.flora.meshes[kind][vi].geometry;
+    const notches = this.#notches(rec);
+    const log = carvedTree(src, notches, 'log');
+    let mesh = rec.mesh, geo = rec.geo;
+    if (log) { mesh.geometry = log; geo?.dispose(); geo = log; this.#makeStump(kind, vi, x, e, z, s, r, rec.sides); }
+    else this.#stump(x, e, z, s);
+    const shade = 0.82 + r * 0.3, height = src.boundingBox.max.y;
+    const a = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.5, lift = log ? CUT_H : 0;
+    this.falling.push({ mesh, geo, kind, vi, x, y: e - 0.15, lift, z, s, r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * s * 0.055, 2.1, 3.4), H: height * s - lift });
+  }
+
+  /** The stump a felled tree leaves: its own trunk to the height of the cut, flat and pale on top. */
+  #makeStump(kind, vi, x, e, z, s, r, sides) {
+    const rec = { kind, vi, x, e, z, s, r, sides, taken: TREE_HITS };
+    const g = carvedTree(this.flora.meshes[kind][vi].geometry, this.#notches(rec), 'stump');
+    if (!g) return;
+    const { mesh } = this.flora.treeMesh(kind, vi, 0.82 + r * 0.3);
+    mesh.geometry = g;
+    mesh.setMatrixAt(0, _m.compose(_p.set(x, e - 0.15, z), _q.setFromAxisAngle(Y, r * Math.PI * 2), _s.setScalar(s)));
+    this.scene.add(mesh);
+    rec.mesh = mesh; rec.geo = g;
+    this.cutStumps.push(rec);
+    if (this.cutStumps.length > MAX_CUT_STUMPS) { const old = this.cutStumps.shift(); old.mesh.parent?.remove(old.mesh); old.mesh.dispose(); old.geo.dispose(); }
   }
 
   /** A lying tree that has been sawn up: take it away (its stump stays). */
@@ -260,7 +287,8 @@ export class Props {
     _q.setFromAxisAngle(_axis, theta);
     _q2.setFromAxisAngle(Y, f.r * Math.PI * 2);
     _q.multiply(_q2);
-    f.mesh.setMatrixAt(0, _m.compose(_p.set(f.x, f.y + 0.3 * Math.sin(theta), f.z), _q, _s.setScalar(f.s)));
+    // a log that broke at `lift` metres starts on its stump and slides down as it tips
+    f.mesh.setMatrixAt(0, _m.compose(_p.set(f.x, f.y + 0.3 * Math.sin(theta) + (f.lift || 0) * Math.cos(theta), f.z), _q, _s.setScalar(f.s)));
     f.mesh.instanceMatrix.needsUpdate = true;
   }
 
@@ -634,6 +662,7 @@ export class Props {
       lying: this.lying.map((f) => [f.kind, f.vi, r2(f.x), r2(f.y), r2(f.z), r2(f.s), r2(f.r), r2(f.yaw), r2(f.shade)]),
       rocks: this.rocks.map((k) => [k.kind, k.vi, r2(k.x), r2(k.z), r2(k.s), r2(k.r)]),
       carry: this.carry ? [this.carry.kind, this.carry.vi, this.carry.s, this.carry.r] : null,
+      stumpCuts: this.cutStumps.map((c) => [c.kind, c.vi, r2(c.x), r2(c.e), r2(c.z), r2(c.s), r2(c.r), ...c.sides.map(r2)]),
       cuts: [...this.cutting.values()].map((c) => [c.kind, c.vi, r2(c.x), r2(c.e), r2(c.z), r2(c.s), r2(c.r), c.taken, ...c.sides.map(r2)]),
     };
   }
@@ -653,6 +682,7 @@ export class Props {
       this.#poseTree(f, REST);
       this.lying.push(f);
     }
+    for (const [kind, vi, x, e, z, s, r, ...sides] of d.stumpCuts || []) if (this.flora.meshes[kind]?.[vi]) this.#makeStump(kind, vi, x, e, z, s, r, sides);
     for (const [kind, vi, x, e, z, s, r, taken, ...sides] of d.cuts || []) {
       if (!this.flora.meshes[kind]?.[vi]) continue;
       this.damage.set(itemKey(kind, x, z), taken);
@@ -680,6 +710,8 @@ export class Props {
     this.stumps = []; this.#writeStumps();
     for (const c of this.cutting.values()) { c.mesh.parent?.remove(c.mesh); c.mesh.dispose(); c.geo?.dispose(); }
     this.cutting.clear();
+    for (const c of this.cutStumps) { c.mesh.parent?.remove(c.mesh); c.mesh.dispose(); c.geo.dispose(); }
+    this.cutStumps = [];
     this.damage.clear(); this.told.clear();
     if (rebuild) { this.flora.removed.clear(); this.flora.tiles.clear(); this.flora.dirty = true; }
     this.setTool('fists');
