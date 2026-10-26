@@ -44,6 +44,7 @@ import { WaveField, WATER } from './waves.js';
 import { WaterCells } from './waterbox.js';
 import { Lightning } from './lightning.js';
 import { Shafts, Mist } from './shafts.js';
+import { SOIL, loadSoil } from './soil.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -68,6 +69,7 @@ if (DEV) {
 }
 settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
+settings.soil ??= Q.soil !== false;
 if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
 
@@ -611,6 +613,9 @@ $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (
   sel.value = Object.keys(SEASONS).find((k) => SEASONS[k].doy === settings.doy) || 'autumn';
   sel.onchange = () => { settings.doy = SEASONS[sel.value].doy; storeJSON('rawah-settings', settings); location.reload(); };
 }
+loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });   // the soil pack: the close ground (src/soil.js)
+$('set-soil').checked = settings.soil;
+$('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-shafts').checked = settings.shafts;
 $('set-shafts').onchange = () => { settings.shafts = $('set-shafts').checked; shafts.on = settings.shafts; storeJSON('rawah-settings', settings); };
 $('set-shadows').checked = settings.shadows;

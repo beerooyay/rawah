@@ -21,7 +21,7 @@ export const PRESETS = {
     precip: 5000,
   },
   low: {
-    dpr: 1, aa: false, logDepth: false, shadows: false, shadowMap: 1024, rangeK: 1.7, shafts: 0,
+    dpr: 1, aa: false, logDepth: false, shadows: false, shadowMap: 1024, rangeK: 1.7, shafts: 0, soil: false,
     grass: { radius: 22, spacing: 0.6 },
     flora: { card: 45, radius: 750, thin: 380, impostor: 2048, cap: 120000 },
     precip: 2500,

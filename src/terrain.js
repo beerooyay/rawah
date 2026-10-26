@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
+import { SOIL, SOIL_PARS, SOIL_NORMAL, SOIL_COLOR } from './soil.js';
 import { chunkGeometry } from './culling.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
@@ -174,7 +175,8 @@ export const NEAR_NORMAL = /* glsl */ `
           gStone = max(s1, s2);
           gId = s2 > s1 ? w2.y : w1.y;
           gRing = smoothstep(r1 * 1.35, r1, b1) * keep1 * (1.0 - s1) + smoothstep(r2 * 1.25, r2, b2) * keep2 * (1.0 - s2);
-        }`;
+        }
+        ${SOIL_NORMAL}`;
 
 export const NEAR_COLOR = /* glsl */ `
         if (nearK > 0.0) {
@@ -186,7 +188,8 @@ export const NEAR_COLOR = /* glsl */ `
           vec3 needles = mix(vec3(0.2, 0.13, 0.07), vec3(0.38, 0.24, 0.12), smoothstep(0.4, 0.65, streak)) * (0.8 + fine * 0.4);
           vec3 ground = mix(litter, needles, gForest);
           ground = mix(ground, base, gRocky * 0.6);
-          diffuseColor.rgb = mix(base, ground, nearK * 0.75);
+          ${SOIL_COLOR}
+          diffuseColor.rgb = mix(base, ground, nearK * mix(0.75, 0.97, soilK));
           vec3 stoneCol = mix(vec3(0.4, 0.38, 0.36), vec3(0.6, 0.54, 0.49), gId) * (0.8 + fine * 0.35);
           float lichen = step(fract(gId * 7.3), 0.35) * smoothstep(0.5, 0.65, texture2D(uNoise, p * 1.7).r);
           stoneCol = mix(stoneCol, mix(vec3(0.56, 0.6, 0.36), vec3(0.72, 0.46, 0.2), step(fract(gId * 3.1), 0.3)), lichen * 0.7);
@@ -203,7 +206,7 @@ export const BOXEL_COLOR = /* glsl */ `
         diffuseColor.rgb *= 1.0 - bx.r * 0.34;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.15, 1.07, 0.9), bx.g * 0.6);`;
 
-export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n';
+export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n' + SOIL_PARS;
 
 export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uColorMap = { value: colorMap };
@@ -213,6 +216,7 @@ export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uExtent = { value: extent };
   shader.uniforms.uRock = ROCK;
   shader.uniforms.uBoxel = BOXEL;
+  Object.assign(shader.uniforms, SOIL);
 }
 
 /** Lambert for the far horizon mesh: geometry normals, satellite albedo. */
