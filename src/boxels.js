@@ -3,7 +3,12 @@ import * as THREE from 'three';
 // Certified-window world memory ("boxels"). A field over the valley holds
 // moisture and wear; every event gets a closed-form footprint from the cone
 // law, the sim only touches cells inside live cones, and every skipped cell is
-// provably below the visible threshold. Weather rides the gauge clock
+// provably below the visible threshold. Overlapping events are composed the
+// way the paper says (Prop. 4.2, Thm. 6.7): one ledger per cell sums every
+// live event's certified peak (so masses add, they are not each given the
+// whole tolerance), the tolerance is split between sleeping cells, retired
+// events and truncated tails, and when too many events are live the closest
+// pair is merged into one event of summed mass. Weather rides the gauge clock
 // Theta = integral I dt: intensity only scales the action clock, it never
 // wakes a cell. Cost scales with what happens, not with world size.
 
@@ -18,13 +23,26 @@ export class Boxels {
     this.d = d; this.k = k; this.kWear = kWear; this.eps = eps;
     this.u = new Float32Array(n * n);   // moisture, 0..1
     this.w = new Float32Array(n * n);   // wear, 0..1
-    this.live = new Map();              // cell index -> theta expiry
+    this.live = new Map();              // wear cells: cell index -> theta expiry (exact first passage)
     this.theta = 0;
+    // certified moisture composition (see #ledgerAdd): the tolerance eps is split three ways
+    this.epsWin = eps * 0.5;            // a cell sleeps while the summed peaks of the live events on it stay below this
+    this.epsRet = eps * 0.25;           // budget for retired events' residual fields (decays with the dissipation)
+    this.epsCut = eps * 0.25;           // budget for ledger tails dropped below `cut`
+    this.nMax = 48;                     // live events before the closest pair is merged
+    this.cut = this.epsCut / this.nMax;
+    this.rho0 = this.epsRet * k / 2;    // residual an event may leave when it retires (at most two retirements per theta unit)
+    this.retired = 0;                   // decaying sum of those residuals
+    this.ev = [];                       // live events
+    this.L = new Float64Array(n * n);   // ledger: sum over live events of their certified peak at the cell
+    this.awake = new Int32Array(n * n); this.awakeN = 0;   // cells whose ledger exceeds epsWin, and where each sits in that list
+    this.slot = new Int32Array(n * n).fill(-1);
+    this.sTab = null;
     this.px = new Uint8Array(n * n * 4);
     this.texture = new THREE.DataTexture(this.px, n, n);
     this.dirty = true;              // set by events and steps; #paint only runs when something changed
     this.paintT = -1;               // theta of the last repaint — moisture moves slowly, ~12 Hz is plenty
-    this.stats = { touched: 0, total: 0, ms: 0, live: 0, events: 0, violations: 0 };
+    this.stats = { touched: 0, total: 0, ms: 0, live: 0, events: 0, violations: 0, merged: 0, retired: 0, deferred: 0, events_live: 0 };
     this.stepAcc = 0;
     this.ell = 1 / Math.acosh(1 + k / (2 * d));   // discrete decay length of the super-solution, in cells
   }
@@ -70,41 +88,117 @@ export class Boxels {
     return [lo, hi];
   }
 
-  #wake(i, lo, hi) {
-    const t0 = this.theta + lo, t1 = this.theta + hi, w = this.live.get(i);
-    if (!w || t1 > w[1]) this.live.set(i, w ? [Math.min(w[0], t0), t1] : [t0, t1]);
+  /**
+   * s(rho): the most a unit of mass can ever put on a cell rho cells away,
+   * sup over time of e^(-k t) G_t(rho) for the lattice's diffusivity (the
+   * peak of Theorem 5.1's envelope; closed form, no search). Table lookup in
+   * quarter cells, shifted one cell nearer to absorb the lattice/continuum
+   * gap (the paper measures under a cell).
+   */
+  #s(rho) {
+    if (!this.sTab) {
+      const { d, k } = this, T = new Float64Array(4 * 1024 + 2);
+      for (let q = 0; q < T.length; q++) {
+        const r = q / 4;
+        const ts = k > 1e-9 ? (Math.sqrt(1 + k * r * r / d) - 1) / (2 * k) : r * r / (4 * d);
+        T[q] = r < 0.25 ? 1e9 : Math.exp(-k * ts - r * r / (4 * d * ts)) / (4 * Math.PI * d * ts);
+      }
+      this.sTab = T;
+    }
+    const q = Math.floor(Math.max(0.5, rho - 1) * 4);
+    return q < this.sTab.length ? this.sTab[q] : 0;
   }
 
-  /** Moisture event: saturate every cell in the disc with a; the certificate bounds the whole deposit as mass a·πr² at the nearest edge. */
+  /**
+   * Add (sign +1) or remove (-1) an event's certified peaks on every cell it
+   * can reach. The grid has reflecting edges, so the field is the free-space
+   * field plus its mirror images (Remark 6.9's finite-domain case): the event
+   * is also counted from its reflection across each edge and each corner.
+   */
+  #ledgerAdd(e, sign) {
+    const { n, L } = this, cut = this.cut / 9;
+    // reach: where A s(rho) falls under the cut
+    let R = 0;
+    while (R < 1000 && e.A * this.#s(R + 1) >= cut) R++;
+    R += e.r + 1;
+    e.R = R;
+    const xs = [e.cx, -1 - e.cx, 2 * n - 1 - e.cx], zs = [e.cz, -1 - e.cz, 2 * n - 1 - e.cz];
+    for (const ix of xs) for (const iz of zs) {
+      const x0 = Math.max(0, ix - R), x1 = Math.min(n - 1, ix + R), z0 = Math.max(0, iz - R), z1 = Math.min(n - 1, iz + R);
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) {
+          const rho = Math.max(0, Math.hypot(x - ix, z - iz) - e.r);
+          const p = Math.min(e.a, e.A * this.#s(rho));   // never more than the event's own density (max principle)
+          if (p < cut) continue;
+          const i = z * n + x;
+          L[i] = Math.max(0, L[i] + sign * p);
+          if (sign > 0 && L[i] > this.epsWin && this.slot[i] < 0) { this.slot[i] = this.awakeN; this.awake[this.awakeN++] = i; }
+        }
+      }
+    }
+  }
+
+  /** Theta at which an event's whole field is certified under rho0: every part decays as e^(-k s) A / (4 pi D s) at its peak. */
+  #retireAt(e) {
+    const f = (th) => { let m = 0; for (const [A, t] of e.parts) { const s = Math.max(th - t, 1e-6); m += A * Math.exp(-this.k * s) / (4 * Math.PI * this.d * s); } return 4 * m; };   // x4: a corner reflects the field twice over
+    let lo = this.theta, hi = this.theta + 1;
+    while (f(hi) > this.rho0 && hi < this.theta + 1e7) hi = this.theta + (hi - this.theta) * 2;
+    for (let it = 0; it < 50; it++) { const m = (lo + hi) / 2; if (f(m) > this.rho0) lo = m; else hi = m; }
+    return hi;
+  }
+
+  /** Two live events become one of summed mass inside the smallest disc that holds both (Prop. 4.2(a): the sum of peaks is at most the merged mass at the hull's distance). */
+  #merge() {
+    const ev = this.ev;
+    let bi = 0, bj = 1, best = Infinity;
+    for (let i = 0; i < ev.length; i++) for (let j = i + 1; j < ev.length; j++) {
+      const d = Math.hypot(ev[i].cx - ev[j].cx, ev[i].cz - ev[j].cz), rn = Math.max(ev[i].r, ev[j].r, (d + ev[i].r + ev[j].r) / 2);
+      const cost = rn - Math.max(ev[i].r, ev[j].r);
+      if (cost < best) { best = cost; bi = i; bj = j; }
+    }
+    const a = ev[bi], b = ev[bj];
+    this.#ledgerAdd(a, -1); this.#ledgerAdd(b, -1);
+    const d = Math.hypot(a.cx - b.cx, a.cz - b.cz);
+    let big = a, small = b; if (b.r > a.r) { big = b; small = a; }
+    let cx = big.cx, cz = big.cz, r = big.r;
+    if (d + small.r > big.r) {
+      r = (d + a.r + b.r) / 2;
+      const t = d > 0 ? (r - a.r) / d : 0;
+      cx = Math.round(a.cx + (b.cx - a.cx) * t); cz = Math.round(a.cz + (b.cz - a.cz) * t);
+      r = Math.max(r, Math.hypot(cx - a.cx, cz - a.cz) + a.r, Math.hypot(cx - b.cx, cz - b.cz) + b.r);   // rounding the centre must not uncover either disc
+    }
+    const m = { cx, cz, r, a: Math.max(a.a, b.a), A: a.A + b.A, parts: a.parts.concat(b.parts), ret: 0, R: 0 };
+    m.ret = this.#retireAt(m);
+    ev.splice(bj, 1); ev[bi] = m;
+    this.#ledgerAdd(m, +1);
+    this.stats.merged++;
+  }
+
+  /** Moisture event: saturate every cell in the disc with a; the ledger adds the event's certified peak to every cell it can reach. */
   wet(x, z, a, r = 0) {
     const i0 = this.#idx(x, z); if (i0 < 0) return;
     const cx = i0 % this.n, cz = (i0 / this.n) | 0;
+    let cells = 0;
     for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
       const i = (cz + dz) * this.n + cx + dx;
-      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) this.u[i] = Math.min(1, this.u[i] + a);
+      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) { this.u[i] = Math.min(1, this.u[i] + a); cells++; }
     }
     this.dirty = true;
-    const mass = a * Math.PI * r * r, R = r + this.#cone(mass);
-    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
-      const i = (cz + dz) * this.n + cx + dx, dist = Math.hypot(dx, dz);
-      if (dx * dx + dz * dz <= R * R && i >= 0 && i < this.u.length) {
-        const w = dist <= r ? [0, Math.log(a / this.eps) / this.k] : this.#window(dist - r, mass);
-        if (w) this.#wake(i, w[0], w[1]);
-      }
-    }
+    const e = { cx, cz, r, a, A: a * cells, parts: [[a * cells, this.theta]], ret: 0, R: 0 };
+    e.ret = this.#retireAt(e);
+    this.ev.push(e);
+    this.#ledgerAdd(e, +1);
+    if (this.ev.length > this.nMax) this.#merge();
     this.stats.events++;
   }
 
-  /** Drying event: pull `a` moisture out of every cell in the disc. Removing mass can only shrink the field, so the neighbours' existing cones still certify what arrives later — no new windows needed. */
+  /** Drying event: pull `a` moisture out of every cell in the disc. Removing mass can only shrink the field, so every live certificate still holds: nothing to add. */
   dry(x, z, a, r = 0) {
     const i0 = this.#idx(x, z); if (i0 < 0) return;
     const cx = i0 % this.n, cz = (i0 / this.n) | 0;
     for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
       const i = (cz + dz) * this.n + cx + dx;
-      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length && this.u[i] > 0) {
-        this.u[i] = Math.max(0, this.u[i] - a);
-        if (!this.live.has(i)) this.live.set(i, [0, Math.log(Math.max(this.u[i], 1e-4) / this.eps) / this.k]);   // keep fading whatever is left
-      }
+      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length && this.u[i] > 0) this.u[i] = Math.max(0, this.u[i] - a);
     }
     this.dirty = true;
     this.stats.events++;
@@ -116,30 +210,54 @@ export class Boxels {
     return i < 0 ? { u: 0, w: 0 } : { u: this.u[i], w: this.w[i] };
   }
 
-  /** Wear event: a footstep. No diffusion — the mark fades on its own clock. */
+  /** Wear event: a footstep. No diffusion, so no cone: the mark fades on its own clock, and the cell sleeps at the exact first passage of its own value (Example 7.5), however many steps stacked on it. */
   wear(x, z, a) {
     const i = this.#idx(x, z); if (i < 0) return;
     this.w[i] = Math.min(1, this.w[i] + a);
-    this.#wake(i, 0, Math.log(a / this.eps) / this.kWear);
+    this.live.set(i, this.theta + Math.log(Math.max(this.w[i], this.eps) / this.eps) / this.kWear);
     this.dirty = true;
     this.stats.events++;
   }
 
-  /** One gauge-clock step: integrate only cells whose certified window contains theta. */
+  /** One gauge-clock step: retire what can retire, then integrate the cells the ledger says can matter. */
   #step(dt) {
-    const { u, w, n, d, k, kWear } = this;
-    for (const [i, win] of this.live) {
-      if (this.theta < win[0]) continue;                    // front hasn't arrived: certified asleep
-      if (this.theta > win[1]) {                          // envelope says permanently below eps
-        if (u[i] < this.eps && w[i] < this.eps) { this.live.delete(i); continue; }
-        this.stats.violations++;                          // bound failed — keep the cell, report it
+    const { u, w, L, n, d, k, kWear, epsWin } = this;
+    const decay = Math.exp(-k * dt);
+    this.retired *= decay;
+    // retire events whose whole field is under rho0, while the retired residuals stay inside their budget
+    for (let q = this.ev.length - 1; q >= 0; q--) {
+      const e = this.ev[q];
+      if (this.theta < e.ret) continue;
+      if (this.retired + this.rho0 > this.epsRet) { e.ret = this.theta + 1; this.stats.deferred++; continue; }
+      this.#ledgerAdd(e, -1);
+      this.retired += this.rho0;
+      this.ev.splice(q, 1);
+      this.stats.retired++;
+    }
+    // moisture: only awake cells; a cell whose ledger has fallen under epsWin goes back to sleep (and is audited)
+    let a = 0;
+    while (a < this.awakeN) {
+      const i = this.awake[a];
+      if (L[i] <= epsWin) {
+        if (u[i] > epsWin * 1.5) this.stats.violations++;   // the bound failed: keep it awake and report it
+        else { const last = this.awake[--this.awakeN]; this.awake[a] = last; this.slot[last] = a; this.slot[i] = -1; continue; }
       }
       const l = i % n, m = i - l;
       const lap = (l > 0 ? u[i - 1] : u[i]) + (l < n - 1 ? u[i + 1] : u[i]) + (m >= n ? u[i - n] : u[i]) + (m < u.length - n ? u[i + n] : u[i]) - 4 * u[i];
       u[i] = Math.max(0, u[i] + dt * (d * lap - k * u[i]));
+      this.stats.touched++; this.stats.total++;
+      a++;
+    }
+    if (this.awakeN) this.dirty = true;
+    // wear: only its own cells, each until its own first passage
+    for (const [i, until] of this.live) {
+      if (this.theta > until) {
+        if (w[i] < this.eps) { this.live.delete(i); continue; }
+        this.stats.violations++;
+        this.live.set(i, this.theta + Math.log(w[i] / this.eps) / kWear);
+      }
       w[i] = Math.max(0, w[i] - dt * kWear * w[i]);
       this.dirty = true;
-      this.stats.touched++; this.stats.total++;
     }
   }
 
@@ -158,7 +276,8 @@ export class Boxels {
     }
     if (this.dirty && this.theta - this.paintT > 0.08) this.#paint();
     this.stats.ms = this.stats.ms * 0.9 + (performance.now() - t0) * 0.1;
-    this.stats.live = this.live.size;
+    this.stats.live = this.awakeN + this.live.size;
+    this.stats.events_live = this.ev.length;
     return this.stats.touched;
   }
 
@@ -354,6 +473,58 @@ export class Boxels {
       dense: { updates: updD, ms: msD },
       perEvent: { updates: updA, ms: msA, maxErr: err(ua), violations: violA, window: liveA.size },
       cluster: { updates: updC, ms: msC, maxErr: err(uc), violations: violC, window: liveC.size },
+    };
+  }
+
+  /**
+   * Overlapping rain: a stream of wet events on one patch of ground (the case
+   * Remark 4.3 warns about), run three ways on a small grid against a dense
+   * reference: `ledger` is this class (summed peaks, split tolerance, merging,
+   * budgeted retirement), `perEvent` gives every event the whole tolerance and
+   * unions the windows (what this file used to do). Reports the worst error
+   * anywhere at any time, updates, and certificate violations.
+   */
+  benchRain({ n = 96, rate = 0.25, until = 500, total = 800, dt = 0.01, box = 12, r = 3, a = 0.5, seed = 7 } = {}) {
+    const { d, k, eps } = this, eul = (u, i) => { const l = i % n; const lap = (l > 0 ? u[i - 1] : u[i]) + (l < n - 1 ? u[i + 1] : u[i]) + (i >= n ? u[i - n] : u[i]) + (i < u.length - n ? u[i + n] : u[i]) - 4 * u[i]; return Math.max(0, u[i] + dt * (d * lap - k * u[i])); };
+    let sd = seed; const rnd = () => { sd = (sd * 1664525 + 1013904223) >>> 0; return sd / 4294967296; };
+    const c = n >> 1, steps = Math.round(total / dt), plan = [];
+    for (let s = 0; s < steps; s++) if (s * dt < until && rnd() < rate * dt) plan.push([s, c + Math.round((rnd() * 2 - 1) * box), c + Math.round((rnd() * 2 - 1) * box)]);
+    const sim = new Boxels({ extent: n * this.cell }, { n, d, k, eps, kWear: this.kWear });
+    const ud = new Float32Array(n * n), ul = new Float32Array(n * n), live = new Map();
+    const drop = (u, cx, cz) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) { const i = (cz + dz) * n + cx + dx; u[i] = Math.min(1, u[i] + a); } };
+    let ei = 0, eL = 0, eP = 0, updD = 0, updP = 0, viol = 0, awakeMax = 0;
+    const cell = this.cell, x0 = -n * cell / 2 + cell / 2;
+    for (let s = 0; s < steps; s++) {
+      const th = s * dt;
+      while (ei < plan.length && plan[ei][0] === s) {
+        const [, cx, cz] = plan[ei++];
+        drop(ud, cx, cz); drop(ul, cx, cz);
+        sim.wet(x0 + cx * cell, x0 + cz * cell, a, r);
+        const mass = a * Math.PI * r * r, R = r + this.#cone(mass);   // the old per-event window, at the whole tolerance
+        for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+          const i = (cz + dz) * n + cx + dx, dist = Math.hypot(dx, dz);
+          if (dx * dx + dz * dz <= R * R && cz + dz >= 0 && cz + dz < n && cx + dx >= 0 && cx + dx < n) {
+            const w = dist <= r ? [0, Math.log(a / eps) / k] : this.#window(dist - r, mass);
+            if (w) { const o = live.get(i), t0 = th + w[0], t1 = th + w[1]; if (!o || t1 > o[1]) live.set(i, o ? [Math.min(o[0], t0), t1] : [t0, t1]); }
+          }
+        }
+      }
+      for (let i = 0; i < n * n; i++) ud[i] = eul(ud, i);
+      updD += n * n;
+      sim.update(dt, 1);
+      for (const [i, w] of live) {
+        if (th < w[0]) continue;
+        if (th > w[1]) { if (ul[i] < eps) { live.delete(i); continue; } viol++; }
+        ul[i] = eul(ul, i); updP++;
+      }
+      awakeMax = Math.max(awakeMax, sim.awakeN);
+      if (s % 40 === 0) for (let i = 0; i < n * n; i++) { eL = Math.max(eL, Math.abs(sim.u[i] - ud[i])); eP = Math.max(eP, Math.abs(ul[i] - ud[i])); }
+    }
+    return {
+      grid: n, events: plan.length, theta: total, eps,
+      dense: { updates: updD },
+      ledger: { updates: sim.stats.total, maxErr: eL, withinEps: eL <= eps, violations: sim.stats.violations, merged: sim.stats.merged, retired: sim.stats.retired, deferred: sim.stats.deferred, awakeMax, liveEvents: sim.ev.length },
+      perEvent: { updates: updP, maxErr: eP, withinEps: eP <= eps, violations: viol },
     };
   }
 }
