@@ -41,6 +41,11 @@ const ICELINE = [[1, 2000], [110, 2000], [125, 2850], [150, 3250], [170, 3450], 
 // share of meadow grass that has cured gold
 const CURE = [[1, 1], [120, 1], [145, 0.7], [165, 0.2], [196, 0.06], [227, 0.25], [250, 0.55], [270, 0.78], [295, 0.96], [320, 1], [364, 1]];
 
+// spring flush on the new growth, how far the aspens have turned, the share of their leaves that have fallen
+const FLUSH = [[1, 0], [139, 0], [148, 1], [172, 0.75], [205, 0], [364, 0]];
+const TURN = [[1, 0], [240, 0], [255, 0.35], [269, 0.75], [285, 1], [364, 1]];
+const FALL = [[1, 0], [280, 0], [292, 0.5], [300, 0.95], [364, 1]];
+
 export class Calendar {
   constructor(startDoy = SEASONS.autumn.doy) {
     this.start = startDoy;
@@ -76,6 +81,11 @@ export class Calendar {
   get snowLine() { return curve(SNOWLINE, this.doy); }
   get iceLine() { return curve(ICELINE, this.doy); }
   get cure() { return clamp(curve(CURE, this.doy), 0, 1); }
+
+  /** Foliage colour state read by the tree shaders every frame (the cut-out sheets are one green; see `toned` in trees.js). */
+  get foliage() {
+    return { fresh: curve(FLUSH, this.doy), autumn: curve(TURN, this.doy), drop: curve(FALL, this.doy), cold: clamp((3 - this.valley.mean) / 15, 0, 1) };
+  }
 
   /** Which leaves the deciduous trees carry. Read once, when the atlas is painted. */
   get leaves() {

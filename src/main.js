@@ -3,6 +3,7 @@ import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
+import { loadFoliage, TONE } from './trees.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
 import { Sky, setSun, MOONS } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
@@ -190,6 +191,7 @@ const models = Object.fromEntries(await Promise.all(Object.entries(modelFiles).m
 scene.add(buildSigns(world, models));
 const streams = buildStreams(world);
 scene.add(streams.group);
+await loadFoliage();     // the cut-out needles, aspen leaves and cones
 const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
 const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
@@ -1574,6 +1576,7 @@ function tick(dt, draw = true) {
   atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
   atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
   atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
+  { const f = calendar.foliage; TONE.uFresh.value = f.fresh; TONE.uAutumn.value = f.autumn; TONE.uDrop.value = f.drop; TONE.uCold.value = f.cold; }
   // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
   const damp = boxels.sample(p.x, p.z).u;
   atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));

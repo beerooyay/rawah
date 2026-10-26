@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash2, clamp } from './noise.js';
-import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial, loadBark } from './trees.js';
+import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial, loadBark, TONE } from './trees.js';
 import { rockGeometries, rockMaterial } from './rocks.js';
 import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
@@ -73,7 +73,10 @@ export class Flora {
     this.species = buildSpecies();
     const foliage = this.foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);
-    this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);   // baked with the painted bark: the real textures load after
+    TONE.uToneOn.value = 0;    // impostors are baked in the sheet's own colours and toned when drawn, like the cards
+    TONE.uLeafOn.value = leaves === 'bare' ? 0 : 1;
+    this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);
+    TONE.uToneOn.value = 1;   // baked with the painted bark: the real textures load after
     loadBark();
 
     this.group = new THREE.Group();

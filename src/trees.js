@@ -14,11 +14,37 @@ import { BOXEL } from './terrain.js';
 // spruce-fir belt, lodgepole pine lower down, aspen, fire-killed snags,
 // wind-pruned krummholz at treeline, and willow along the valley floor.
 
-const ATLAS = 2048, CELL = 512;          // foliage cells on the top half, bark strips below
+const ATLAS = 2048, CELL = 512, ROWS = 8;   // foliage on the top six rows of cells, the bark strips (two rows tall) below
+// painted cells: the fallback for every spray, and always the willow and the dead twigs. The cut-out sheet
+// (assets/foliage, from tools/cut_foliage.py) fills rows 0-3 and 5 and the first half cell of row 4 with its own variants.
 const SLOTS = {
-  spruce: [0, 0], fir: [1, 0], pine: [2, 0], aspenLeaf: [3, 0],
-  willowLeaf: [0, 1], deadTwig: [1, 1], krumm: [2, 1],
+  spruce: [0, 0], fir: [1, 0], pine: [2, 0], krumm: [3, 0],
+  willowLeaf: [1, 4], deadTwig: [2, 4], aspenLeaf: [0, 5],
 };
+const VARIANT_KEY = { spruce: 'spruce', fir: 'fir', krumm: 'fir', pine: 'pine', aspenLeaf: 'aspen', pineCone: 'pineCone', spruceCone: 'spruceCone', firCone: 'firCone', pineCluster: 'pineCluster' };
+const FOLIAGE = { img: null, meta: null, cache: new Map() };
+
+/** Load the user's cut-out foliage atlas (needles, aspen composites, cones). Call before building species. */
+export async function loadFoliage(base = './assets/foliage/') {
+  try {
+    const [meta, blob] = await Promise.all([fetch(base + 'foliage.json').then((r) => r.json()), fetch(base + 'foliage.webp').then((r) => r.blob())]);
+    FOLIAGE.img = await createImageBitmap(blob, { premultiplyAlpha: 'none' });
+    FOLIAGE.meta = meta;
+    FOLIAGE.cache.clear();
+  } catch (e) { console.warn('foliage cut-outs failed to load; using the painted sprays', e); }
+}
+
+/** The atlas rectangles (u0, v0, du, dv, aspect) a slot can draw: cut-out variants, else its painted cell. */
+function variants(slot) {
+  let list = FOLIAGE.cache.get(slot);
+  if (list) return list;
+  const cut = FOLIAGE.meta && FOLIAGE.meta.variants[VARIANT_KEY[slot]];
+  if (cut) list = cut.map((v) => ({ u0: v.x / ATLAS, v0: 1 - (v.y + v.h) / (CELL * ROWS), du: v.w / ATLAS, dv: v.h / (CELL * ROWS), aspect: v.aspect }));
+  else if (SLOTS[slot]) { const [i, j] = SLOTS[slot]; list = [{ u0: i / 4, v0: 1 - (j + 1) / ROWS, du: 1 / 4, dv: 1 / ROWS, aspect: 0 }]; }
+  else list = [];     // cones need the cut-outs
+  FOLIAGE.cache.set(slot, list);
+  return list;
+}
 const BARK = { spruce: 0, pine: 1, aspen: 2, snag: 3 };   // 512x1024 strips across the bottom half
 
 export function rng(seed) {
@@ -29,8 +55,10 @@ export function rng(seed) {
 // ------------------------------------------------------------------ painting
 function paintAtlas(season = 'autumn') {
   const cv = document.createElement('canvas');
-  cv.width = cv.height = ATLAS;
+  cv.width = ATLAS; cv.height = CELL * ROWS;
   const g = cv.getContext('2d');
+  const cut = !!FOLIAGE.img;
+  if (cut) g.drawImage(FOLIAGE.img, 0, 0);
   const R = rng(7);
   const cell = (name) => { const [i, j] = SLOTS[name]; return [i * CELL, j * CELL]; };
   const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
@@ -70,12 +98,14 @@ function paintAtlas(season = 'autumn') {
     for (let k = 0; k < 2; k++) twig(10, CELL * (0.42 + k * 0.08), -0.08 + k * 0.1, CELL * width, 0);
     g.restore();
   };
+  if (!cut) {
   spray('spruce', { hue: 160, sat: 30, light: 30, needle: 26, density: 20, droop: 0.55, width: 0.95 });
   spray('fir', { hue: 148, sat: 36, light: 26, needle: 22, density: 22, droop: 0.25, width: 0.95 });
   spray('krumm', { hue: 138, sat: 32, light: 26, needle: 20, density: 24, droop: 0.15, width: 0.9 });
+  }
 
   // lodgepole: long paired needles bursting from the twig tips
-  {
+  if (!cut) {
     const [ox, oy] = cell('pine');
     g.save(); g.translate(ox, oy);
     const tufts = 15;
@@ -124,8 +154,8 @@ function paintAtlas(season = 'autumn') {
     summer: [[98, 44, 34], [92, 42, 30], [104, 38, 40]],
     autumn: [[30, 60, 38], [36, 66, 44], [24, 50, 32], [44, 50, 42]],
   };
-  const bareTwigs = (name) => {
-    const [ox, oy] = cell(name);
+  const bareTwigs = (name, at) => {
+    const [ox, oy] = at || cell(name);
     g.save(); g.translate(ox, oy);
     const fork = (x, y, a, len, w, depth) => {
       const x2 = x + Math.cos(a) * len, y2 = y + Math.sin(a) * len;
@@ -136,7 +166,10 @@ function paintAtlas(season = 'autumn') {
     for (let b = 0; b < 5; b++) fork(CELL / 2, CELL - 10, -Math.PI / 2 + (R() - 0.5) * 1.2, CELL * 0.22, 5, 0);
     g.restore();
   };
-  if (ASPEN[season]) leaves('aspenLeaf', ASPEN[season]); else bareTwigs('aspenLeaf');
+  if (cut) {
+    // the cut-out aspen composites are always green (the shader turns them gold or lime); a leafless season paints twigs over them
+    if (!ASPEN[season]) { g.clearRect(0, 5 * CELL, ATLAS, CELL); for (let c = 0; c < 4; c++) bareTwigs('aspenLeaf', [c * CELL, 5 * CELL]); }
+  } else if (ASPEN[season]) leaves('aspenLeaf', ASPEN[season]); else bareTwigs('aspenLeaf');
   if (WILLOW[season]) leaves('willowLeaf', WILLOW[season]); else bareTwigs('willowLeaf');
 
   // fire-killed twigs: bare grey forks
@@ -156,7 +189,7 @@ function paintAtlas(season = 'autumn') {
   }
 
   // bark strips (512 x 1024 each)
-  const bark = (idx, paint) => { g.save(); g.translate(idx * CELL, CELL * 2); paint(); g.restore(); };
+  const bark = (idx, paint) => { g.save(); g.translate(idx * CELL, CELL * 6); paint(); g.restore(); };
   bark(BARK.spruce, () => {
     g.fillStyle = '#4b3f37'; g.fillRect(0, 0, CELL, CELL * 2);
     for (let k = 0; k < 2600; k++) { g.fillStyle = hsl(20 + R() * 12, 12, 18 + R() * 22, 0.8); g.fillRect(R() * CELL, R() * CELL * 2, 6 + R() * 18, 3 + R() * 6); }
@@ -195,13 +228,19 @@ function paintAtlas(season = 'autumn') {
 }
 
 // ------------------------------------------------------------------ geometry
-// the canvas texture is flipped (v = 1 at the top row), so cell row j sits at v = 1 - (j + 1) / 4
-const slotUV = (name) => { const [i, j] = SLOTS[name]; return [i / 4, 1 - (j + 1) / 4, 1 / 4, 1 / 4]; };
-export const barkUV = (name) => [BARK[name] / 4, 0, 1 / 4, 1 / 2];
+// the canvas texture is flipped (v = 1 at the top row), so a rect at pixel row y of height h sits at v = 1 - (y + h) / height
+export const barkUV = (name) => [BARK[name] / 4, 0, 1 / 4, 2 / ROWS];
 
 /** Builder that collects cards and trunks into one geometry with rounded crown normals. */
 class Builder {
-  constructor() { this.pos = []; this.nor = []; this.uv = []; this.col = []; this.idx = []; }
+  constructor() { this.pos = []; this.nor = []; this.uv = []; this.col = []; this.idx = []; this.k = 0; }
+
+  /** A variant of the slot, picked by a counter hash so a tree is mixed but the same every start. */
+  pick(slot) {
+    const list = variants(slot);
+    this.k++;
+    return list[((Math.imul(this.k, 2654435761) >>> 0) >>> 7) % list.length];
+  }
 
   vert(p, n, u, v, shade) {
     this.pos.push(p.x, p.y, p.z); this.nor.push(n.x, n.y, n.z); this.uv.push(u, v);
@@ -211,7 +250,8 @@ class Builder {
 
   /** A spray card from `base` along `dir`, `len` long, `wid` wide, rolled by `roll`, bent down by `droop`. */
   card(base, dir, len, wid, roll, droop, slot, centre, shade = 1) {
-    const [u0, v0, du, dv] = slotUV(slot);
+    const vr = this.pick(slot), [u0, v0, du, dv] = [vr.u0, vr.v0, vr.du, vr.dv];
+    if (vr.aspect) wid *= Math.min(1.3, Math.max(0.55, vr.aspect / 0.8));    // the sprite was stretched to its cell: undo it
     const d = dir.clone().normalize();
     const side = new THREE.Vector3().crossVectors(d, new THREE.Vector3(0, 1, 0));
     if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
@@ -235,7 +275,7 @@ class Builder {
 
   /** Upright card centred on `c` (leaf clusters). */
   flat(c, w, h, rot, slot, centre, shade = 1) {
-    const [u0, v0, du, dv] = slotUV(slot);
+    const vr = this.pick(slot), [u0, v0, du, dv] = [vr.u0, vr.v0, vr.du, vr.dv];
     const ax = new THREE.Vector3(Math.cos(rot), 0, Math.sin(rot));
     const ids = [];
     for (const [i, j] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]) {
@@ -244,6 +284,26 @@ class Builder {
       ids.push(this.vert(p, n, u0 + du * (i + 0.5), v0 + dv * (0.5 + j), shade));
     }
     this.idx.push(ids[0], ids[1], ids[2], ids[1], ids[3], ids[2]);
+  }
+
+  /** A cone (or a twig of cones) hung from `base` along `dir` (stem first, so an upright cone is dir +Y), as two crossed quads. */
+  cone(base, dir, len, kind, centre, shade = 0.95) {
+    if (!variants(kind).length) return;
+    const vr = this.pick(kind), d = dir.clone().normalize();
+    const wid = len / Math.max(vr.aspect, 0.3);
+    const side = new THREE.Vector3().crossVectors(d, new THREE.Vector3(0, 1, 0));
+    if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
+    side.normalize();
+    const spin = Math.imul(this.k, 40503) % 628 / 100;
+    for (const rot of [spin, spin + Math.PI / 2]) {
+      const sd = side.clone().applyAxisAngle(d, rot), ids = [];
+      for (const t of [0, 1]) for (const k of [-0.5, 0.5]) {
+        const q = base.clone().addScaledVector(d, len * t).addScaledVector(sd, wid * k);
+        const n = q.clone().sub(centre).normalize();
+        ids.push(this.vert(q, n, vr.u0 + vr.du * (0.5 + k * 0.98), vr.v0 + vr.dv * (1 - t * 0.98 - 0.01), shade));
+      }
+      this.idx.push(ids[0], ids[1], ids[2], ids[1], ids[3], ids[2]);
+    }
   }
 
   trunk(h, r0, r1, bark, seg = 7, lean = null) {
@@ -284,10 +344,10 @@ class Builder {
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, bark, shape, rise, density = 1, stubs = 0 }) {
+function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, bark, shape, rise, density = 1, stubs = 0, cones = null }) {
   const R = rng(seed), b = new Builder();
   b.trunk(height, radius * 0.11, 0.02, bark);
-  const centre = V(0, height * 0.45, 0);
+  const centre = V(0, height * 0.45, 0), tips = [];
   // shaded-out lower branches: bare dead stubs, so the crown never just starts on a clean trunk
   for (let y = 1.2; y < clear - 0.2 && stubs; y += 0.7 + R() * 0.8) {
     const a = R() * Math.PI * 2;
@@ -302,8 +362,19 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
       const a = off + (k / branches) * Math.PI * 2 + (R() - 0.5) * 0.6;
       const dir = V(Math.cos(a), rise + (R() - 0.5) * 0.15, Math.sin(a));
       b.card(V(0, y, 0), dir, L * 1.08, L * 0.9, (R() - 0.5) * 0.9, droop * (1 - t * 0.6), slot, V(0, y + 0.3, 0), 0.85 + t * 0.2);
+      tips.push({ t, p: V(dir.x * L * 0.8, y + dir.y * L * 0.8 - droop * (1 - t * 0.6) * L * 0.7, dir.z * L * 0.8), a });
       // a second, steeper spray fills the silhouette seen from the side
       if (density > 1) b.card(V(0, y + 0.15, 0), V(dir.x, dir.y - 0.35, dir.z), L * 0.8, L * 0.6, Math.PI / 2 + (R() - 0.5) * 0.6, droop * 0.5, slot, V(0, y, 0), 0.8 + t * 0.2);
+    }
+  }
+  // cones: Engelmann spruce hangs them from the upper crown, subalpine fir holds them upright on the top branches
+  if (cones) {
+    const pool = tips.filter((q) => q.t >= cones.from && q.t <= cones.to);
+    for (let k = 0; k < cones.n && pool.length; k++) {
+      const q = pool.splice(Math.floor(R() * pool.length), 1)[0];
+      const ang = R() * 6.28, lean = 0.18;
+      if (cones.up) b.cone(q.p.clone().add(V(Math.cos(ang) * 0.06, 0.03, Math.sin(ang) * 0.06)), V(Math.cos(ang) * lean, 1, Math.sin(ang) * lean), cones.len * (0.85 + R() * 0.3), cones.kind, centre);
+      else b.cone(q.p.clone().add(V(0, -0.04, 0)), V(Math.cos(ang) * lean, -1, Math.sin(ang) * lean), cones.len * (0.85 + R() * 0.3), cones.kind, centre);
     }
   }
   // the leader: a few upright sprays at the tip
@@ -319,8 +390,8 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
  * the height (stand-grown trees shed their low branches, open-grown ones keep
  * them), dead stubs below it, and a ragged, widest-in-the-upper-middle outline.
  */
-function lodgepole(seed, { H, crown, spread, trunk = 0.26 }) {
-  const R = rng(seed), b = new Builder();
+function lodgepole(seed, { H, crown, spread, trunk = 0.26, cones = 12 }) {
+  const R = rng(seed), b = new Builder(), tips = [];
   b.trunk(H, trunk, 0.04, 'pine');
   const centre = V(0, H * (0.5 + crown * 0.4), 0), y0 = H * crown;
   for (let y = 1.0; y < y0 - 0.3; y += 0.8 + R() * 0.9) {
@@ -334,8 +405,18 @@ function lodgepole(seed, { H, crown, spread, trunk = 0.26 }) {
     const off = R() * 6.28, n = t < 0.25 ? 5 : 8;
     for (let k = 0; k < n; k++) {
       const a = off + k * (6.283 / n) + (R() - 0.5) * 0.7;
-      b.card(V(0, y, 0), V(Math.cos(a), 0.1 + R() * 0.3, Math.sin(a)), L * 1.12, L * 1.1, (R() - 0.5) * 1.4, 0.12, 'pine', centre, 0.9 + t * 0.15);
+      const dir = V(Math.cos(a), 0.1 + R() * 0.3, Math.sin(a));
+      b.card(V(0, y, 0), dir, L * 1.12, L * 1.1, (R() - 0.5) * 1.4, 0.12, 'pine', centre, 0.9 + t * 0.15);
+      tips.push({ t, y, dir, L });
     }
+  }
+  // lodgepole cones cling to the branches for years: small ovoid ones in pairs along the inner branch, twigs of them at the tips
+  for (let k = 0; k < cones && tips.length; k++) {
+    const q = tips[Math.floor(R() * tips.length)];
+    const along = k % 3 === 0 ? 0.85 : 0.3 + R() * 0.25, p = V(q.dir.x * q.L * along, q.y + q.dir.y * q.L * along - 0.05, q.dir.z * q.L * along);
+    const a = R() * 6.28;
+    if (k % 3 === 0) b.cone(p, V(Math.cos(a) * 0.3, -1, Math.sin(a) * 0.3), 0.38 + R() * 0.1, 'pineCluster', centre);
+    else b.cone(p, V(Math.cos(a) * 0.5, -0.7, Math.sin(a) * 0.5), 0.15 + R() * 0.05, 'pineCone', centre);
   }
   b.card(V(0, H - 1.2, 0), V(0.1, 1, 0), 1.6, 1.1, 0, 0, 'pine', centre, 1.05);
   return b.geometry();
@@ -353,7 +434,7 @@ function aspen(seed, { H, crownLow, lowLeaves = 0 }) {
     const a = R() * 6.28, y = low ? H * (0.22 + R() * (crownLow - 0.2)) : H * (crownLow + R() * (0.97 - crownLow));
     const rr = Math.sqrt(R()) * (low ? 1.1 : 2.2), shrink = low ? 1 : 1 - Math.abs(y / H - (crownLow + 0.28)) * 1.4;
     const c = V(lean.x + Math.cos(a) * rr * shrink, y, lean.z + Math.sin(a) * rr * shrink);
-    const sz = low ? 1.7 : 2.15;
+    const sz = low ? 1.45 : 1.8;
     b.flat(c, sz, sz, R() * 3.14, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
     b.flat(c, sz, sz, R() * 3.14 + 1.57, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
   }
@@ -363,10 +444,10 @@ function aspen(seed, { H, crownLow, lowLeaves = 0 }) {
 export function buildSpecies() {
   // Engelmann spruce: broad, drooping, dense to well down the trunk
   const spruce = (s, H, radius, clear) => conifer(s, { height: H, radius, clear, whorl: 0.45, branches: 8, droop: 0.45, slot: 'spruce', bark: 'spruce', rise: -0.18,
-    shape: (t) => Math.pow(1 - t, 0.85), density: 2, stubs: 1 });
+    shape: (t) => Math.pow(1 - t, 0.85), density: 2, stubs: 1, cones: { kind: 'spruceCone', n: 26, from: 0.4, to: 0.98, len: 0.26, up: false } });
   // subalpine fir: a narrow spire with short upswept branches right to the ground
   const fir = (s, H, radius, clear) => conifer(s, { height: H, radius, clear, whorl: 0.4, branches: 8, droop: 0.12, slot: 'fir', bark: 'spruce', rise: -0.02,
-    shape: (t) => Math.pow(1 - t, 0.75) * (t < 0.1 ? 0.8 + t * 2 : 1), density: 2 });
+    shape: (t) => Math.pow(1 - t, 0.75) * (t < 0.1 ? 0.8 + t * 2 : 1), density: 2, cones: { kind: 'firCone', n: 14, from: 0.55, to: 1, len: 0.24, up: true } });
   const snag = (s) => {
     const R = rng(s), b = new Builder(), H = 15 + R() * 4;
     b.trunk(H, 0.22, 0.03, 'snag', 6);
@@ -433,7 +514,7 @@ const SWAY = /* glsl */ `
     mvPosition.xz += WIND_DIR * (lean + osc);
     float flutter = sin(uTime * 4.3 + dot(transformed, vec3(1.7, 2.3, 1.1)) + ip.x) * 0.035 * (0.25 + g) * min(hgt * 0.15, 1.0);
     mvPosition.xyz += vec3(flutter, flutter * 0.4, -flutter);
-    float aspen = step(0.75, uv.x) * step(0.75, uv.y);
+    float aspen = step(0.26, uv.y) * (1.0 - step(0.375, uv.y));
     mvPosition.y += aspen * sin(uTime * 14.0 + dot(transformed.xz, vec2(9.1, 7.3))) * 0.045 * (0.35 + g);
   #endif
   mvPosition = modelViewMatrix * mvPosition;
@@ -536,7 +617,7 @@ function barked(shader, uniforms) {
     .replace('#include <map_fragment>', `#include <map_fragment>
       float isBark = 0.0, bLayer = 0.0, bWet = 0.0, bFade = 0.0, bHeight = 0.5;
       vec3 bW = vec3(0.0); vec2 bUx = vec2(0.0), bUz = vec2(0.0);
-      if (uBarkOn > 0.5 && vMapUv.y < 0.5 && vColor.r - vColor.b < 0.05) {
+      if (uBarkOn > 0.5 && vMapUv.y < 0.25 && vColor.r - vColor.b < 0.05) {
         float dist = length(vFogView);
         bFade = 1.0 - smoothstep(60.0, 150.0, dist);
         if (bFade > 0.0) {
@@ -573,6 +654,77 @@ function barked(shader, uniforms) {
       #include <opaque_fragment>`);
 }
 
+// ------------------------------------------------------------------ colour: season, cold, moisture, boxels
+// The cut-out sheets are one photographed green, so everything that changes is done here and shared by the close-up
+// cards and the distant impostors (which are baked neutral, `uToneOn` = 0, and toned when they are drawn):
+//   aspen   spring flush (lime, lighter) -> summer green -> gold and orange (each clone turns on its own day, each
+//           leaf a little off its tree, wet ground holds the green longer) -> leaves drop (some fragments vanish)
+//   conifer new-growth tips in spring, cold bluish grey in winter, darker and richer when the needles are wet
+//   cones   darker and redder when wet
+// "wet" is the boxel moisture at the foot of the tree plus the weather's wetness, the same field that wets the bark.
+export const TONE = {
+  uToneOn: { value: 1 }, uFresh: { value: 0 }, uAutumn: { value: 0 }, uDrop: { value: 0 }, uCold: { value: 0 }, uLeafOn: { value: 1 }, uFoliGain: { value: 0.95 },
+};
+function toned(shader, uniforms, impostor) {
+  Object.assign(shader.uniforms, TONE, { uBoxel: BOXEL, uExt: uniforms.uExt });
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\nvarying vec2 vTW;${impostor ? '\nvarying float vKind;' : ''}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        vTW = instanceMatrix[3].xz;
+      #else
+        vTW = vec2(0.0);
+      #endif
+      ${impostor ? `// atlas cell order: spruce 0-3, fir 4-7, lodgepole 8-12 (conifers), aspen 13-15, the rest are snags and shrubs
+      vKind = aCell.y > 0.6 ? 0.0 : (aCell.y > 0.4 ? (aCell.x > 0.6 ? 2.0 : 0.0) : 1.0);` : ''}`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform float uToneOn, uFresh, uAutumn, uDrop, uCold, uLeafOn, uFoliGain;
+      ${impostor ? 'uniform sampler2D uBoxel;\n      uniform float uExt;\n      varying float vKind;' : ''}
+      varying vec2 vTW;
+      float toneHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float toneNoise(vec2 p) {
+        vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(toneHash(i), toneHash(i + vec2(1, 0)), f.x), mix(toneHash(i + vec2(0, 1)), toneHash(i + vec2(1, 1)), f.x), f.y);
+      }
+      // kind: 0 conifer, 1 cone, 2 aspen, 3 other (willow, dead twigs: left alone)
+      vec3 foliageTone(vec3 c, float kind, vec2 uvc, float moist, float wet) {
+        float L = dot(c, vec3(0.299, 0.587, 0.114));
+        float dryK = moist;
+        if (kind < 0.5) {
+          c *= uFoliGain;
+          c = mix(vec3(L * uFoliGain), c, 1.0 + 0.3 * wet);                         // wet needles: richer and darker
+          c *= 1.0 - 0.22 * wet;
+          c = mix(c, c * vec3(1.45, 1.4, 0.55) + 0.015, uFresh * 0.4 * smoothstep(0.3, 0.6, L));   // spring flush on the tips
+          c = mix(c, vec3(L * uFoliGain) * vec3(0.82, 0.95, 1.12), uCold * 0.4) * (1.0 - 0.1 * uCold);
+        } else if (kind < 1.5) {
+          c *= 0.9 * (1.0 - 0.28 * wet);
+          c = mix(c, c * vec3(1.1, 0.85, 0.75), wet * 0.4);
+        } else if (kind < 2.5) {
+          float clone = toneNoise(vTW / 90.0 + 3.7), leaf = toneNoise(uvc * 55.0), dry = 1.0 - smoothstep(0.05, 0.35, dryK);
+          float turn = smoothstep(0.0, 1.0, uAutumn * 1.7 - 0.35 + (clone - 0.5) * 0.9 + (leaf - 0.5) * 0.45 + (dry - 0.4) * 0.3);
+          vec3 green = c * mix(vec3(0.86, 0.95, 0.78), vec3(1.0), 1.0 - uFresh) ;
+          green = mix(green, green * vec3(1.35, 1.3, 0.55) + 0.03, uFresh * 0.75);   // spring: lime, translucent-light
+          vec3 gold = mix(vec3(1.0, 0.8, 0.16), vec3(0.95, 0.46, 0.08), smoothstep(0.35, 0.8, leaf + (1.0 - clone) * 0.4)) * (0.3 + 0.9 * L + 0.6 * L * L);
+          c = mix(green, gold, turn) * uFoliGain * 1.08;
+          c *= 1.0 - 0.2 * wet;
+        }
+        return c;
+      }`)
+    .replace('#include <map_fragment>', `#include <map_fragment>
+      if (uToneOn > 0.5) {
+        ${impostor ? 'float tk = vKind > 1.5 ? 2.0 : (vKind > 0.5 ? 3.0 : 0.0);' : `float frow = floor((1.0 - vMapUv.y) * 8.0);
+        float tk = frow < 2.5 ? 0.0 : (frow < 3.5 ? 1.0 : (frow < 4.5 ? (vMapUv.x < 0.125 ? 1.0 : 3.0) : (frow < 5.5 ? 2.0 : 3.0)));
+        if (vMapUv.y < 0.25) tk = 3.0;`}
+        if (tk < 2.5) {
+          float moist = texture2D(uBoxel, vTW / uExt + 0.5).r;
+          float tw = clamp(smoothstep(0.02, 0.4, moist) + uWet * 0.5, 0.0, 1.0);
+          diffuseColor.rgb = foliageTone(diffuseColor.rgb, tk, vMapUv, moist, tw);
+          if (tk > 1.5 && uDrop > 0.0 && toneHash(floor(vMapUv * 170.0) + vTW) < uDrop * (0.55 + 0.9 * toneNoise(vTW / 90.0 + 3.7))) discard;
+        }
+      }`);
+}
+
 /** Foliage material: alpha-tested atlas, vertex shade, wind, light through the leaves. */
 export function foliageMaterial(atlas, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: atlas, alphaTest: 0.35, alphaToCoverage: true, side: THREE.DoubleSide, vertexColors: true });
@@ -580,9 +732,10 @@ export function foliageMaterial(atlas, uniforms) {
     windy(shader, uniforms);
     tinted(shader);
     barked(shader, uniforms);
+    toned(shader, uniforms, false);
     withAtmosphere(shader, { translucency: 0.55, weather: 0.6, occlusion: 0.7 });
   };
-  mat.customProgramCacheKey = () => 'rawah-foliage-bark';
+  mat.customProgramCacheKey = () => 'rawah-foliage-bark-tone';
   return mat;
 }
 
@@ -666,13 +819,14 @@ export function impostorMaterial(texture, uniforms) {
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
     tinted(shader);
+    toned(shader, uniforms, true);
     withAtmosphere(shader, { translucency: 0.35, weather: 0.6, occlusion: 0.7 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec2 aCell;')
       .replace('#include <uv_vertex>', `#include <uv_vertex>
         vMapUv = aCell + vec2(uv.x / 8.0, uv.y / 4.0);`)
       // impostors aren't in the leaf atlas: keep the quake off them
-      .replace('float aspen = step(0.75, uv.x) * step(0.75, uv.y);', 'float aspen = 0.0;');
+      .replace('float aspen = step(0.26, uv.y) * (1.0 - step(0.375, uv.y));', 'float aspen = 0.0;');
     // a flat card has no idea which way its crown faces: light it like a rounded crown,
     // half toward you and half toward the sun, so low sun doesn't turn far forests black
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `
@@ -681,7 +835,7 @@ export function impostorMaterial(texture, uniforms) {
       vec3 normal = normalize(normalize(-vViewPosition) * 0.55 + uSunView * 0.45 + viewUp * 0.35);
       vec3 nonPerturbedNormal = normal;`);
   };
-  mat.customProgramCacheKey = () => 'rawah-impostor';
+  mat.customProgramCacheKey = () => 'rawah-impostor-tone';
   return mat;
 }
 
