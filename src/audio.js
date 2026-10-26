@@ -162,6 +162,12 @@ export class Audio {
     this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
   }
 
+  /** A cough from a lungful of smoke. */
+  cough() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 3; i++) { this.#burst(0.09, 380 + Math.random() * 120, 1.2, 0.3, 'bandpass', i * 0.16, this.noise); this.#burst(0.07, 140, 1.5, 0.25, 'lowpass', i * 0.16 + 0.02, this.noise); }
+  }
+
   /** Bacon and eggs in a hot pan. */
   sizzle() {
     if (!this.ctx) return;

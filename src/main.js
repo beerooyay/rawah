@@ -39,6 +39,7 @@ import { Wood } from './wood.js';
 import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
+import { Plume } from './plume.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -201,6 +202,9 @@ const wood = new Wood(world, flora, scene, props);
 props.wood = wood;
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
+const plume = new Plume(world, scene);
+let smokeToast = -99;
+const _pw = new THREE.Vector3();
 const fireworks = new Fireworks(world, scene);
 const breakfast = new Breakfast(coffee.stand, scene);
 let coffeeBoost = 0;     // stamina from a sip, still working its way in
@@ -1313,6 +1317,7 @@ function tick(dt, draw = true) {
   const env = {
     tempC: tempC(state.hour, p.y) - (p.y > world.treeline(p.x, p.z) ? 3 : 0) - Math.max(0, weather.wind) * 3,
     nearFire: !!camp.fire && camp.near(p, 'fire', 6),
+    fireWarm: Math.min(1, plume.at(p.x, p.z).heat / 0.2),   // heat from the fire's certified field, thinning with distance and blown downwind
     inTent: !!state.sleeping,
     resting: state.resting,
   };
@@ -1377,6 +1382,17 @@ function tick(dt, draw = true) {
     });
     camp.fireObj.setTeepee(!coffee.rigged);
     camp.lantern(sky.light < 0.4, hiker.pos);
+    {   // the fire's smoke and heat, and the smoke you stand in
+      const wind = Math.min(1, 0.2 + Math.max(0, weather.wind) * 0.9), pan = breakfast.pan.visible && breakfast.cook > 1.1 ? breakfast.pan.getWorldPosition(_pw) : null;
+      plume.update(state.paused ? 0 : dt, { fire: camp.fire, pan: pan && { x: pan.x, z: pan.z, level: Math.min(0.8, (breakfast.cook - 1.1) * 1.4) }, wind, p: hiker.pos });
+      camp.fireObj.smoke.material.uniforms.uDrift.value.set(plume.dir[0] * (0.5 + 2.2 * wind), plume.dir[1] * (0.5 + 2.2 * wind));
+      const air = plume.at(hiker.pos.x, hiker.pos.z);
+      if (air.smoke > 0.12 && !state.paused) {
+        hiker.stamina = Math.min(hiker.stamina, 100 - 70 * air.smoke);   // you cannot catch your breath in it
+        if (Math.random() < dt * 3 * air.smoke) audio.cough();
+        if (t - smokeToast > 25) { smokeToast = t; hud.toast('Smoke in your eyes. Move upwind of the fire.', 'warn'); }
+      }
+    }
     breakfast.update(state.paused ? 0 : dt, { on: coffee.rigged && !!camp.fire, fire: camp.fire, p: hiker.pos, yaw: hiker.yaw, seated: state.seat >= 0, coffeeReach: coffee.reach(hiker.pos, hiker.yaw) });
     const nearBud = () => { const b = party.near(hiker.pos); return b && Math.hypot(b.x - hiker.pos.x, b.z - hiker.pos.z) < 12 ? b : null; };
     for (const e of breakfast.events) {
@@ -1542,7 +1558,7 @@ function tick(dt, draw = true) {
     const [place, sub] = locate(p, cv);
     const found = lakeNames.filter((l) => state.discovered.has(l.label)).length;
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
-      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '', wood.carried > 0 ? `Firewood ×${wood.carried}` : '', coffee.cup.sips > 0 ? `Coffee ×${coffee.cup.sips}` : '']
+      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '', wood.carried > 0 ? `Firewood ×${wood.carried}` : '', plume.at(p.x, p.z).smoke > 0.12 ? 'Smoky' : '', coffee.cup.sips > 0 ? `Coffee ×${coffee.cup.sips}` : '']
       .filter(Boolean).join(' · ');
     let hint = hiker.hint || props.hint;
     if (!hint && hiker.tool === 'fireworks') hint = fireworks.toolHint(p);
@@ -1625,6 +1641,8 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
+    plume,
+    benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },

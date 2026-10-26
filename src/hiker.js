@@ -435,7 +435,7 @@ export class Hiker {
     this.stamina = clamp(this.stamina, 0, 100);
 
     // warmth follows air temperature, wind, wetness, fire and shelter
-    let target = env.tempC + (env.nearFire ? 22 : 0) + (env.inTent ? 18 : 0) + (working ? 5 : 0) - (this.wet > 0 ? 9 : 0) - (this.mode === 'swim' ? 12 : 0);
+    let target = env.tempC + 22 * (env.fireWarm ?? (env.nearFire ? 1 : 0)) + (env.inTent ? 18 : 0) + (working ? 5 : 0) - (this.wet > 0 ? 9 : 0) - (this.mode === 'swim' ? 12 : 0);
     const rate = (target - 8) * 0.12;
     this.warmth = clamp(this.warmth + rate * dt, 0, 100);
     this.cold = this.warmth < 25;

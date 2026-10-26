@@ -113,11 +113,13 @@ const SMOKE_VERT = /* glsl */ `
 #include <logdepthbuf_pars_vertex>
 attribute vec4 aSeed;
 uniform float uTime, uScale, uFuel, uUnit;
+uniform vec2 uDrift;   // the wind's push on the smoke column (world x, z)
 varying vec4 vCol;
 void main() {
   float age = fract(uTime * 0.09 * (0.7 + aSeed.z * 0.6) + aSeed.y);
   vec3 p = vec3(cos(aSeed.y * 20.0) * 0.15, 1.1 + age * 3.4, sin(aSeed.y * 20.0) * 0.15);
-  p.x += age * age * 1.4 + sin(uTime * 0.5 + aSeed.y * 10.0) * 0.3 * age;
+  p.x += sin(uTime * 0.5 + aSeed.y * 10.0) * 0.3 * age;
+  p.xz += uDrift * age * age;
   p.z += sin(uTime * 0.4 + aSeed.y * 8.0) * 0.4 * age;
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
@@ -273,7 +275,7 @@ export class Fire {
     // flames, sparks, smoke
     this.flames = flameMesh();
     this.sparks = particles(36, SPARK_VERT, {}, THREE.AdditiveBlending, 3);
-    this.smoke = particles(16, SMOKE_VERT, {}, THREE.NormalBlending, 4);
+    this.smoke = particles(16, SMOKE_VERT, { uDrift: { value: new THREE.Vector2(1.4, 0) } }, THREE.NormalBlending, 4);
     g.add(this.flames, this.sparks, this.smoke);
 
     this.light = new THREE.PointLight(0xff8a3a, 0, 24, 1.5);
