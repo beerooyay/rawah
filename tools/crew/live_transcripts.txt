@@ -1,0 +1,529 @@
+RAWAH CREW: RAW LIVE TRANSCRIPTS
+Model: nvidia/nemotron-3.5-bolt-e4b via NVIDIA's API, Oct 25 2026.
+Every line below is unedited model output, copied straight from the run logs.
+Not included: the very first 4-placeholder-character test (Moth/Gristle/Vesper/Pip), which only lives in chat.
+
+==================================================================
+PART 1 - first 3 crew runs, BEFORE fixes (note the copied example lines)
+==================================================================
+
+################ RUN 1 ################
+
+--- out of the ravine
+Blaize  Hear me out: the floating islands are a hidden waypoint, not just pretty scenery. Trust me, there's a side quest up there.
+Taylor  y'all go get eaten i'm watching the sky do its thing
+Grant   Bet you won't risk the edge for some fancy waypoint. Let's see what's actually down there.
+
+--- the debate
+Grant   [WILD] Bet you're too scared for the glowy cubes, you softie.
+Taylor  [CALM] y'all sound like you need a nap not a monster hunt
+Blaize  [WILD] Statistically, the glowing cubes offer a 78% higher reward probability than staring at clouds
+Corey   [CALM] The view is sufficient.
+Trey    [WILD] The predictable push for drama is exhausting, but the glowy cubes sound better for the narrative.
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Taylor  y'all go get eaten i'm watching the sky do its thing
+
+--- grant vs one block
+Taylor  Grant's almost died four times today that's just his cardio.
+Grant   Bet you won't even try that cave, you chicken. Let's see if your nerves are as strong as that one block.
+Trey    So we're doing the dumb thing again. Somebody hold my stuff.
+
+--- campfire
+Blaize  Hear me out: the cave is the optimal data collection point, not just some reckless adventure. Trust me, the risk-reward ratio is statistically sound.
+Taylor  y'all worry about the glowy bits. I'm just watching the islands do their thing.
+Corey   The islands are adequate.
+Cool. I'll be over here enjoying not dying.
+Grant   Bet you won't even step inside that growl, you softie. Let's see your nerve.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 1, "calls": 17, "median": 0.66, "p90": 0.79, "min": 0.45, "max": 1.14, "wall": 26.2}
+
+################ RUN 2 ################
+
+--- out of the ravine
+Grant   Bet you won't risk the jump to the nearest floating isle. Come on, let's test it.
+Trey    so we're doing the dumb thing great somebody hold my stuff
+Blaize  Hear me out: the cliff IS the shortcut to that island; statistical risk assessment favors immediate ascent.
+
+--- the debate
+Grant   [WILD] Bet you're scared of a little glowy monster, too soft for this view
+Taylor  [CALM] y'all go get eaten. i'm watching the sky do its thing
+Blaize  [WILD] Statistically, prolonged aesthetic appreciation yields zero resource gain; we need the chaos.
+Corey   [CALM] The sunset is adequate entertainment on its own.
+Trey    [WILD] Another perfect sunset wasted on more pointless danger, but the glowing cubes sound better for a story
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Taylor  y'all go get eaten i'm watching the sky do its thing
+
+--- grant vs one block
+Taylor  Grant's almost died four times today that's just his cardio.
+Grant   You think that was nothing? Bet you won't try that cave without me.
+Blaize  Hear me out: the cave is the prime objective, not some scenic detour. Statistically, Grant surviving that means we're built for this.
+
+--- campfire
+Corey   The glow is fine from here.
+Grant   Bet you won't brave that cave mouth when the real action starts. Come on, let's see who actually wants the loot.
+Taylor  y'all go get eaten i'm watching the islands do their thing.
+Trey    so we're doing the dumb thing again. great. somebody hold my stuff.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 2, "calls": 17, "median": 0.58, "p90": 0.78, "min": 0.47, "max": 0.8, "wall": 26.2}
+
+################ RUN 3 ################
+
+--- out of the ravine
+Corey   cool. i'll be over here, enjoying not dying.
+Taylor  y'all go get eaten. i'm watching the sky do its thing.
+Trey    So we're soaking in the calm. Great setup for the next disastrous detour.
+
+--- the debate
+Grant   [WILD] Bet you won't check the cave first, scared of a little noise?
+Taylor  [CALM] y'all go get eaten i'm watching the sky do its thing
+Blaize  [WILD] Statistically, inaction yields zero novel data; the glow means immediate high-yield discovery
+Corey   [CALM] Novel data usually involves unnecessary risk
+Trey    [WILD] The calm is a good pause before the inevitable mess.
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Corey   predictable. more glowing cubes, less actual sunset.
+
+--- grant vs one block
+Taylor  Grant's almost died four times today that's just his cardio.
+Trey    So we're doing the dumb thing. Great. Somebody hold my stuff.
+Blaize  Hear me out: the cave IS the shortcut; minimal risk for maximum off-trail yield.
+
+--- campfire
+Taylor  Just watch the islands y'all go get eaten by the glow.
+Corey   The islands are fine. We're still here.
+Grant   Bet you won't check that cave entrance right now. Come on, let's see what's under the growl.
+Trey    So we're doing the dumb thing. Great. Somebody hold my stuff.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 3, "calls": 17, "median": 0.6, "p90": 0.66, "min": 0.5, "max": 1.12, "wall": 26.2}
+
+ALL [{"run": 1, "calls": 17, "median": 0.66, "p90": 0.79, "min": 0.45, "max": 1.14, "wall": 26.2}, {"run": 2, "calls": 17, "median": 0.58, "p90": 0.78, "min": 0.47, "max": 0.8, "wall": 26.2}, {"run": 3, "calls": 17, "median": 0.6, "p90": 0.66, "min": 0.5, "max": 1.12, "wall": 26.2}]
+
+==================================================================
+PART 2 - 3 runs after the anti-copying + swing-vote fixes
+==================================================================
+
+################ RUN 1 ################
+
+--- out of the ravine
+Taylor  Seriously, look at that; all the rushing was for nothing.
+Grant   Bet you think this view is the peak of the adventure, but there's a shard island just out there waiting to be conquered.
+Corey   The sunset is objectively better than any shard.
+
+--- the debate
+Grant   [WILD] You're scared of a little noise, huh? Let's see if you've got the nerve to face what's glowing in there
+Taylor  [CALM] You guys are gonna miss the actual show if you chase some noise in a hole
+Blaize  [WILD] The probability of finding something genuinely interesting in that cave outweighs the aesthetic value of a predictable vista
+Corey   [CALM] More glowing things just means more unnecessary risk.
+Trey    [WILD] Predictably, the philosophers prioritize pretty light over actual narrative fuel
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Corey   So much effort for something loud.
+
+--- grant vs one block
+Taylor  Relaxing with the light is way more worthwhile than chasing things that almost end up as a pile of rubble.
+Trey    Still, that near-miss proves caution isn't just for those who can't handle a little excitement.
+Blaize  See, that minor incident only validates the need to push forward; real rewards require a little calculated risk.
+
+--- campfire
+Corey   The fire is adequate. The islands are still better than the cave.
+Grant   Forget the quiet glow; there's a fissure nearby that needs checking out for something way bigger.
+Trey    So the quiet beauty loses out to another questionable detour. Another good setup for a wilder tale.
+Taylor  The quiet overhead light is pretty enough to just sit with for a while.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 1, "calls": 17, "median": 0.63, "p90": 0.78, "max": 0.86, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}
+
+################ RUN 2 ################
+
+--- out of the ravine
+Taylor  Nah, just gonna let the light settle for a minute before we worry about the next thing.
+Blaize  Hear me out: that unstable cluster of islands is the direct route to the rumored artifact; patience is just delayed risk.
+Corey   The view is fine as it is.
+
+--- the debate
+Grant   [WILD] Staring at pretty light is just procrastination; you think you have the guts for that cave?
+Taylor  [CALM] Seriously, you guys always think the next bit of trouble is worth missing this light show
+Blaize  [WILD] Sitting around just wastes potential yield; that glowing trail statistically offers a higher reward index
+Corey   [CALM] More risk for a glow is predictable folly
+Trey    [WILD] You guys are arguing over a pretty light versus a glow, which is peak predictable drama
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Corey   Such urgency for unnecessary noise.
+
+--- grant vs one block
+Taylor  Look at that sunset fading while you worry about some noise.
+Grant   See? Told you I had the nerve, you just got lucky not to fall like that one time.
+Trey    The focus shifted from the glow to Grant's near-tumble; the story just got a little more interesting.
+
+--- campfire
+Grant   Bet you won't even try to see what's at the end of that glowing path.
+Corey   The firelight is sufficient for now.
+Blaize  The cave entry is the necessary vector; hesitation simply optimizes for disappointment.
+Taylor  Let the quiet just soak in before we chase whatever's making that noise.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 2, "calls": 17, "median": 0.6, "p90": 0.69, "max": 0.74, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}
+
+################ RUN 3 ################
+
+--- out of the ravine
+Taylor  Just breathe for a minute; this view's worth more than whatever side quest you guys are itching for.
+Corey   The light is fine. We should still check the ridge path.
+Grant   Nah, that view is just a warm-up; who's first to snag that highest floating chunk?
+
+--- the debate
+Grant   [WILD] Sitting still is for tourists, you softies; that glow means action awaits
+Taylor  [CALM] Let the glow wait; this orange light is way more interesting than whatever noise is down there
+Blaize  [WILD] The risk-reward ratio on that cave is mathematically superior to passive observation
+Corey   [CALM] More drama won't change the sunset.
+Trey    [WILD] You're both arguing over a pretty light show, which is predictable.
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Corey   Predictable impulse. Enjoy the noise.
+
+--- grant vs one block
+Taylor  Seriously, the drama over a tiny slip is wild; just look at how the light is catching those floating bits.
+Trey    Looks like the chaos agenda won again; at least it wasn't quite as dramatic as that one tumble.
+Grant   That was just practice; bet you won't even look back at the cave entrance now.
+
+--- campfire
+Blaize  The immediate danger assessment is skewed; we should secure the resources near the cave before the ambient light completely fades.
+Taylor  This quiet light up there is way better than whatever lurking in that hole.
+Corey   The fire is sufficient. We are not rushing anything.
+Trey    Seems like the low-stakes standoff is back, favoring the cozy fire over whatever's growling.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 3, "calls": 17, "median": 0.62, "p90": 0.68, "max": 1.46, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}
+
+ALL [{"run": 1, "calls": 17, "median": 0.63, "p90": 0.78, "max": 0.86, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}, {"run": 2, "calls": 17, "median": 0.6, "p90": 0.69, "max": 0.74, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}, {"run": 3, "calls": 17, "median": 0.62, "p90": 0.68, "max": 1.46, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0}]
+
+==================================================================
+PART 3 - boxel senses demo (who can smell what, from the cone math)
+==================================================================
+
+--- certified sense windows (seconds)
+smoke: radius 45.9 cells, gone everywhere at t=716s
+   Taylor  r=  2.2  senses it t=0s -> 716s
+   Corey   r= 15.2  senses it t=6s -> 687s
+   Trey    r= 30.0  senses it t=38s -> 592s
+   Blaize  r= 43.9  senses it t=161s -> 381s
+   Grant   r= 55.6  never (outside the cone)
+spores: radius 30.6 cells, gone everywhere at t=222s
+   Taylor  r= 54.5  never (outside the cone)
+   Corey   r= 43.7  never (outside the cone)
+   Trey    r= 26.7  senses it t=41s -> 148s
+   Blaize  r= 20.0  senses it t=21s -> 185s
+   Grant   r=  2.2  senses it t=10s -> 222s
+
+--- t = 30s
+Taylor  senses ['a strong smell of woodsmoke from the campfire']
+        This smoke smells way better than whatever chaos y'all are probably up to.
+Corey   senses ['a strong smell of woodsmoke from the campfire']
+        The smoke is predictable.
+Trey    senses nothing
+        The quiet here is already starting to feel too perfect for this group.
+Blaize  senses ['a clear smell of something sweet and metallic, like the glowing cubes']
+        Hear me out: that sweet metallic scent indicates a prime off-map resource location, trust me.
+Grant   senses ['a strong smell of something sweet and metallic, like the glowing cubes']
+        Bet you won't check out what's making that sweet metallic smell first.
+
+--- t = 240s
+Taylor  senses ['a clear smell of woodsmoke from the campfire']
+        The fire's got a nice, slow burn going right now.
+Corey   senses ['a clear smell of woodsmoke from the campfire']
+        The fire is just warm.
+Trey    senses ['a faint smell of woodsmoke from the campfire']
+        The scent of embers is definitely the most reliable thing around here.
+Blaize  senses ['a faint smell of woodsmoke from the campfire']
+        That faint smoke is just a negligible indicator of a significantly more lucrative detour nearby.
+Grant   senses nothing
+        Forget the quiet, there's something interesting right around that rock face we need to see.
+
+senses demo wall 15.1s
+
+==================================================================
+PART 4 - 3 runs after the roast-by-name nudge
+==================================================================
+
+################ RUN 1 ################
+
+--- out of the ravine
+Taylor  Seriously, all this rushing for what? This view's doing all the heavy lifting for us right now.
+Grant   You think a sunset beats a good climb? Prove it, find the highest floating rock.
+Trey    Grant, always prioritizing vertical over actual scenery; the story needs the orange glow first.
+
+--- the debate
+Grant   [WILD] Corey, you're scared of a little noise, so you'll stick to the pretty view; let's go investigate that glow
+Taylor  [CALM] Blaize, you'd rush into that glow and get eaten anyway; let's just sit here a bit
+Blaize  [WILD] Trey, your aesthetic preference has a statistically low survival rate; the glow offers exponentially better rewards
+Corey   [CALM] Grant needs a nap not a monster.
+Trey    [CALM] Blaize, your risk assessment is as predictable as your need for unnecessary drama
+
+>> a quiet overlook where you can sit and watch the islands drift into the sunset
+Grant   Fine, but I bet the glowing cave has something way more interesting than just quiet drifting rocks.
+
+--- grant vs one block
+Taylor  Grant, you're still trying to find adventure in a place that needs you to just breathe for a minute.
+Blaize  Taylor, your insistence on stillness has a near-zero probability of yielding anything worthwhile.
+Trey    Blaize, your high-stakes planning usually ends with you needing a medic, not a victory lap.
+
+--- campfire
+Blaize  Trey, your concern for my medical status is statistically irrelevant to the actual discovery potential here.
+Taylor  This quiet light is better than whatever shiny thing you think is out there.
+Corey   Taylor confuses stillness with a hobby.
+Grant   You think that faint glow is the biggest thing out here? I'll find something that actually pushes the limit.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 1, "calls": 17, "median": 0.67, "p90": 0.78, "max": 0.98, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 11}
+
+################ RUN 2 ################
+
+--- out of the ravine
+Trey    Looks like the calm camp is about to lose this one, but I'll take notes for the story.
+Taylor  Trey, your 'story' is just going to be about how you missed the actual light show.
+Corey   The view is fine from here.
+
+--- the debate
+Grant   [WILD] Trey, you'd miss the actual fight for a pretty picture, come on, check it out
+Taylor  [CALM] Grant, your need for drama is exhausting; just let the colors settle for a bit
+Blaize  [WILD] Trey, your narrative potential is statistically negligible compared to the immediate chaos waiting there
+Corey   [CALM] Grant will trip over a loose stone before any adventure starts
+Trey    [CALM] Grant, you always mistake a low-stakes stumble for epic survival; we breathe in the quiet instead
+
+>> a quiet overlook where you can sit and watch the islands drift into the sunset
+Grant   You think this is the peak? I bet you won't even see anything interesting from up there.
+
+--- grant vs one block
+Taylor  Grant, your excitement level is matched only by your coordination with a single stone.
+Corey   Taylor exaggerates the situation like a bad documentary voiceover.
+Blaize  The low risk approach is statistically inefficient when genuine action is right there.
+
+--- campfire
+Taylor  Blaize, your efficiency metrics don't account for actual peace, you know.
+Grant   Seriously Taylor, you're confusing a nice view with a worthy conquest.
+Corey   Grant mistakes a pretty sight for a challenge.
+Trey    So the quiet view is apparently more dramatic than a near-fall, I see. This is going to make for a very mellow story.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 2, "calls": 17, "median": 0.6, "p90": 0.68, "max": 0.86, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 11}
+
+################ RUN 3 ################
+
+--- out of the ravine
+Grant   Forget the view, there's a ridge path leading to those islands; who wants to map the underbelly first?
+Taylor  Just breathe in that light, y'all are missing the whole point right now.
+Corey   Taylor mistakes staring at things for actual progress.
+
+--- the debate
+Grant   [WILD] You'd probably just sit there gawking, Taylor; we're hitting that glowy mess before it gets boring
+Taylor  [CALM] Grant, you always rush past the good parts, seriously.
+Blaize  [WILD] Corey's idea of progress is just unnecessary risk assessment; the glowy trail offers exponential discovery
+Corey   [CALM] Grant always finds the nearest unnecessary peril
+Trey    [WILD] Grant's definition of exploration is just repeating the same near-death routine,
+
+>> a cave mouth with something growling inside and a trail of glowing cubes leading in
+Taylor  Guess the quiet glow wasn't as appealing as a potential squish, huh.
+
+--- grant vs one block
+Taylor  Trey, you're just jealous you don't get the thrill of watching Grant nearly become a cautionary tale.
+Blaize  Your supposed superior perspective is statistically insignificant given the immediate tactical advantage of the unknown interior.
+Trey    Blaize, your "tactical advantage" usually just means more paperwork later.
+
+--- campfire
+Blaize  The ambient glow is only a statistical anomaly compared to what’s inside; we should move now.
+Taylor  Blaize, you always think the next big thing is just a better spreadsheet entry.
+Corey   Taylor equates looking at things with achievement.
+Grant   Bet you're scared of what's in there, but we're going in before the fire dies down.
+
+--- action test: 'Corey, follow Blaize and stay close.'
+{'line': None, 'tool_calls': [{'name': 'follow_player', 'args': {'player': 'Blaize'}}]}
+
+[api] done in 26.2s, state saved to crew_state.json
+
+STATS {"run": 3, "calls": 17, "median": 0.63, "p90": 0.78, "max": 0.81, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 10}
+
+ALL [{"run": 1, "calls": 17, "median": 0.67, "p90": 0.78, "max": 0.98, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 11}, {"run": 2, "calls": 17, "median": 0.6, "p90": 0.68, "max": 0.86, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 11}, {"run": 3, "calls": 17, "median": 0.63, "p90": 0.78, "max": 0.81, "wall": 26.2, "lines": 16, "parroted_examples": 0, "repeated_openers": 0, "names_a_crewmate": 10}]
+
+==================================================================
+PART 5 - speech wheel, 10 min of camp, original per-fire scheduler
+==================================================================
+
+--- 600s of game time, companions asleep until a wake time fires
+[t=    0s] Taylor <- you just started to notice woodsmoke from the campfire
+           Smells right, the fire's gonna look good against this light.
+[t=    4s] Corey <- reply
+           You mistake a fire for an aesthetic choice, Taylor.
+[t=    6s] Corey <- you just started to notice woodsmoke from the campfire
+           Taylor sees smoke before he sees actual warmth.
+[t=   10s] Grant (alone) <- you just started to notice something sweet and metallic, like the glowing cubes
+           Bet you won't check that glowing scent out, it's way better than just watching the sky fade.
+[t=   21s] Blaize (alone) <- you just started to notice something sweet and metallic, like the glowing cubes
+           Hear me out, that scent suggests a high-yield resource nearby, so we move now.
+[t=   38s] Trey <- you just started to notice woodsmoke from the campfire
+           Corey, you sound like you're grading a kindergarten art project instead of noticing the fire.
+[t=   41s] Trey <- you just started to notice something sweet and metallic, like the glowing cubes
+           That sweet, coppery scent is definitely more interesting than just watching the light fade.
+[t=   42s] Taylor <- reply
+           Trey, you're confusing a nice fire with some grand adventure already.
+[t=  148s] Trey <- something sweet and metallic, like the glowing cubes just faded away
+           Taylor, you always try to frame the mundane like it's a cinematic moment.
+[t=  152s] Taylor <- reply
+           Trey, you always need the next adrenaline spike even when this is perfectly mellow.
+[t=  161s] Blaize (alone) <- you just started to notice woodsmoke from the campfire
+           That distant smoke confirms immediate proximity to resources, so we should check that direction now.
+[t=  185s] Blaize (alone) <- something sweet and metallic, like the glowing cubes just faded away
+           The faint trace of that sweet metal vanished, suggesting the immediate objective has shifted elsewhere.
+[t=  222s] Grant (alone) <- something sweet and metallic, like the glowing cubes just faded away
+           You think you can ignore that sweet metallic whiff? Time to see what's hiding under that rock.
+[t=  261s] Corey <- you just started to notice rain on hot stone, a storm front rolling in
+           Taylor, the calm you seek is about to get wet.
+[t=  265s] Taylor <- reply
+           Corey, your sudden rush to drama is just predictable.
+[t=  270s] Taylor <- you just started to notice rain on hot stone, a storm front rolling in
+           Corey, your dramatic predictions are as fleeting as this incoming drizzle.
+[t=  270s] Trey <- you just started to notice rain on hot stone, a storm front rolling in
+           Now the dampness is joining the smoke; looks like the calm is officially over.
+[t=  290s] Grant (alone) <- you just started to notice rain on hot stone, a storm front rolling in
+           Think you can just sit there while the weather shifts? Let's see what's under this sudden downpour.
+[t=  303s] Blaize (alone) <- you just started to notice rain on hot stone, a storm front rolling in
+           The atmospheric pressure drop indicates immediate high-value exploration opportunities just ahead.
+[t=  381s] Blaize (alone) <- woodsmoke from the campfire just faded away
+           The shift in the air density suggests an immediate, high-yield area for investigation before the downpour hits.
+[t=  531s] Corey <- quiet stretch
+           Trey mistakes moisture for narrative progression.
+[t=  531s] Trey <- quiet stretch
+           The predictable tension has settled; now who wants to chase something slightly less predictable?
+[t=  592s] Trey <- woodsmoke from the campfire just faded away
+           The scent of rain hitting hot rock is more immediate than any distant squall.
+[t=  596s] Taylor <- reply
+           Trey, you always find the next immediate thing even when this just needs a breath.
+
+model calls: 24 (slept through 1 minor updates)
+naive polling, everyone every 10s: 300 calls -> 12x more
+real time 37.4s via [api]
+
+==================================================================
+PART 6 - speech wheel, summed-field scheduler, with the two-fire smudge moment (Grant @ 346s)
+==================================================================
+
+--- 600s of game time, companions asleep until a wake time fires
+[t=    0s] Taylor <- you just started to notice woodsmoke
+           Smellin' a little smoke over here, ain't that nice.
+[t=    4s] Trey <- reply
+           Still romanticizing campfire smoke, Taylor? You're setting up for a predictable evening.
+[t=    6s] Corey <- you just started to notice woodsmoke
+           Smoke is just smoke.
+[t=   10s] Grant (alone) <- you just started to notice something sweet and metallic, like the glowing cubes
+           Bet there's something way more interesting in that glow than just pretty rocks.
+[t=   21s] Blaize (alone) <- you just started to notice something sweet and metallic, like the glowing cubes
+           Hear me out, this metallic sweetness suggests a faster route than waiting for the fire to settle.
+[t=   36s] Grant (alone) <- something sweet and metallic, like the glowing cubes is easing off
+           Wait, that strange smell just faded? Where'd it go?
+[t=   38s] Trey <- you just started to notice woodsmoke
+           Corey, your commitment to the mundane is almost as predictable as Taylor's sunsets.
+[t=   41s] Trey <- you just started to notice something sweet and metallic, like the glowing cubes
+           Corey, even 'just smoke' sounds like you're actively avoiding any actual interesting thing.
+[t=   42s] Taylor <- reply
+           Letting the fire breathe is way better than rushing toward whatever shiny thing is in that rock.
+[t=   50s] Corey <- woodsmoke is easing off
+           Taylor confuses a small flame with a grand event.
+[t=   54s] Trey <- reply
+           Corey, your definition of 'grand' seems strictly limited to not having to move.
+[t=   89s] Taylor <- woodsmoke is easing off
+           Trey, you act like stillness is some kind of failure.
+[t=   93s] Corey <- reply
+           Taylor thinks stillness is failure.
+[t=  148s] Trey <- something sweet and metallic, like the glowing cubes just faded away
+           Corey, you confuse a pleasant evening with a lack of adventure, which is your permanent setting.
+[t=  152s] Taylor <- reply
+           The way the light hits the ridge right now is just perfect, y'all are missing it.
+[t=  161s] Blaize (alone) <- you just started to notice woodsmoke
+           That faint woodsmoke actually validates a quicker ingress point through the cavern.
+[t=  185s] Blaize (alone) <- something sweet and metallic, like the glowing cubes just faded away
+           That scent profile indicates a faster trajectory than waiting for the embers to dim.
+[t=  222s] Grant (alone) <- something sweet and metallic, like the glowing cubes just faded away
+           That sweet tang vanished already, must be something closer.
+[t=  261s] Corey <- you just started to notice rain on hot stone, a storm front rolling in
+           Taylor finds perfect moments in everything.
+[t=  265s] Taylor <- reply
+           Corey, you find perfection in the obvious, which is hardly groundbreaking stuff.
+[t=  270s] Taylor <- you just started to notice rain on hot stone, a storm front rolling in
+           Corey, even your appreciation for simple things is drier than your wit.
+[t=  270s] Trey <- you just started to notice rain on hot stone, a storm front rolling in
+           Taylor, your perfect light is about to get a dramatic downpour, I see.
+[t=  290s] Grant (alone) <- you just started to notice rain on hot stone, a storm front rolling in
+           Smell of hot stone rain means something's about to crack open out here.
+[t=  303s] Blaize (alone) <- you just started to notice rain on hot stone, a storm front rolling in
+           This humidity shift suggests the immediate area offers a more navigable passage than waiting for the deluge.
+[t=  324s] Trey <- woodsmoke is getting strong
+           The smoke is thickening, which means the quiet mood is about to get interrupted.
+[t=  328s] Taylor <- reply
+           Trey, you always rush right before the good quiet finally settles in.
+[t=  346s] Grant (alone) [only because two sources add up] <- you just started to notice woodsmoke
+           Bet you won't see what's beyond that ridge before the storm hits.
+[t=  496s] Corey <- quiet stretch
+           Taylor still mistakes a decent view for a definitive climax.
+[t=  496s] Taylor <- quiet stretch
+           Corey, your need to frame everything as a climax is exhausting.
+[t=  579s] Grant (alone) <- woodsmoke just faded away
+           That woodsmoke was a distraction, now let's see what that rain on hot stone means.
+
+model calls: 30 (slept through 4 minor updates)
+naive polling, everyone every 10s: 300 calls -> 10x more
+real time 47.1s via [api]
+
+==================================================================
+APPENDIX - referee, 300 random overlap scenarios (no model calls)
+==================================================================
+300 randomized scenarios, 277 with same-kind overlapping sources, 4045 reference transitions (dt=0.02s)
+
+v1: {"matched": 1613, "missed": 2432, "spurious": 3874, "max_err": 0.0298}
+   8eps down missed   765 / 765
+   8eps up   missed   666 / 786
+   eps down  missed   105 / 354
+   eps up    missed   896 / 2140
+
+v2: {"matched": 4045, "missed": 0, "spurious": 0, "max_err": 0.0135}
+   8eps down missed     0 / 765
+   8eps up   missed     0 / 786
+   eps down  missed     0 / 354
+   eps up    missed     0 / 2140
+
+v2 scheduler cost: 0.14 ms per (companion, kind) recompute, 9990 recomputes total

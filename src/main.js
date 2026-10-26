@@ -33,6 +33,7 @@ import { Weather, REGIMES } from './weather.js';
 import { Precip } from './precip.js';
 import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
+import { CrewTalk } from './crewtalk.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
 import { HorizonMap } from './culling.js';
@@ -77,6 +78,7 @@ settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
 settings.flare ??= true;
 settings.relief ??= QUALITY !== 'low';
+settings.crew ??= false;          // the friends talk about what reaches them (src/crewtalk.js); off until you turn it on
 settings.mirror ??= Q.shafts > 0;
 settings.mountain ??= Q.soil !== false;
 settings.soil ??= Q.soil !== false;
@@ -244,6 +246,9 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
 }
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
+const crewTalk = new CrewTalk(party, settings);   // what they sense, and when it is worth a line (src/crew.js, from Blaize's companions)
+crewTalk.on = settings.crew;
+party.onEvent = (kind, vars) => crewTalk.event(kind, vars);
 avatar.ground = (x, z) => world.height(x, z);                           // feet meet the slope
 for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
@@ -252,7 +257,7 @@ const rig = new CameraRig(camera, world, hiker, avatar);
 // the family tent's walls and floor
 for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
 for (const b of [hiker, party]) b.floorAt = (x, z) => camp.floorAt(x, z);
-party.onDrop = (x, y, z) => dump.drop(x, y, z);
+party.onDrop = (x, y, z) => { dump.drop(x, y, z); crewTalk.smell('stink', x, z); };
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
 const wood = new Wood(world, flora, scene, props);
 props.wood = wood;
@@ -640,6 +645,12 @@ loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
 loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });   // the mountain terrain pack (src/mountain.js)   // the soil pack: the close ground (src/soil.js)
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
+$('set-crew').checked = settings.crew;
+$('set-crew').onchange = () => { settings.crew = $('set-crew').checked; crewTalk.on = settings.crew; storeJSON('rawah-settings', settings); };
+for (const [id, key] of [['set-crew-url', 'crewUrl'], ['set-crew-model', 'crewModel'], ['set-crew-key', 'crewKey']]) {
+  $(id).value = settings[key] || '';
+  $(id).onchange = () => { settings[key] = $(id).value.trim(); storeJSON('rawah-settings', settings); };
+}
 $('set-relief').checked = settings.relief;
 $('set-relief').onchange = () => { settings.relief = $('set-relief').checked; atmosphere.uTSOn.value = settings.relief ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-mirror').checked = settings.mirror;
@@ -722,14 +733,14 @@ function act() {
     if (camp.fire && camp.near(p, 'fire', 5)) {
       // a log on the fire, if you have one; otherwise put it out
       if (wood.available(p) > 0) {
-        if (camp.addFuel(60)) { wood.consume(p, 1); audio.strike(); hud.toast('You lay a log on the fire.'); }
+        if (camp.addFuel(60)) { wood.consume(p, 1); audio.strike(); hud.toast('You lay a log on the fire.'); crewTalk.smell('logsmoke', camp.fire.x, camp.fire.z); }
         else hud.toast('The fire is roaring already.');
       } else { camp.douse(); hud.toast('Fire drowned and stirred cold. Nice.'); }
     } else {
       const x = p.x + fx * 2, z = p.z + fz * 2;
       const why = camp.fireProblem(x, z) || (wood.available(p) < 3 ? 'You need firewood: three logs. Fell a tree with the axe ([T]) and cut it up.' : null);
       if (why) hud.toast(why, 'warn');
-      else { wood.consume(p, 3); camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
+      else { wood.consume(p, 3); camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); crewTalk.smell('smoke', x, z); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
     }
   }
   if (pressed.has('KeyZ') && camp.near(p, 'tent', 4.5) && !state.sleeping) startSleep();
@@ -814,7 +825,7 @@ function camping() {
   const fireNear = camp.fire && Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) < 4.5;
   const heading = rig.mode === 'first' ? hiker.yaw : avatar.heading;
   if (pressed.has('KeyK') && state.seat < 0 && hiker.tool !== 'fireworks') {
-    if (fireNear || wood.carried <= 0) { if (coffee.rigged ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos)) save(); }
+    if (fireNear || wood.carried <= 0) { const cooking = coffee.rigged; if (cooking ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos)) { crewTalk.smell(cooking ? 'bacon' : 'coffee', camp.fire.x, camp.fire.z); save(); } }
     else if (wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
   }
   if (pressed.has('KeyJ') && state.seat < 0 && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
@@ -1450,6 +1461,7 @@ function tick(dt, draw = true) {
   }, shaped);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
+  if (state.started) crewTalk.update(live ? dt : 0, { player: hiker.pos, storm: weather.storm, wind: WIND_DIR });
   if (state.started && !state.paused && !state.travel && !state.sleeping) {
     for (const e of wood.update(dt, { pos: hiker.pos, yaw: hiker.yaw }, { axe: props.tool === 'axe', carryVisible: state.seat < 0 && !atv.riding && !state.cut, heading: avatar.heading, first: rig.mode === 'first' })) {
       if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -1770,7 +1782,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

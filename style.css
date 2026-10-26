@@ -509,3 +509,6 @@ body.touch #fishing { right: 12px; top: 40%; width: min(210px, 38vw); }
 #ask .ak-row { display: flex; gap: 10px; }
 #ask button { display: inline-flex; align-items: center; gap: 8px; }
 body.touch #ask { bottom: 150px; }
+
+/* the crew model fields in Settings */
+#settings input[type=text], #settings input[type=password] { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 10px; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px; background: rgba(255, 255, 255, 0.06); color: var(--ink); font: inherit; font-size: var(--t-sm); }

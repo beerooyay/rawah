@@ -182,6 +182,7 @@ export class Party {
     this.biz = null;   // a friend's call of nature: { a, phase: walk | squat | done, x, z, ux, uz, t, drops, n }
     this.urge = between(110, 170);   // seconds until the next one
     this.onDrop = null;              // called with (x, y, z) for each dropping
+    this.onEvent = null;             // called with (kind, vars) for everything main.js reports (the crew's scene log reads it)
   }
 
   // ------------------------------------------------------------ speech
@@ -202,6 +203,7 @@ export class Party {
 
   /** Things that happen to the pair (main.js reports discoveries, camp and arrivals). */
   event(kind, vars = {}) {
+    this.onEvent?.(kind, vars);
     if (kind === 'travel') { this.#arriveWith(vars.player); this.say('travel', {}, null, { force: true }); return; }
     const force = kind === 'lake' || kind === 'summit' || kind === 'hello';
     this.say(kind, vars, null, { force, cool: 90 });

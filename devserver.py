@@ -11,6 +11,8 @@ Usage:  python3 devserver.py [port]   (default 5179)
 """
 import os
 import sys
+import urllib.error
+import urllib.request
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -26,6 +28,33 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, *args):
         pass  # quiet
+
+    def do_POST(self):
+        """/crew/chat/completions: forward the crew's chat requests to an OpenAI-style server with a key that stays in this
+        process's environment (NVIDIA_API_KEY, optional RAWAH_CREW_UPSTREAM). Local use only; with no key it answers 501."""
+        if not self.path.startswith('/crew/'):
+            self.send_error(404)
+            return
+        key = os.environ.get('NVIDIA_API_KEY')
+        if not key:
+            self.send_error(501, 'set NVIDIA_API_KEY to use the crew proxy')
+            return
+        upstream = os.environ.get('RAWAH_CREW_UPSTREAM', 'https://integrate.api.nvidia.com/v1').rstrip('/')
+        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        req = urllib.request.Request(upstream + self.path[len('/crew'):], data=body, method='POST',
+                                     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data, status = r.read(), r.status
+        except urllib.error.HTTPError as e:
+            data, status = e.read(), e.code
+        except Exception as e:
+            data, status = str(e).encode(), 502
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
 
 if __name__ == '__main__':
