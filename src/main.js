@@ -43,6 +43,7 @@ import { Plume } from './plume.js';
 import { WaveField, WATER } from './waves.js';
 import { WaterCells } from './waterbox.js';
 import { Lightning } from './lightning.js';
+import { Shafts, Mist } from './shafts.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -66,6 +67,7 @@ if (DEV) {
   if (u.has('grass')) Q.grass = { ...Q.grass, radius: Number(u.get('grass')) };
 }
 settings.shadows ??= Q.shadows;
+settings.shafts ??= Q.shafts > 0;
 if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
 
@@ -234,6 +236,9 @@ props.wood = wood;
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
 const plume = new Plume(world, scene);
+const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
+const shafts = new Shafts(scene, world, { slices: Q.shafts || 18 });   // volumetric god rays: shadow-tested slices, boxel-density air
+shafts.on = settings.shafts && Q.shafts >= 0;
 let smokeToast = -99;
 const _pw = new THREE.Vector3();
 const fireworks = new Fireworks(world, scene);
@@ -606,6 +611,8 @@ $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (
   sel.value = Object.keys(SEASONS).find((k) => SEASONS[k].doy === settings.doy) || 'autumn';
   sel.onchange = () => { settings.doy = SEASONS[sel.value].doy; storeJSON('rawah-settings', settings); location.reload(); };
 }
+$('set-shafts').checked = settings.shafts;
+$('set-shafts').onchange = () => { settings.shafts = $('set-shafts').checked; shafts.on = settings.shafts; storeJSON('rawah-settings', settings); };
 $('set-shadows').checked = settings.shadows;
 $('set-shadows').onchange = () => {
   settings.shadows = $('set-shadows').checked;
@@ -1595,6 +1602,9 @@ function tick(dt, draw = true) {
   }
   waves.update(state.paused ? 0 : dt, p.x, p.z, currentAt(p.x, p.z));
   waterCells.update(state.paused ? 0 : dt, { p, wind: WATER.uWind.value, precip: weather.precip * (1 - weather.snowK), onStream, lakeAt: openLake, flowAt: currentAt });
+  // the air the boxels hold, and the light shafts that show it
+  mist.update(state.paused ? 0 : dt, { p, moisture: (x, z) => boxels.sample(x, z).u, sunUp: sky.sunDir.y, hour: state.hour, lakeAt: openLake, precip: weather.precip * (1 - weather.snowK) });
+  shafts.update({ camera, sky, weather, plume, mist, ground: p.y, t, sun: sky.sun, shadows: settings.shadows && renderer.shadowMap.enabled });
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -1708,7 +1718,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
