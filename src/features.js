@@ -434,11 +434,13 @@ export function buildSigns(world, models) {
     if (!spot) continue;
     const cars = CAR_ORDER.map((model, i) => {
       const x = spot.x + spot.rx * i * CAR_SPACING, z = spot.z + spot.rz * i * CAR_SPACING;
-      place(carModel(models[model]), x, z, spot.rx, spot.rz);
+      const obj = carModel(models[model]);
+      place(obj, x, z, spot.rx, spot.rz);
       // the start spot is on the trail side of the car, a couple of metres off its door
-      return { model, x, z, start: { x: x - spot.rz * 2.4 * -spot.side, z: z + spot.rx * 2.4 * -spot.side, toward: tp } };
+      return { model, x, z, yaw: obj.rotation.y, obj, start: { x: x - spot.rz * 2.4 * -spot.side, z: z + spot.rx * 2.4 * -spot.side, toward: tp } };
     });
-    world.starts[th.name] = { cars };
+    // the road the cars pulled in from, for the opening drive (src/intro.js): its points in driving order and where they park
+    world.starts[th.name] = { cars, road: road.dense, roadRef: road, k: best, spot };
     if (th === main) {
       // the vault toilet sits at the end of the lot, a few metres behind the cars; its exact spot is approximate
       const ox = spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3), oz = spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
@@ -524,7 +526,7 @@ export function buildStreams(world) {
 
 /** The two cars, nose to tail along the road. Anyone can drive either. */
 export const CAR_ORDER = ['civic', 'maverick'];
-const CAR_LENGTH = 4.6, CAR_SPACING = 3.4;
+const CAR_LENGTH = 4.6, CAR_SPACING = 5.7;   // nose to tail with a gap (the cars were 3.4 m apart, shorter than a car, so they overlapped)
 
 /** A landmark model from assets/landmarks, scaled to `height` metres tall and standing on the origin. */
 function landmark(template, height) {
@@ -541,7 +543,7 @@ function landmark(template, height) {
 }
 
 /** A glTF car scaled to CAR_LENGTH metres, nose along +z, standing on its wheels at the origin. */
-function carModel(template) {
+export function carModel(template) {
   const box = new THREE.Box3().setFromObject(template);
   const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
   const s = CAR_LENGTH / size.z;

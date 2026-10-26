@@ -182,6 +182,7 @@ export class Party {
     this.biz = null;   // a friend's call of nature: { a, phase: walk | squat | done, x, z, ux, uz, t, drops, n }
     this.urge = between(110, 170);   // seconds until the next one
     this.onDrop = null;              // called with (x, y, z) for each dropping
+    this.pins = new Map();           // actor -> { x, z }: walk there now (the opening cinematic steps them out of the cars)
     this.onEvent = null;             // called with (kind, vars) for everything main.js reports (the crew's scene log reads it)
   }
 
@@ -418,7 +419,9 @@ export class Party {
     }
     this._pin = this.go ? (this.go.who || this.actors[0]) : null;
     for (const a of this.actors) {
-      if (a === this._pin) { a.goto(this.go.x, this.go.z, RUN, 0.3, dt); a.b.face = false; a.b.lookAt = null; }
+      const pin = this.pins.get(a);
+      if (pin) { a.goto(pin.x, pin.z, WALK + 0.5, 0.25, dt); a.b.face = false; a.b.lookAt = null; a.b.resting = false; }
+      else if (a === this._pin) { a.goto(this.go.x, this.go.z, RUN, 0.3, dt); a.b.face = false; a.b.lookAt = null; }
       else if (a.boarding && this.atv) {
         const sx = Math.sin(this.atv.yaw), cz = Math.cos(this.atv.yaw);
         if (a.goto(this.atv.pos.x + sx * 1.7, this.atv.pos.z + cz * 1.7, RUN, 0.4, dt) < 0.6) { a.boarding = false; a.riding = true; this.say('ride', {}, a, { cool: 20 }); }

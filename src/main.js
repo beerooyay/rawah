@@ -34,6 +34,7 @@ import { Precip } from './precip.js';
 import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
 import { CrewTalk } from './crewtalk.js';
+import { Intro } from './intro.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
 import { HorizonMap } from './culling.js';
@@ -78,6 +79,7 @@ settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
 settings.flare ??= true;
 settings.relief ??= QUALITY !== 'low';
+settings.intro ??= true;           // the opening drive and arrival on a new game (src/intro.js)
 settings.crew ??= false;          // the friends talk about what reaches them (src/crewtalk.js); off until you turn it on
 settings.mirror ??= Q.shafts > 0;
 settings.mountain ??= Q.soil !== false;
@@ -254,6 +256,7 @@ for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
 party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
+const intro = new Intro(world, scene, camera, models);   // the truck and the car come down the road and park; the friends step out
 // the family tent's walls and floor
 for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
 for (const b of [hiker, party]) b.floorAt = (x, z) => camp.floorAt(x, z);
@@ -361,6 +364,7 @@ const { keys, pressed } = input;
 if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
+  if (state.intro) { intro.skip(); return; }
   if (state.ask) {
     if (code === 'KeyY' || code === 'Enter') answerAsk(true);
     else if (code === 'KeyN' || code === 'Escape') answerAsk(false);
@@ -396,7 +400,7 @@ input.onPad = (name, stickOnly) => {
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !state.sleeping && !state.travel) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !state.sleeping && !state.travel && !state.intro) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -540,10 +544,79 @@ function begin(fresh) {
   audio.setVolume(settings.volume);
   pause(false);
   if (fresh) {
-    const hello = `${trailhead.name} · ${ft(hiker.pos.y)} ft. Twin Crater Lakes are up the West Branch and Rawah trails.`;
-    setTimeout(() => hud.toast(hello), 600);
-    setTimeout(() => hud.toast('[V] first / third person · [T] axe · [M] map · [C] camp'), 5200);
+    if (settings.intro && !new URLSearchParams(location.search).has('nointro') && startIntro()) return;
+    toastHello();
   }
+}
+
+function toastHello() {
+  const hello = `${trailhead.name} · ${ft(hiker.pos.y)} ft. Twin Crater Lakes are up the West Branch and Rawah trails.`;
+  setTimeout(() => hud.toast(hello), 600);
+  setTimeout(() => hud.toast('[V] first / third person · [T] axe · [M] map · [C] camp'), 5200);
+}
+
+// ------------------------------------------------------------------ the opening drive (src/intro.js)
+/** A new game: the truck and the car come down the road and park, the friends step out, and then it is yours. False if this trailhead has no road to drive. */
+function startIntro() {
+  if (!intro.prepare(trailhead)) return false;
+  state.intro = { view: rig.mode, player: null };
+  keys.clear();
+  if (rig.mode === 'first') { rig.toggle(); avatar.setFirstPerson(false); }
+  showChar(avatar, false);
+  for (const a of party.actors) { showChar(a.char, false); party.pins.delete(a); }
+  $('hud').classList.add('hidden');
+  intro.begin({ place: trailhead.name, sub: 'Rawah Wilderness', onExit: introExit, onEnd: introEnd });
+  return true;
+}
+
+/** Person i (0 you, 1 and 2 your friends) opens a door: put them there, visible, walking to where they will stand. */
+function introExit(i, d) {
+  audio.thud?.(false);
+  if (i === 0) {
+    showChar(avatar, true);
+    hiker.place(d.x, d.z, Math.atan2(-(d.tx - d.x), -(d.tz - d.z)));
+    state.intro.player = { x: d.tx, z: d.tz };
+  } else {
+    const a = party.actors[i - 1];
+    if (!a) return;
+    a.place(d.x, d.z, Math.atan2(d.tx - d.x, d.tz - d.z));
+    showChar(a.char, true);
+    party.pins.set(a, { x: d.tx, z: d.tz });
+  }
+}
+
+function introEnd() {
+  const I = state.intro;
+  if (!I) return;
+  const doors = intro.doors();
+  spawnAtCar();                                                      // you, exactly at the car's start spot, facing the trail
+  showChar(avatar, true);
+  party.actors.forEach((a, k) => { const d = doors[k + 1]; party.pins.delete(a); a.place(d.tx, d.tz, a.b.yaw); showChar(a.char, true); });
+  if (I.view === 'first' && rig.mode === 'third') { rig.toggle(); avatar.setFirstPerson(true); }
+  state.intro = null;
+  rig.eyeY = null;
+  $('hud').classList.remove('hidden');
+  audio.engine(false, 0, 0);
+  keys.clear();
+  toastHello();
+}
+
+/** One frame of you in the opening: still in the car until your door opens, then walking out to the start spot. */
+function introStep(dt, env) {
+  const I = state.intro, hp = hiker.pos;
+  if (I.player) {
+    const dx = I.player.x - hp.x, dz = I.player.z - hp.z, d = Math.hypot(dx, dz), sp = d > 0.25 ? 1.8 : 0;
+    _v.set(sp ? (dx / d) * sp : 0, 0, sp ? (dz / d) * sp : 0);
+    _sp.set(hp.x + _v.x * dt, 0, hp.z + _v.z * dt); _sp.y = world.height(_sp.x, _sp.z);
+    if (sp) { let t = Math.atan2(-dx, -dz) - hiker.yaw; t = Math.atan2(Math.sin(t), Math.cos(t)); hiker.yaw += t * Math.min(1, dt * 7); }
+    hiker.carried(dt, _sp, _v, env);
+    hiker.moving = sp ? 1 : 0;
+    hiker.phase += sp * dt * (Math.PI / 1.4);
+  } else {
+    _sp.set(hp.x, hp.y, hp.z);
+    hiker.carried(dt, _sp, _zero, env);
+  }
+  return hiker.events;
 }
 
 $('btn-start').onclick = () => startFresh();
@@ -645,6 +718,8 @@ loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
 loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });   // the mountain terrain pack (src/mountain.js)   // the soil pack: the close ground (src/soil.js)
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
+$('set-intro').checked = settings.intro;
+$('set-intro').onchange = () => { settings.intro = $('set-intro').checked; storeJSON('rawah-settings', settings); };
 $('set-crew').checked = settings.crew;
 $('set-crew').onchange = () => { settings.crew = $('set-crew').checked; crewTalk.on = settings.crew; storeJSON('rawah-settings', settings); };
 for (const [id, key] of [['set-crew-url', 'crewUrl'], ['set-crew-model', 'crewModel'], ['set-crew-key', 'crewKey']]) {
@@ -1165,6 +1240,7 @@ function startTravel(d) {
   audio.whoosh?.(state.travel.dur);
 }
 
+const introFocus = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4(), _look = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const ease = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
 
@@ -1403,7 +1479,7 @@ function tick(dt, draw = true) {
   const fishInp = { x: clamp(ctl.move.x + (ctl.lookX / Math.max(dt, 0.001)) / 3, -1, 1), reel: live && keys.has('Space'), hook: live && pressed.has('Space') };
   if (fishing.locked) { ctl.move.set(0, 0); ctl.jump = false; ctl.lookX = 0; ctl.lookY = 0; }
   if (roast.active || state.seat >= 0) ctl.jump = false;
-  if (state.seat >= 0 || state.cut || atv.riding) { ctl.move.set(0, 0); ctl.punch = ctl.hook = ctl.stomp = ctl.grab = false; ctl.jump = false; }
+  if (state.seat >= 0 || state.cut || state.intro || atv.riding) { ctl.move.set(0, 0); ctl.punch = ctl.hook = ctl.stomp = ctl.grab = false; ctl.jump = false; }
 
   const p = hiker.pos;
   const env = {
@@ -1415,7 +1491,7 @@ function tick(dt, draw = true) {
   };
   if (live) {
     const before = hiker.pos.clone();
-    const events = state.cut ? cutStep(dt, env) : state.seat >= 0 ? seatedStep(dt, env) : atv.riding ? rideStep(dt, env) : hiker.update(dt, ctl, env);
+    const events = state.intro ? introStep(dt, env) : state.cut ? cutStep(dt, env) : state.seat >= 0 ? seatedStep(dt, env) : atv.riding ? rideStep(dt, env) : hiker.update(dt, ctl, env);
     state.km += Math.hypot(p.x - before.x, p.z - before.z) / 1000;
     for (const e of events) {
       if (e.type === 'step') {
@@ -1565,7 +1641,14 @@ function tick(dt, draw = true) {
   }
   const zoom = mindOn ? 0 : wheel;
   let focus = p;
-  if (state.travel) {
+  if (state.intro) {
+    // the opening: the camera belongs to the cinematic; stream trees and shadows around what it is watching
+    const r = intro.update(dt);
+    focus = introFocus.copy(r.focus);
+    cullView();
+    flora.update(focus, 1, dt);
+    audio.engine(!r.done && r.engine > 0.05, clamp(r.engine / 18, 0, 1), r.engine > 0.5 ? 0.45 : 0);
+  } else if (state.travel) {
     // stream trees under the flight first, then around where you'll land
     const u = flyStep(dt, flyFocus);
     focus = flyFocus;
@@ -1734,7 +1817,7 @@ function tick(dt, draw = true) {
   if (state.started && (frameNo++ % 30 === 0)) { feedFriends(p); feedGuide(p); }
   // the sun's shadows only change slowly: redraw them every other frame (always while flying)
   perf.frame++;
-  renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel);
+  renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
     mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
     renderer.render(scene, camera);
@@ -1782,7 +1865,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
