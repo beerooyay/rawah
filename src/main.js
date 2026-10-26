@@ -44,6 +44,7 @@ import { WaveField, WATER } from './waves.js';
 import { WaterCells } from './waterbox.js';
 import { Lightning } from './lightning.js';
 import { Shafts, Mist } from './shafts.js';
+import { LensFlare } from './flare.js';
 import { SOIL, loadSoil } from './soil.js';
 import { Fireworks } from './fireworks.js';
 
@@ -69,6 +70,7 @@ if (DEV) {
 }
 settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
+settings.flare ??= true;
 settings.soil ??= Q.soil !== false;
 if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
@@ -238,6 +240,8 @@ props.wood = wood;
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
 const plume = new Plume(world, scene);
+const flare = new LensFlare();
+flare.on = settings.flare;
 const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
 const shafts = new Shafts(scene, world, { slices: Q.shafts || 18, terrain: terrain.uniforms });   // volumetric god rays: shadow-tested slices, boxel-density air
 shafts.on = settings.shafts && Q.shafts >= 0;
@@ -616,6 +620,8 @@ $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (
 loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });   // the soil pack: the close ground (src/soil.js)
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
+$('set-flare').checked = settings.flare;
+$('set-flare').onchange = () => { settings.flare = $('set-flare').checked; flare.on = settings.flare; storeJSON('rawah-settings', settings); };
 $('set-shafts').checked = settings.shafts;
 $('set-shafts').onchange = () => { settings.shafts = $('set-shafts').checked; shafts.on = settings.shafts; storeJSON('rawah-settings', settings); };
 $('set-shadows').checked = settings.shadows;
@@ -1615,6 +1621,7 @@ function tick(dt, draw = true) {
   }
   waves.update(state.paused ? 0 : dt, p.x, p.z, currentAt(p.x, p.z));
   waterCells.update(state.paused ? 0 : dt, { p, wind: WATER.uWind.value, precip: weather.precip * (1 - weather.snowK), onStream, lakeAt: openLake, flowAt: currentAt });
+  flare.update({ camera, sky, flora, groundAt: (x, z) => world.height(x, z), paused: state.paused, overcast: sky.overcast });
   // the air the boxels hold, and the light shafts that show it
   mist.update(state.paused ? 0 : dt, { p, moisture: (x, z) => boxels.sample(x, z).u, sunUp: sky.sunDir.y, hour: state.hour, lakeAt: openLake, precip: weather.precip * (1 - weather.snowK) });
   shafts.update({ camera, sky, weather, plume, mist, hour: state.hour, dampness: Math.max(weather.wet, boxels.sample(p.x, p.z).u), ground: p.y, t, sun: sky.sun, shadows: settings.shadows && renderer.shadowMap.enabled });
