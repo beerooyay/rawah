@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
 import { SOIL, SOIL_PARS, SOIL_NORMAL, SOIL_COLOR } from './soil.js';
+import { MTN, MTN_PARS, MTN_NORMAL, MTN_COLOR } from './mountain.js';
 import { chunkGeometry } from './culling.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
@@ -103,7 +104,7 @@ export const ALBEDO = /* glsl */ `
           albedo = mix(albedo, canopy, canopyK * forestW * 0.95);
         }
         // steep faces: granite strata and cracks projected sideways
-        float faceK = smoothstep(0.8, 0.55, wn.y) * (1.0 - smoothstep(150.0, 900.0, camD));
+        float faceK = smoothstep(0.8, 0.55, wn.y) * (1.0 - smoothstep(150.0, 900.0, camD)) * (1.0 - mtnW);
         if (faceK > 0.0) {
           vec3 an = abs(wn) + 1e-4;
           float wx = an.x / (an.x + an.z);
@@ -151,6 +152,7 @@ float blocky(vec4 w) {
 // satellite colour takes over. NEAR_NORMAL runs before lighting (expects p,
 // camD, wn), NEAR_COLOR after ALBEDO.
 export const NEAR_NORMAL = /* glsl */ `
+        ${MTN_NORMAL}
         // nothing of this shows through snow cover
         float nearK = (1.0 - smoothstep(18.0, 60.0, camD)) * (1.0 - uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 40.0, vWPos.y));
         float gStone = 0.0, gId = 0.0, gRing = 0.0, gRocky = 0.0, gForest = 0.0;
@@ -171,7 +173,7 @@ export const NEAR_NORMAL = /* glsl */ `
           float b2 = blocky(w2);
           float s2 = smoothstep(r2, r2 * 0.8, b2) * keep2;
           vec2 tilt = -w1.zw / r1 * s1 * 0.9 - w2.zw / r2 * s2 * 0.8;
-          wn = normalize(wn + vec3(tilt.x, 0.0, tilt.y) * nearK);
+          wn = normalize(wn + vec3(tilt.x, 0.0, tilt.y) * nearK * (1.0 - mtnW));
           gStone = max(s1, s2);
           gId = s2 > s1 ? w2.y : w1.y;
           gRing = smoothstep(r1 * 1.35, r1, b1) * keep1 * (1.0 - s1) + smoothstep(r2 * 1.25, r2, b2) * keep2 * (1.0 - s2);
@@ -193,9 +195,10 @@ export const NEAR_COLOR = /* glsl */ `
           vec3 stoneCol = mix(vec3(0.4, 0.38, 0.36), vec3(0.6, 0.54, 0.49), gId) * (0.8 + fine * 0.35);
           float lichen = step(fract(gId * 7.3), 0.35) * smoothstep(0.5, 0.65, texture2D(uNoise, p * 1.7).r);
           stoneCol = mix(stoneCol, mix(vec3(0.56, 0.6, 0.36), vec3(0.72, 0.46, 0.2), step(fract(gId * 3.1), 0.3)), lichen * 0.7);
-          diffuseColor.rgb = mix(diffuseColor.rgb, stoneCol, gStone * nearK);
-          diffuseColor.rgb *= 1.0 - gRing * 0.28 * nearK;
-        }`;
+          diffuseColor.rgb = mix(diffuseColor.rgb, stoneCol, gStone * nearK * (1.0 - mtnW));
+          diffuseColor.rgb *= 1.0 - gRing * 0.28 * nearK * (1.0 - mtnW);
+        }
+        ${MTN_COLOR}`;
 
 export const ROCK = { value: null };   // rock albedo (assets/terrain/rock.jpg), set once it has loaded
 export const BOXEL = { value: null };  // the living boxel field (src/boxels.js): R wetness, G wear
@@ -206,7 +209,7 @@ export const BOXEL_COLOR = /* glsl */ `
         diffuseColor.rgb *= 1.0 - bx.r * 0.34;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.15, 1.07, 0.9), bx.g * 0.6);`;
 
-export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n' + SOIL_PARS;
+export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n' + SOIL_PARS + MTN_PARS;
 
 export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uColorMap = { value: colorMap };
@@ -216,7 +219,7 @@ export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uExtent = { value: extent };
   shader.uniforms.uRock = ROCK;
   shader.uniforms.uBoxel = BOXEL;
-  Object.assign(shader.uniforms, SOIL);
+  Object.assign(shader.uniforms, SOIL, MTN);
 }
 
 /** Lambert for the far horizon mesh: geometry normals, satellite albedo. */
@@ -233,6 +236,7 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         float camD = length(vWPos - cameraPosition);
         vec3 wn = normalize(vWNrm);
+        float mtnW = 0.0;
         ${ALBEDO}
         // past the baked map the satellite colour has run out: paint invented ground, rock on the crests
         // and dark timber in the folds, fading in over the first few km

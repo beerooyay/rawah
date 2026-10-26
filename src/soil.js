@@ -78,7 +78,7 @@ export const SOIL_NORMAL = /* glsl */ `
           vec2 sn = mix(n0, n1, sMix) * 2.0 - 1.0;
           if (sWet > 0.01) sn = mix(sn, soilTap(uSoilS, sq, sqx, sqy, 5.0).rg * 2.0 - 1.0, sWet * 0.8);
           if (sTrail > 0.01) sn = mix(sn, soilTap(uSoilS, sq, sqx, sqy, 6.0).rg * 2.0 - 1.0, sTrail * 0.9) * (1.0 - 0.4 * sTrail);
-          wn = normalize(wn + vec3(sn.x, 0.0, sn.y) * uSoilNormal * soilK);
+          wn = normalize(wn + vec3(sn.x, 0.0, sn.y) * uSoilNormal * soilK * (1.0 - mtnW));
         }`;
 
 /** Inside the near ground colour, before the stones: the soil's own colour for this spot. */

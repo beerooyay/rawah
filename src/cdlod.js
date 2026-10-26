@@ -165,6 +165,7 @@ export class CDLODTerrain {
             editSlope = length(vec2(ex, ez));
           }
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
+          float mtnW = 0.0;
           #ifdef NEAR_DETAIL
           ${NEAR_NORMAL}
           #endif

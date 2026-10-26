@@ -39,7 +39,7 @@ function waterNormals(size = 256) {
   return tex;
 }
 
-export function buildLakes(world) {
+export function buildLakes(world, mirrorU = null) {
   const normalMap = waterNormals();
   normalMap.repeat.set(1 / 9, 1 / 9);
   const mat = new THREE.MeshPhongMaterial({
@@ -50,15 +50,16 @@ export function buildLakes(world) {
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
     uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms, WAVE, WATER, WATERBOX);
+    Object.assign(shader.uniforms, uniforms, WAVE, WATER, WATERBOX, mirrorU || {});
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nuniform sampler2D uMirror;\nuniform mat4 uMirrorVP;\nuniform float uMirrorY, uMirrorOn;\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
+        vec2 mPush = vec2(0.0);
         if (ice < 0.5) {
           // rings spread from whatever has touched the water; rain dimples the surface while it falls
           float vdist = length(vViewPosition);
@@ -75,6 +76,7 @@ export function buildLakes(world) {
           // the wind sea, its gust patches and the rain's random rings: nothing here repeats
           push -= (windSea(vIceUv, uWT) + rainRings(vIceUv, uWT, uRainAmt)) * exp(-vdist * 0.012);
           push -= waveSlope(vIceUv) * uWaveGain;   // the live ripple field: wading, rain, fish, wakes
+          mPush = push;
           if (dot(push, push) > 1e-6) {
             vec3 wn = (viewMatrix * vec4(push.x, 0.0, push.y, 0.0)).xyz;
             normal = normalize(normal - normalize(wn) * clamp(length(push), 0.0, 0.5));
@@ -91,10 +93,30 @@ export function buildLakes(world) {
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
         float facing = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
         float fres = pow(1.0 - facing, 3.0);
-        gl_FragColor.rgb = mix(mix(uDeep, gl_FragColor.rgb, 0.75), uSky, 0.12 + fres * 0.7);
+        float mirK = uMirrorOn * (1.0 - smoothstep(1.0, 2.5, abs(vLevel - uMirrorY))) * (1.0 - ice);
+        gl_FragColor.rgb = mix(mix(uDeep, gl_FragColor.rgb, 0.75), uSky, 0.12 + fres * 0.7 * (1.0 - 0.85 * mirK));
         gl_FragColor.a = mix(0.82, 0.98, fres);
         vec4 silt = waterTint(vIceUv, gl_FragColor.rgb, uWT, waterState(vIceUv));   // what the water remembers: silt and foam
         if (ice < 0.5) { gl_FragColor.rgb = silt.rgb; gl_FragColor.a = max(gl_FragColor.a, silt.a); }
+        if (mirK > 0.0) {
+          // the lake as a mirror: the world above the water, found by projecting this water point through the reflected camera,
+          // shaken by the surface slope (ripples, wind sea, rain rings) and softened where the water is rough
+          vec3 wpos = vec3(vIceUv.x, vLevel, vIceUv.y);
+          float dist = length(wpos - cameraPosition);
+          vec3 wd = wpos + vec3(mPush.x, 0.0, mPush.y) * (0.5 + dist * 0.008);
+          vec4 mc = uMirrorVP * vec4(wd, 1.0);
+          vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
+          float rough = clamp(length(mPush) * 2.0 + uWind * 0.2 + uRainAmt * 0.4, 0.0, 1.0);
+          vec2 px = vec2(0.0035, 0.006) * (0.5 + rough * 2.5);
+          vec3 refl = texture2D(uMirror, muv).rgb * 0.4
+            + (texture2D(uMirror, muv + vec2(px.x, 0.0)).rgb + texture2D(uMirror, muv - vec2(px.x, 0.0)).rgb
+             + texture2D(uMirror, muv + vec2(0.0, px.y)).rgb + texture2D(uMirror, muv - vec2(0.0, px.y)).rgb) * 0.15;
+          vec2 edge = smoothstep(0.0, 0.025, muv) * (1.0 - smoothstep(0.975, 1.0, muv));
+          float F = clamp(0.03 + 0.97 * pow(1.0 - facing, 5.0), 0.0, 1.0);
+          F = clamp(F * 1.8 + 0.06, 0.0, 0.92) * (1.0 - 0.4 * rough) * edge.x * edge.y * step(0.0, mc.w);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, refl, F * mirK);
+          gl_FragColor.a = max(gl_FragColor.a, F * mirK);
+        }
         if (ice > 0.5) gl_FragColor = vec4(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular * 0.12, 1.0);`);
   };
   // every lake in one mesh: one draw call for all the water

@@ -6,6 +6,7 @@ import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
 import { LeafFall } from './leaffall.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
+import { LakeMirror } from './mirror.js';
 import { Sky, setSun, MOONS } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -48,6 +49,7 @@ import { Lightning } from './lightning.js';
 import { Shafts, Mist } from './shafts.js';
 import { LensFlare } from './flare.js';
 import { SOIL, loadSoil } from './soil.js';
+import { MTN, loadMountain } from './mountain.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -73,6 +75,8 @@ if (DEV) {
 settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
 settings.flare ??= true;
+settings.mirror ??= Q.shafts > 0;
+settings.mountain ??= Q.soil !== false;
 settings.soil ??= Q.soil !== false;
 if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
@@ -155,7 +159,8 @@ sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
 const lightning = new Lightning(scene, world);   // voxel-grown bolts (src/lightning.js)
 const waterCells = new WaterCells(world);   // silt and foam the water remembers (src/waterbox.js)
-const lakes = buildLakes(world);
+const mirror = new LakeMirror(renderer, world);   // the lakes reflect the shore, trees and skyline (src/mirror.js)
+const lakes = buildLakes(world, mirror.uniforms);
 const _flow = { x: 0, z: 0 };
 /** The stream's current at a point (m/s, world x, z), or nothing. */
 function currentAt(x, z) {
@@ -622,9 +627,14 @@ $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (
   sel.value = Object.keys(SEASONS).find((k) => SEASONS[k].doy === settings.doy) || 'autumn';
   sel.onchange = () => { settings.doy = SEASONS[sel.value].doy; storeJSON('rawah-settings', settings); location.reload(); };
 }
-loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });   // the soil pack: the close ground (src/soil.js)
+loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
+loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });   // the mountain terrain pack (src/mountain.js)   // the soil pack: the close ground (src/soil.js)
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
+$('set-mirror').checked = settings.mirror;
+$('set-mirror').onchange = () => { settings.mirror = $('set-mirror').checked; storeJSON('rawah-settings', settings); };
+$('set-mtn').checked = settings.mountain;
+$('set-mtn').onchange = () => { settings.mountain = $('set-mtn').checked; if (MTN.uMtnA.value) MTN.uMtnOn.value = settings.mountain ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-flare').checked = settings.flare;
 $('set-flare').onchange = () => { settings.flare = $('set-flare').checked; flare.on = settings.flare; storeJSON('rawah-settings', settings); };
 $('set-shafts').checked = settings.shafts;
@@ -1701,7 +1711,10 @@ function tick(dt, draw = true) {
   // the sun's shadows only change slowly: redraw them every other frame (always while flying)
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel);
-  if (draw) renderer.render(scene, camera);
+  if (draw) {
+    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
+    renderer.render(scene, camera);
+  }
 }
 
 // Adaptive resolution: hold the frame rate by trading pixels, measured over
@@ -1745,7 +1758,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
