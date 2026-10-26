@@ -520,16 +520,12 @@ const SWAY = /* glsl */ `
   mvPosition = modelViewMatrix * mvPosition;
   gl_Position = projectionMatrix * mvPosition;`;
 
-// the shadow pass keeps the sway of the whole tree but not the per-card flutter and the aspen quake: centimetres of motion
-// that read as nothing on the tree, and as shimmering edges on a shadow redrawn at texel size
-const SWAY_SHADOW = SWAY.replace(/float flutter[^\n]*\n\s*mvPosition\.xyz \+= [^\n]*\n/, '').replace(/float aspen[^\n]*\n\s*mvPosition\.y \+= aspen[^\n]*\n/, '');
-
-function windy(shader, uniforms, sway = SWAY) {
+function windy(shader, uniforms) {
   shader.uniforms.uTime = uniforms.uTime;
   shader.uniforms.uCalm = uniforms.uCalm;
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>\n${NOISE_GLSL}\n${WIND_GLSL}`)
-    .replace('#include <project_vertex>', sway);
+    .replace('#include <project_vertex>', SWAY);
 }
 
 /** Each tree a slightly different green: brightness and hue jittered by where it stands. */
@@ -746,8 +742,8 @@ export function foliageMaterial(atlas, uniforms) {
 /** Depth material so cards cast leafy, not solid, shadows that sway with the trees. */
 export function foliageDepth(atlas, uniforms) {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlas, alphaTest: 0.42, side: THREE.DoubleSide });
-  mat.onBeforeCompile = (shader) => windy(shader, uniforms, SWAY_SHADOW);
-  mat.customProgramCacheKey = () => 'rawah-foliage-depth-calm';
+  mat.onBeforeCompile = (shader) => windy(shader, uniforms);
+  mat.customProgramCacheKey = () => 'rawah-foliage-depth';
   return mat;
 }
 
