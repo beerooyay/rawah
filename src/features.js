@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WAVE, WAVE_GLSL } from './waves.js';
+import { WAVE, WAVE_GLSL, WATER, AMBIENT_GLSL } from './waves.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
@@ -43,19 +43,19 @@ export function buildLakes(world) {
   normalMap.repeat.set(1 / 9, 1 / 9);
   const mat = new THREE.MeshPhongMaterial({
     color: 0x173c48, specular: 0xffffff, shininess: 160, normalMap,
-    normalScale: new THREE.Vector2(0.55, 0.55), transparent: true, opacity: 0.9,
+    normalScale: new THREE.Vector2(0.3, 0.3), transparent: true, opacity: 0.9,
   });
   // uIceLine: lakes whose surface is above it are frozen over (the calendar moves it)
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
     uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms, WAVE);
+    Object.assign(shader.uniforms, uniforms, WAVE, WATER);
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL)
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
         if (ice < 0.5) {
@@ -71,7 +71,8 @@ export function buildLakes(world) {
             float ring = exp(-pow((d - age * 1.15) * 2.6, 2.0)) * exp(-age * 1.0) * exp(-d * 0.1) * rg.w;
             push += (rel / max(d, 0.05)) * ring * cos((d - age * 1.15) * 16.0) * 0.55;
           }
-          push += vec2(sin(vIceUv.y * 9.0 + uT * 6.0) + sin(vIceUv.x * 11.0 - uT * 5.2), cos(vIceUv.x * 8.0 - uT * 5.6) + cos(vIceUv.y * 10.0 + uT * 6.2)) * uRain * 0.13 * exp(-vdist * 0.02);
+          // the wind sea, its gust patches and the rain's random rings: nothing here repeats
+          push -= (windSea(vIceUv, uWT) + rainRings(vIceUv, uWT, uRainAmt)) * exp(-vdist * 0.012);
           push -= waveSlope(vIceUv) * uWaveGain;   // the live ripple field: wading, rain, fish, wakes
           if (dot(push, push) > 1e-6) {
             vec3 wn = (viewMatrix * vec4(push.x, 0.0, push.y, 0.0)).xyz;
@@ -435,19 +436,25 @@ export function buildSigns(world, models) {
 export function buildStreams(world) {
   const normalMap = waterNormals(128);
   const mat = new THREE.MeshPhongMaterial({
-    color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
+    color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
     transparent: true, opacity: 0.86, depthWrite: false,
   });
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, WAVE);
+    Object.assign(shader.uniforms, WAVE, WATER, { uFlowMap: { value: normalMap } });
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaveXZ = position.xz;');
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\nvarying vec2 vFlow;\nattribute vec2 aFlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaveXZ = position.xz;\nvFlow = aFlow;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\n' + WAVE_GLSL)
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\nvarying vec2 vFlow;\nuniform sampler2D uFlowMap;\n' + WAVE_GLSL + AMBIENT_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        vec2 wavePush = -waveSlope(vWaveXZ) * uWaveGain;
+        // the current carries the surface detail downstream; wind chop and rain ride on top
+        vec2 fl = normalize(vFlow + vec2(1e-4));
+        float fade = exp(-length(vViewPosition) * 0.02);
+        vec2 amb = flowDetail(uFlowMap, vWaveXZ, uWT, fl, 1.15) * 1.25 + windSea(vWaveXZ, uWT) * 0.7 + rainRings(vWaveXZ, uWT, uRainAmt);
+        // riffles: where the surface is busiest the water picks up a little white
+        diffuseColor.rgb += vec3(0.55) * smoothstep(0.28, 0.75, length(amb)) * 0.35 * fade;
+        vec2 wavePush = -waveSlope(vWaveXZ) * uWaveGain - amb * fade;
         if (dot(wavePush, wavePush) > 1e-6) {
           vec3 wn = (viewMatrix * vec4(wavePush.x, 0.0, wavePush.y, 0.0)).xyz;
           normal = normalize(normal - normalize(wn) * clamp(length(wavePush), 0.0, 0.5));
@@ -456,7 +463,8 @@ export function buildStreams(world) {
   const group = new THREE.Group(), geos = [];
   for (const st of world.streams) {
     const p = st.pts, half = st.width / 2;
-    const pos = new Float32Array(p.length * 6), uv = new Float32Array(p.length * 4);
+    const pos = new Float32Array(p.length * 6), uv = new Float32Array(p.length * 4), flow = new Float32Array(p.length * 4);
+    const down = p[0][2] >= p[p.length - 1][2] ? 1 : -1;   // points are listed downstream when the first is higher
     let along = 0;
     for (let i = 0; i < p.length; i++) {
       const a = p[Math.max(0, i - 1)], b = p[Math.min(p.length - 1, i + 1)];
@@ -466,6 +474,7 @@ export function buildStreams(world) {
       if (i) along += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
       for (let s = 0; s < 2; s++) {
         const sign = s ? 1 : -1, k = (i * 2 + s) * 3;
+        flow[(i * 2 + s) * 2] = dx * down; flow[(i * 2 + s) * 2 + 1] = dz * down;
         pos[k] = p[i][0] + dz * half * sign; pos[k + 1] = p[i][2]; pos[k + 2] = p[i][1] - dx * half * sign;
         uv[(i * 2 + s) * 2] = along / 3; uv[(i * 2 + s) * 2 + 1] = s * st.width / 3;
       }
@@ -475,6 +484,7 @@ export function buildStreams(world) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('aFlow', new THREE.BufferAttribute(flow, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
     geos.push(geo);

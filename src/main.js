@@ -40,7 +40,7 @@ import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
 import { Plume } from './plume.js';
-import { WaveField } from './waves.js';
+import { WaveField, WATER } from './waves.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -1572,6 +1572,7 @@ function tick(dt, draw = true) {
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
   lakes.uniforms.uRain.value = weather.precip;
+  WATER.uWT.value = t; WATER.uWind.value = clamp(0.1 + Math.max(0, weather.wind) * 0.95, 0, 1); WATER.uRainAmt.value = weather.precip * (1 - weather.snowK);
   lakes.update(t);
   streams.update(t);
 

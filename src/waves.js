@@ -124,7 +124,7 @@ export class WaveField {
     // wave speed c = speed m/s over a fixed step of 1/60 s: (c dt / dx)^2, split over two sub-steps
     this.dtSim = 1 / 60;
     this.c2 = Math.pow(speed * (this.dtSim / 2) / cell, 2);
-    this.damp = 0.9935;
+    this.damp = 0.9962;       // ripples carry a while: about 1.2 s to lose half
     this.decay = -Math.log(this.damp) * 120 * 0.6;        // per second, the slower tail of a wave train
     for (const rt of [this.a, this.b]) { renderer.setRenderTarget(rt); renderer.clear(); }
     renderer.setRenderTarget(null);
@@ -211,3 +211,92 @@ export class WaveField {
   /** Is (x, z) inside the window? */
   covers(x, z) { return this.placed && x > this.ix * this.cell + 2 && x < (this.ix + this.n) * this.cell - 2 && z > this.iz * this.cell + 2 && z < (this.iz + this.n) * this.cell - 2; }
 }
+
+// ---------------------------------------------------------------------------
+// Ambient water: what moves the surface when nobody is touching it. The old
+// look was one normal map scrolled in a straight line, so it read as a still
+// texture, and a sine grid dimpled it in the rain, so it repeated. This is the
+// replacement, shared by lakes, ponds and streams:
+//   * a wind sea: six wave trains around the wind direction with deep-water
+//     dispersion (long waves outrun short ones, so the pattern never lines up
+//     twice), the wind setting how big they get, warped by slow noise;
+//   * gust patches ("cat's-paws"): darker, choppier patches that travel
+//     downwind across the water;
+//   * rain: random rings, each cell of a hashed grid with its own phase,
+//     period and position, in two sizes, as many as the rain is heavy;
+//   * streams: the normal map is advected along the stream's own flow in two
+//     out-of-phase layers that cross-fade (flow-map blending), the second
+//     rotated and at another scale, so the current visibly runs and never loops.
+// All of it is slopes (-dh/dx, -dh/dz), added to the surface normal.
+
+export const WATER = {
+  uWT: { value: 0 },                            // clock, seconds
+  uWind: { value: 0.3 },                        // 0 glassy .. 1 blown
+  uWindDir: { value: new THREE.Vector2(0.92, 0.38).normalize() },
+  uRainAmt: { value: 0 },                       // 0 dry .. 1 downpour
+};
+
+export const AMBIENT_GLSL = /* glsl */ `
+uniform float uWT, uWind, uRainAmt;
+uniform vec2 uWindDir;
+float wHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float wNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(wHash(i), wHash(i + vec2(1, 0)), f.x), mix(wHash(i + vec2(0, 1)), wHash(i + vec2(1, 1)), f.x), f.y);
+}
+// six wave trains: wavelength (m), heading off the wind (rad), phase
+const float WL[6] = float[6](0.71, 1.13, 1.79, 2.83, 4.27, 6.61);
+const float WH[6] = float[6](0.0, 0.42, -0.57, 0.88, -1.12, 0.21);
+vec2 windSea(vec2 p, float t) {
+  float w = uWind;
+  // slow noise bends the whole sea so no two crests keep the same spacing
+  vec2 q = p + vec2(wNoise(p * 0.21 + t * 0.07), wNoise(p * 0.19 - t * 0.05 + 7.3)) * 2.4;
+  // gust patches ride downwind
+  float gust = wNoise(q * 0.055 - uWindDir * t * 1.6);
+  float cat = mix(0.5, 1.5, smoothstep(0.25, 0.75, gust));
+  vec2 s = vec2(0.0);
+  for (int i = 0; i < 6; i++) {
+    float L = WL[i], k = 6.2831853 / L, om = sqrt(9.81 * k);
+    float a = WH[i] * (1.0 + 0.6 * w), c = cos(a), sn = sin(a);
+    vec2 d = vec2(uWindDir.x * c - uWindDir.y * sn, uWindDir.x * sn + uWindDir.y * c);
+    // the wind raises the long waves first and the whole sea later
+    float grow = smoothstep(0.0, 1.0, w * (0.5 + float(i) * 0.22) + 0.04);
+    float steep = (0.016 + 0.11 * grow * L / (L + 2.2)) * cat;
+    float ph = float(i) * 1.913 + wNoise(q * 0.37 + float(i)) * 3.0;
+    s += d * (steep * cos(k * dot(d, q) - om * t + ph));
+  }
+  return s;
+}
+// random rain rings: two layers of hashed cells, each with its own spot, phase and period
+vec2 rainRings(vec2 p, float t, float amt) {
+  if (amt < 0.03) return vec2(0.0);
+  vec2 sum = vec2(0.0);
+  for (int l = 0; l < 2; l++) {
+    float sc = l == 0 ? 1.35 : 0.62;
+    vec2 q = p / sc, id = floor(q), f = fract(q);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      vec2 o = vec2(float(i), float(j)), cid = id + o + float(l) * 31.7;
+      float r1 = wHash(cid), r2 = wHash(cid * 1.73 + 5.1), r3 = wHash(cid + 91.7);
+      if (r3 > amt) continue;
+      vec2 rel = (f - o - vec2(r1, r2)) * sc;
+      float period = 0.7 + r1 * 1.1, age = fract(t / period + r2 * 9.0), rad = age * 0.55 * (0.8 + r2 * 0.5);
+      float d = length(rel);
+      float ring = exp(-pow((d - rad) / 0.06, 2.0)) * (1.0 - age) * (1.0 - age);
+      sum += rel / max(d, 1e-3) * ring * cos((d - rad) * 46.0);
+    }
+  }
+  return sum * 0.34;
+}
+// a stream's normal map carried along its flow, two layers cross-fading
+vec2 flowDetail(sampler2D m, vec2 p, float t, vec2 dir, float speed) {
+  const float T = 2.4;
+  float p1 = fract(t / T), p2 = fract(t / T + 0.5);
+  vec2 v = dir * speed;
+  mat2 R = mat2(0.80, -0.60, 0.60, 0.80);
+  vec2 uv1 = (p - v * T * p1) * 0.42;
+  vec2 uv2 = R * (p - v * T * p2 * 1.15) * 0.71 + vec2(0.37, 0.61);
+  vec2 n1 = texture2D(m, uv1).xy * 2.0 - 1.0, n2 = texture2D(m, uv2).xy * 2.0 - 1.0;
+  float w1 = 1.0 - abs(1.0 - 2.0 * p1);
+  return mix(n2, n1, w1);
+}
+`;
