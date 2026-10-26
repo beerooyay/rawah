@@ -41,6 +41,7 @@ import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
 import { Plume } from './plume.js';
 import { WaveField, WATER } from './waves.js';
+import { WaterCells } from './waterbox.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -143,6 +144,7 @@ const sky = new Sky(scene, renderer);
 sky.moon = MOONS[settings.moon] || MOONS.new;
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
+const waterCells = new WaterCells(world);   // silt and foam the water remembers (src/waterbox.js)
 const lakes = buildLakes(world);
 const _flow = { x: 0, z: 0 };
 /** The stream's current at a point (m/s, world x, z), or nothing. */
@@ -165,7 +167,9 @@ function waterAt(x, z) {
   const st = world.nearestStream(x, z);
   return !!st.stream && st.d < st.stream.width / 2 + 0.2;
 }
-let rainAcc = 0, atvWake = null;
+const onStream = (x, z) => { const st = world.nearestStream(x, z); return !!st.stream && st.d < st.stream.width / 2 + 0.5; };
+const openLake = (x, z) => { const lk = world.lakeAt(x, z); return !!lk && lk.level < world.iceLine; };
+let rainAcc = 0, atvWake = null, atvSilt = 0;
 scene.add(lakes.group);
 const trails = buildTrails(world);
 scene.add(trails);
@@ -188,7 +192,7 @@ const horizon = new HorizonMap(world);
 terrain.horizon = horizon;
 const atv = new ATV(world, flora, scene);
 const fishing = new Fishing(world, scene);
-fishing.onRipple = (x, z, size) => waves.drop(x, z, 0.2 + 0.16 * size, 0.006 + 0.012 * size);
+fishing.onRipple = (x, z, size) => { waves.drop(x, z, 0.2 + 0.16 * size, 0.006 + 0.012 * size); waterCells.stir(x, z, 0.008 + 0.012 * size, onStream(x, z)); if (size > 1.1) waterCells.foam(x, z, 0.06 * size); };
 const roast = new Roast(scene);
 scene.add(grass.mesh);
 const boxels = new Boxels(world, { n: 512 });
@@ -930,6 +934,7 @@ function rideStep(dt, env) {
   if (Math.abs(atv.speed) > 1.2 && waterAt(atv.pos.x, atv.pos.z)) {
     if (atvWake) waves.line(atvWake.x, atvWake.z, atv.pos.x, atv.pos.z, 0.5, 0.012 + 0.012 * Math.min(1, Math.abs(atv.speed) / 8));
     atvWake = { x: atv.pos.x, z: atv.pos.z };
+    if ((atvSilt -= dt) <= 0) { atvSilt = 0.25; waterCells.stir(atv.pos.x, atv.pos.z, 0.03, onStream(atv.pos.x, atv.pos.z)); waterCells.foam(atv.pos.x, atv.pos.z, 0.12); }
   } else atvWake = null;
   rideD += Math.abs(atv.speed) * dt;
   if (rideD > 2.2) {
@@ -1358,11 +1363,11 @@ function tick(dt, draw = true) {
     for (const e of events) {
       if (e.type === 'step') {
         audio.step(e.surface, e.speed);
-        if (e.surface === 'water') { lakes.ripple(p.x, p.z, 0.8); waves.drop(p.x, p.z, 0.22 + 0.04 * Math.min(4, e.speed), 0.006 + 0.004 * Math.min(4, e.speed)); }
+        if (e.surface === 'water') { lakes.ripple(p.x, p.z, 0.8); waves.drop(p.x, p.z, 0.22 + 0.04 * Math.min(4, e.speed), 0.006 + 0.004 * Math.min(4, e.speed)); waterCells.stir(p.x, p.z, 0.004 + 0.002 * Math.min(4, e.speed), onStream(p.x, p.z)); if (onStream(p.x, p.z)) waterCells.foam(p.x, p.z, 0.04); }
         else if (e.surface === 'snow' || onSnowAt(p.y) > 0.35) world.sculpt.press(p.x, p.z, 0.55, 0.05);
       }
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
-      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); waves.drop(p.x, p.z, 0.65, 0.05); }
+      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); waves.drop(p.x, p.z, 0.65, 0.05); waterCells.stir(p.x, p.z, 0.05, onStream(p.x, p.z)); waterCells.foam(p.x, p.z, 0.18); }
       else if (e.type === 'grab') audio.step('rock', 2);
       else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -1568,6 +1573,7 @@ function tick(dt, draw = true) {
     }
   }
   waves.update(state.paused ? 0 : dt, p.x, p.z, currentAt(p.x, p.z));
+  waterCells.update(state.paused ? 0 : dt, { p, wind: WATER.uWind.value, precip: weather.precip * (1 - weather.snowK), onStream, lakeAt: openLake, flowAt: currentAt });
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -1681,7 +1687,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt,
+    plume, waves, waterAt, waterCells,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

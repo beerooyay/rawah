@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { WAVE, WAVE_GLSL, WATER, AMBIENT_GLSL } from './waves.js';
+import { WATERBOX, WATERBOX_GLSL } from './waterbox.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
@@ -49,13 +50,13 @@ export function buildLakes(world) {
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
     uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms, WAVE, WATER);
+    Object.assign(shader.uniforms, uniforms, WAVE, WATER, WATERBOX);
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL)
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
         if (ice < 0.5) {
@@ -92,6 +93,8 @@ export function buildLakes(world) {
         float fres = pow(1.0 - facing, 3.0);
         gl_FragColor.rgb = mix(mix(uDeep, gl_FragColor.rgb, 0.75), uSky, 0.12 + fres * 0.7);
         gl_FragColor.a = mix(0.82, 0.98, fres);
+        vec4 silt = waterTint(vIceUv, gl_FragColor.rgb, uWT, waterState(vIceUv));   // what the water remembers: silt and foam
+        if (ice < 0.5) { gl_FragColor.rgb = silt.rgb; gl_FragColor.a = max(gl_FragColor.a, silt.a); }
         if (ice > 0.5) gl_FragColor = vec4(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular * 0.12, 1.0);`);
   };
   // every lake in one mesh: one draw call for all the water
@@ -440,13 +443,13 @@ export function buildStreams(world) {
     transparent: true, opacity: 0.86, depthWrite: false,
   });
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, WAVE, WATER, { uFlowMap: { value: normalMap } });
+    Object.assign(shader.uniforms, WAVE, WATER, WATERBOX, { uFlowMap: { value: normalMap } });
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\nvarying vec2 vFlow;\nattribute vec2 aFlow;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaveXZ = position.xz;\nvFlow = aFlow;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\nvarying vec2 vFlow;\nuniform sampler2D uFlowMap;\n' + WAVE_GLSL + AMBIENT_GLSL)
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\nvarying vec2 vFlow;\nuniform sampler2D uFlowMap;\n' + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         // the current carries the surface detail downstream; wind chop and rain ride on top
         vec2 fl = normalize(vFlow + vec2(1e-4));
@@ -458,7 +461,10 @@ export function buildStreams(world) {
         if (dot(wavePush, wavePush) > 1e-6) {
           vec3 wn = (viewMatrix * vec4(wavePush.x, 0.0, wavePush.y, 0.0)).xyz;
           normal = normalize(normal - normalize(wn) * clamp(length(wavePush), 0.0, 0.5));
-        }`);
+        }`)
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        vec4 silt = waterTint(vWaveXZ, gl_FragColor.rgb, uWT, waterState(vWaveXZ));
+        gl_FragColor.rgb = silt.rgb; gl_FragColor.a = max(gl_FragColor.a, silt.a);`);
   };
   const group = new THREE.Group(), geos = [];
   for (const st of world.streams) {

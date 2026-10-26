@@ -17,7 +17,8 @@ export class Boxels {
    * n: grid side in cells covering world.extent. Moisture diffuses and dries
    * (D, k in theta-time); wear only fades. eps is the visibility tolerance.
    */
-  constructor(world, { n = 512, d = 12, k = 0.02, kWear = 0.002, eps = 0.002 } = {}) {
+  constructor(world, { n = 512, d = 12, k = 0.02, kWear = 0.002, eps = 0.002, shift = 1 } = {}) {
+    this.sShift = shift;                // cells the continuum envelope is moved inward to cover the lattice (more when the decay length is short)
     this.n = n;
     this.cell = world.extent / n;
     this.d = d; this.k = k; this.kWear = kWear; this.eps = eps;
@@ -105,7 +106,7 @@ export class Boxels {
       }
       this.sTab = T;
     }
-    const q = Math.floor(Math.max(0.5, rho - 1) * 4);
+    const q = Math.floor(Math.max(0.5, rho - this.sShift) * 4);
     return q < this.sTab.length ? this.sTab[q] : 0;
   }
 
@@ -167,7 +168,8 @@ export class Boxels {
       cx = Math.round(a.cx + (b.cx - a.cx) * t); cz = Math.round(a.cz + (b.cz - a.cz) * t);
       r = Math.max(r, Math.hypot(cx - a.cx, cz - a.cz) + a.r, Math.hypot(cx - b.cx, cz - b.cz) + b.r);   // rounding the centre must not uncover either disc
     }
-    const m = { cx, cz, r, a: Math.max(a.a, b.a), A: a.A + b.A, parts: a.parts.concat(b.parts), ret: 0, R: 0 };
+    // where the two discs overlap their densities add (one cell can hold both deposits); apart, the larger one bounds the union
+    const m = { cx, cz, r, a: d <= a.r + b.r + 1 ? a.a + b.a : Math.max(a.a, b.a), A: a.A + b.A, parts: a.parts.concat(b.parts), ret: 0, R: 0 };
     m.ret = this.#retireAt(m);
     ev.splice(bj, 1); ev[bi] = m;
     this.#ledgerAdd(m, +1);
@@ -181,7 +183,11 @@ export class Boxels {
     let cells = 0;
     for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
       const i = (cz + dz) * this.n + cx + dx;
-      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) { this.u[i] = Math.min(1, this.u[i] + a); cells++; }
+      if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) {
+        this.u[i] = Math.min(1, this.u[i] + a); cells++;
+        // deposits stack in a sleeping cell: once it holds more than the sleeping tolerance it must be stepped
+        if (this.u[i] > this.epsWin && this.slot[i] < 0) { this.slot[i] = this.awakeN; this.awake[this.awakeN++] = i; }
+      }
     }
     this.dirty = true;
     const e = { cx, cz, r, a, A: a * cells, parts: [[a * cells, this.theta]], ret: 0, R: 0 };
@@ -235,19 +241,23 @@ export class Boxels {
       this.stats.retired++;
     }
     // moisture: only awake cells; a cell whose ledger has fallen under epsWin goes back to sleep (and is audited)
+    const next = this.next || (this.next = new Float32Array(this.awake.length));
     let a = 0;
     while (a < this.awakeN) {
       const i = this.awake[a];
       if (L[i] <= epsWin) {
-        if (u[i] > epsWin * 1.5) this.stats.violations++;   // the bound failed: keep it awake and report it
-        else { const last = this.awake[--this.awakeN]; this.awake[a] = last; this.slot[last] = a; this.slot[i] = -1; continue; }
+        if (u[i] > epsWin * 1.5) this.stats.violations++;   // the ledger says nothing should be here: report it, and keep stepping the cell
+        if (u[i] <= epsWin) {                                // asleep, keeping the little it holds (stale, under the tolerance)
+          const last = this.awake[--this.awakeN]; this.awake[a] = last; this.slot[last] = a; this.slot[i] = -1; continue;
+        }
       }
       const l = i % n, m = i - l;
       const lap = (l > 0 ? u[i - 1] : u[i]) + (l < n - 1 ? u[i + 1] : u[i]) + (m >= n ? u[i - n] : u[i]) + (m < u.length - n ? u[i + n] : u[i]) - 4 * u[i];
-      u[i] = Math.max(0, u[i] + dt * (d * lap - k * u[i]));
+      next[a] = Math.max(0, u[i] + dt * (d * lap - k * u[i]));   // every cell reads the old values: the step does not depend on the order of the list
       this.stats.touched++; this.stats.total++;
       a++;
     }
+    for (let q = 0; q < a; q++) u[this.awake[q]] = next[q];
     if (this.awakeN) this.dirty = true;
     // wear: only its own cells, each until its own first passage
     for (const [i, until] of this.live) {
@@ -490,7 +500,7 @@ export class Boxels {
     const c = n >> 1, steps = Math.round(total / dt), plan = [];
     for (let s = 0; s < steps; s++) if (s * dt < until && rnd() < rate * dt) plan.push([s, c + Math.round((rnd() * 2 - 1) * box), c + Math.round((rnd() * 2 - 1) * box)]);
     const sim = new Boxels({ extent: n * this.cell }, { n, d, k, eps, kWear: this.kWear });
-    const ud = new Float32Array(n * n), ul = new Float32Array(n * n), live = new Map();
+    const ud = new Float32Array(n * n), ul = new Float32Array(n * n), tmp = new Float32Array(n * n), tmpP = new Map(), live = new Map();
     const drop = (u, cx, cz) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) { const i = (cz + dz) * n + cx + dx; u[i] = Math.min(1, u[i] + a); } };
     let ei = 0, eL = 0, eP = 0, updD = 0, updP = 0, viol = 0, awakeMax = 0;
     const cell = this.cell, x0 = -n * cell / 2 + cell / 2;
@@ -509,14 +519,16 @@ export class Boxels {
           }
         }
       }
-      for (let i = 0; i < n * n; i++) ud[i] = eul(ud, i);
-      updD += n * n;
+      for (let i = 0; i < n * n; i++) tmp[i] = eul(ud, i);
+      ud.set(tmp); updD += n * n;
       sim.update(dt, 1);
       for (const [i, w] of live) {
         if (th < w[0]) continue;
         if (th > w[1]) { if (ul[i] < eps) { live.delete(i); continue; } viol++; }
-        ul[i] = eul(ul, i); updP++;
+        tmpP.set(i, eul(ul, i)); updP++;
       }
+      for (const [i, v] of tmpP) ul[i] = v;
+      tmpP.clear();
       awakeMax = Math.max(awakeMax, sim.awakeN);
       if (s % 40 === 0) for (let i = 0; i < n * n; i++) { eL = Math.max(eL, Math.abs(sim.u[i] - ud[i])); eP = Math.max(eP, Math.abs(ul[i] - ud[i])); }
     }
