@@ -40,6 +40,7 @@ import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
 import { Plume } from './plume.js';
+import { WaveField } from './waves.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -141,7 +142,30 @@ scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene, renderer);
 sky.moon = MOONS[settings.moon] || MOONS.new;
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
+const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
 const lakes = buildLakes(world);
+const _flow = { x: 0, z: 0 };
+/** The stream's current at a point (m/s, world x, z), or nothing. */
+function currentAt(x, z) {
+  const st = world.nearestStream(x, z);
+  _flow.x = _flow.z = 0;
+  if (st.stream && st.seg && st.d < st.stream.width / 2 + 8) {
+    const s = st.seg;
+    let dx = s.bx - s.ax, dz = s.bz - s.az;
+    if (s.ay < s.by) { dx = -dx; dz = -dz; }   // downhill
+    const l = Math.hypot(dx, dz) || 1;
+    _flow.x = dx / l * 0.55; _flow.z = dz / l * 0.55;
+  }
+  return _flow;
+}
+/** Open water at a point: an unfrozen lake with some depth, or a stream. */
+function waterAt(x, z) {
+  const lk = world.lakeAt(x, z);
+  if (lk) return lk.level < world.iceLine && lk.level - world.height(x, z) > 0.05;
+  const st = world.nearestStream(x, z);
+  return !!st.stream && st.d < st.stream.width / 2 + 0.2;
+}
+let rainAcc = 0, atvWake = null;
 scene.add(lakes.group);
 const trails = buildTrails(world);
 scene.add(trails);
@@ -164,6 +188,7 @@ const horizon = new HorizonMap(world);
 terrain.horizon = horizon;
 const atv = new ATV(world, flora, scene);
 const fishing = new Fishing(world, scene);
+fishing.onRipple = (x, z, size) => waves.drop(x, z, 0.2 + 0.16 * size, 0.006 + 0.012 * size);
 const roast = new Roast(scene);
 scene.add(grass.mesh);
 const boxels = new Boxels(world, { n: 512 });
@@ -901,6 +926,11 @@ function rideStep(dt, env) {
     else if (e.type === 'splash') { audio.splash(); hud.toast('Too deep for the ATV.', 'warn'); }
   }
   // tires carve wear into the ground the boxels remembers — and twin tread trenches while the snow lasts
+  // a quad through a creek throws a wake behind it
+  if (Math.abs(atv.speed) > 1.2 && waterAt(atv.pos.x, atv.pos.z)) {
+    if (atvWake) waves.line(atvWake.x, atvWake.z, atv.pos.x, atv.pos.z, 0.5, 0.012 + 0.012 * Math.min(1, Math.abs(atv.speed) / 8));
+    atvWake = { x: atv.pos.x, z: atv.pos.z };
+  } else atvWake = null;
   rideD += Math.abs(atv.speed) * dt;
   if (rideD > 2.2) {
     rideD = 0; boxels.wear(atv.pos.x, atv.pos.z, 0.35);
@@ -1328,11 +1358,11 @@ function tick(dt, draw = true) {
     for (const e of events) {
       if (e.type === 'step') {
         audio.step(e.surface, e.speed);
-        if (e.surface === 'water') lakes.ripple(p.x, p.z, 0.8);
+        if (e.surface === 'water') { lakes.ripple(p.x, p.z, 0.8); waves.drop(p.x, p.z, 0.22 + 0.04 * Math.min(4, e.speed), 0.006 + 0.004 * Math.min(4, e.speed)); }
         else if (e.surface === 'snow' || onSnowAt(p.y) > 0.35) world.sculpt.press(p.x, p.z, 0.55, 0.05);
       }
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
-      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); }
+      else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); waves.drop(p.x, p.z, 0.65, 0.05); }
       else if (e.type === 'grab') audio.step('rock', 2);
       else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -1529,6 +1559,15 @@ function tick(dt, draw = true) {
     if (bxAcc > 1.4 && hiker.grounded) { bxAcc = 0; boxels.wear(p.x, p.z, 0.3); }
     if (weather.precip > 0.25 && t - bxRain > 2.5) { bxRain = t; boxels.wet(p.x + (Math.random() - 0.5) * 170, p.z + (Math.random() - 0.5) * 170, 0.5, 5); }
   }
+  // rain pocks the open water around you; the field sleeps itself when nothing is left to see
+  if (live && weather.precip > 0.05) {
+    rainAcc += dt * weather.precip * 26;
+    for (; rainAcc >= 1; rainAcc--) {
+      const x = p.x + (Math.random() - 0.5) * 34, z = p.z + (Math.random() - 0.5) * 34;
+      if (waterAt(x, z)) waves.drop(x, z, 0.13, 0.0025 + Math.random() * 0.002);
+    }
+  }
+  waves.update(state.paused ? 0 : dt, p.x, p.z, currentAt(p.x, p.z));
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -1641,7 +1680,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume,
+    plume, waves, waterAt,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

@@ -137,6 +137,7 @@ export class Fishing {
   }
 
   ripple(x, y, z, size = 1) {
+    this.onRipple?.(x, z, size);   // the live wave field (main.js) takes it too
     const r = this.ripples.find((m) => m.userData.age >= 1) || this.ripples[0];
     r.position.set(x, y + 0.02, z);
     r.userData.age = 0; r.userData.size = size;

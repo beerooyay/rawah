@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { WAVE, WAVE_GLSL } from './waves.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
@@ -48,13 +49,13 @@ export function buildLakes(world) {
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
     uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms);
+    Object.assign(shader.uniforms, uniforms, WAVE);
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
         if (ice < 0.5) {
@@ -71,6 +72,7 @@ export function buildLakes(world) {
             push += (rel / max(d, 0.05)) * ring * cos((d - age * 1.15) * 16.0) * 0.55;
           }
           push += vec2(sin(vIceUv.y * 9.0 + uT * 6.0) + sin(vIceUv.x * 11.0 - uT * 5.2), cos(vIceUv.x * 8.0 - uT * 5.6) + cos(vIceUv.y * 10.0 + uT * 6.2)) * uRain * 0.13 * exp(-vdist * 0.02);
+          push -= waveSlope(vIceUv) * uWaveGain;   // the live ripple field: wading, rain, fish, wakes
           if (dot(push, push) > 1e-6) {
             vec3 wn = (viewMatrix * vec4(push.x, 0.0, push.y, 0.0)).xyz;
             normal = normalize(normal - normalize(wn) * clamp(length(push), 0.0, 0.5));
@@ -436,7 +438,21 @@ export function buildStreams(world) {
     color: 0x2c5560, specular: 0xffffff, shininess: 120, normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
     transparent: true, opacity: 0.86, depthWrite: false,
   });
-  mat.onBeforeCompile = (shader) => withAtmosphere(shader, { occlusion: 0.5 });
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, WAVE);
+    withAtmosphere(shader, { occlusion: 0.5 });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaveXZ = position.xz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWaveXZ;\n' + WAVE_GLSL)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        vec2 wavePush = -waveSlope(vWaveXZ) * uWaveGain;
+        if (dot(wavePush, wavePush) > 1e-6) {
+          vec3 wn = (viewMatrix * vec4(wavePush.x, 0.0, wavePush.y, 0.0)).xyz;
+          normal = normalize(normal - normalize(wn) * clamp(length(wavePush), 0.0, 0.5));
+        }`);
+  };
   const group = new THREE.Group(), geos = [];
   for (const st of world.streams) {
     const p = st.pts, half = st.width / 2;
