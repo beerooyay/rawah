@@ -239,7 +239,14 @@ export class Sky {
     const day = smoothstep(-0.06, 0.12, s);
     const moonUp = smoothstep(-0.02, 0.1, this.moonDir.y) * u.uNight.value;
     const useMoon = s < -0.03;
-    const dir = useMoon ? this.moonDir : this.sunDir;
+    // The light's direction for the shadow camera moves in small steps (a twentieth of a degree), not every frame. The camera is
+    // snapped to its own texel grid so shadows don't swim as you walk, but that grid is anchored in the world and turns with the
+    // light: a sun that creeps even 0.0001 rad a frame swings a grid 5 km from the origin by half a metre, many texels, and every
+    // shadow in the forest swims each time the map redraws. Held still between steps, the grid stays put.
+    const want = useMoon ? this.moonDir : this.sunDir;
+    if (!this._dq) { this._dq = new THREE.Vector3().copy(want); this._dqMoon = useMoon; }
+    if (this._dqMoon !== useMoon || this._dq.angleTo(want) > 0.0009) { this._dq.copy(want); this._dqMoon = useMoon; }
+    const dir = this._dq;
     // snap the shadow camera to its own texel grid so shadows don't shimmer as you walk
     const sc = this.sun.shadow.camera, texel = (sc.right - sc.left) / this.sun.shadow.mapSize.x;
     this._r.crossVectors(this._up.set(0, 1, 0), dir).normalize();
