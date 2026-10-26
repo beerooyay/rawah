@@ -659,7 +659,7 @@ export class Flora {
         for (const kind of ['spruce', 'lodgepole', 'aspen', 'snag']) {
           const list = tile.items[kind];
           for (let k = 0; k < list.length; k += 5) {
-            if (list[k + 3] >= SAPLING && Math.hypot(list[k] - x, list[k + 2] - z) <= r) out.push({ x: list[k], z: list[k + 2], rad: 0.24 * list[k + 3] });
+            if (list[k + 3] >= SAPLING && Math.hypot(list[k] - x, list[k + 2] - z) <= r) out.push({ x: list[k], z: list[k + 2], rad: 0.24 * list[k + 3], kind });
           }
         }
       }

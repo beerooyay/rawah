@@ -4,6 +4,7 @@ import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTextu
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
+import { LeafFall } from './leaffall.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
 import { Sky, setSun, MOONS } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
@@ -198,6 +199,8 @@ weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
 const grass = new Grass(terrain, Q.grass, flora.uniforms);
+const leafFall = new LeafFall(scene, world, flora);   // aspen leaves letting go in autumn
+leafFall.load();
 const horizon = new HorizonMap(world);
 terrain.horizon = horizon;
 const atv = new ATV(world, flora, scene);
@@ -1599,6 +1602,7 @@ function tick(dt, draw = true) {
   updateAtmosphere(sky, camera);
   // the day's breeze: still at dawn, gusty through the afternoon, settling at dusk
   const h = state.hour;
+  leafFall.update(state.paused ? 0 : dt, p, { autumn: TONE.uAutumn.value, drop: TONE.uDrop.value, wind: Math.max(0, weather.wind), snow: weather.snowCover, calm: flora.uniforms.uCalm.value });
   flora.uniforms.uCalm.value = clamp(0.3 + 0.55 * smoothstep(9, 14, h) * (1 - smoothstep(18.5, 21.5, h)) + 0.15 * smoothstep(3200, 3700, p.y) + weather.wind * 0.6, 0.05, 1.35);
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
@@ -1741,7 +1745,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

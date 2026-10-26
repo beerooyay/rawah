@@ -138,6 +138,7 @@ for n, im in sheets.items():
 
 atlas = np.zeros((CELL * 6, CELL * 4, 4), np.float32)
 atlas[..., :3] = (60, 80, 40)
+os.makedirs(OUT, exist_ok=True)
 meta = {'cell': CELL, 'variants': {}}
 preview = {}
 
@@ -248,6 +249,23 @@ for col, (nl, sp, size, tw) in enumerate([(90, 0.95, 120, 3), (105, 1.0, 100, 2)
     atlas[5 * CELL:6 * CELL, col * CELL:(col + 1) * CELL] = cv
     meta['variants'].setdefault('aspen', []).append({'x': col * CELL, 'y': 5 * CELL, 'w': CELL, 'h': CELL, 'aspect': 1.0})
     preview.setdefault('aspen', []).append(cv)
+
+# falling leaves: four single leaves as luminance only (the game tints each one gold, orange or russet), 256-px cells in a row
+lv = np.zeros((256, 1024, 4), np.float32)
+for c, k in enumerate([0, 3, 6, 9]):
+    sp = leaf_img[k % len(leaf_img)]
+    h, w = sp.shape[:2]
+    sc = 236.0 / max(h, w)
+    rgb = Image.fromarray(np.clip(sp[..., :3], 0, 255).astype(np.uint8)).resize((max(2, int(w * sc)), max(2, int(h * sc))), Image.LANCZOS)
+    al = Image.fromarray(np.clip(sp[..., 3], 0, 255).astype(np.uint8)).resize(rgb.size, Image.LANCZOS)
+    g = np.asarray(rgb.convert('L')).astype(np.float32)
+    g = np.clip((g - g[np.asarray(al) > 128].mean()) * 1.6 + 190, 60, 255)
+    oy, ox = (256 - g.shape[0]) // 2, c * 256 + (256 - g.shape[1]) // 2
+    lv[oy:oy + g.shape[0], ox:ox + g.shape[1], :3] = g[..., None]
+    lv[oy:oy + g.shape[0], ox:ox + g.shape[1], 3] = np.asarray(al)
+lv[..., :3] = np.where(lv[..., 3:4] > 4, lv[..., :3], 150)
+Image.fromarray(np.clip(lv, 0, 255).astype(np.uint8)).save(os.path.join(OUT, 'leaves.webp'), quality=90, alpha_quality=100)
+meta['leaves'] = {'cells': 4, 'aspect': [round(a_.shape[0] / a_.shape[1], 3) for a_ in [leaf_img[k % len(leaf_img)] for k in [0, 3, 6, 9]]]}
 
 # row 4: willow (painted in the game) lives at x 512..1024, dead twigs at 1024..1536; the rest of the row is free
 meta['painted'] = {'willowLeaf': [1, 4], 'deadTwig': [2, 4]}
