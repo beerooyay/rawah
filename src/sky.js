@@ -48,6 +48,7 @@ void main() {
 }`;
 
 const FRAG = `varying vec3 vDir;
+uniform float uSunVis;
 uniform vec3 uSun, uMoon, uZenith, uHorizon, uGlow, uCloudLit, uCloudDark;
 uniform float uNight, uTime, uThick, uFlash, uMWk, uMoonK;
 uniform vec4 uBoltDir[3];   // direction (xyz) and strength (w) of the bolts lighting the cloud
@@ -80,7 +81,7 @@ void main() {
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
-  col += uGlow * (pow(sd, 6.0) * 0.28 + pow(sd, 48.0) * 0.45) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
+  col += uGlow * (pow(sd, 6.0) * (0.1 + 0.18 * uSunVis) + pow(sd, 48.0) * 0.45 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
   // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
   if (h > 0.03) {
     float ht = 9000.0 - cameraPosition.y;
@@ -148,7 +149,7 @@ export class Sky {
     this.pixelRatio = 1;
     this.frames = 0;
     this.uniforms = {
-      uSun: { value: new THREE.Vector3() }, uMoon: { value: new THREE.Vector3() },
+      uSunVis: { value: 1 }, uSun: { value: new THREE.Vector3() }, uMoon: { value: new THREE.Vector3() },
       uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() }, uGlow: { value: new THREE.Color() },
       uNight: { value: 0 }, uTime: { value: 0 },
       uCloudLit: { value: new THREE.Color() }, uCloudDark: { value: new THREE.Color() },
@@ -185,6 +186,7 @@ export class Sky {
     this.moonDir = new THREE.Vector3();
     this.light = 1; // 0 = deep night, 1 = full day (for gameplay)
     this.overcast = 0;
+    this.terrainBlock = 0;  // 0 sun clear, 1 behind a ridge (smoothed; set from the heightfield by main.js)
     this.sunBlock = 0;  // smoothed cloud over the sun, as seen from the hiker
     this._a = new THREE.Color(); this._b = new THREE.Color();
     this._r = new THREE.Vector3(); this._u = new THREE.Vector3(); this._f = new THREE.Vector3(); this._up = new THREE.Vector3();
@@ -207,6 +209,7 @@ export class Sky {
     const s = this.sunDir.y;
     const u = this.uniforms;
     u.uSun.value.copy(this.sunDir);
+    u.uSunVis.value = 1 - this.terrainBlock;
     u.uMoon.value.copy(this.moonDir);
     u.uMoonK.value = this.moon.k;
     u.uZenith.value.copy(this.#palette(s, 0));
@@ -251,7 +254,7 @@ export class Sky {
       this.sun.intensity = 0.32 * moonUp * this.moon.k;
     } else {
       this.sun.color.setRGB(1, lerp(0.62, 0.96, warm), lerp(0.38, 0.9, warm));
-      this.sun.intensity = 3.1 * day * (1 - overcast * 0.55);
+      this.sun.intensity = 3.1 * day * (1 - overcast * 0.55) * (1 - 0.92 * this.terrainBlock);
     }
     if (useMoon) this.sun.intensity *= 1 - wx.cloud * 0.85;
     this.hemi.color.copy(u.uZenith.value).lerp(this._a.setRGB(1, 1, 1), 0.35 + overcast * 0.3);

@@ -66,11 +66,11 @@ float terrH(vec2 xz) {
 }
 // beyond the shadow map the sun can still be behind a ridge: march toward it over the lidar heightfield
 float terrainLit(vec3 P) {
-  float lit = 1.0, t = 80.0;
-  for (int k = 0; k < 10; k++) {
+  float lit = 1.0, t = 25.0;
+  for (int k = 0; k < 16; k++) {
     vec3 Q = P + uSunWorld * t;
-    lit = min(lit, smoothstep(-6.0, 30.0, Q.y - terrH(Q.xz)));
-    t *= 1.6;
+    lit = min(lit, smoothstep(-3.0, 4.0, Q.y - terrH(Q.xz)));
+    t *= 1.38;
   }
   return lit;
 }
@@ -101,8 +101,7 @@ void main() {
     vec2 ed = min(sc.xy, 1.0 - sc.xy);
     lit = mix(1.0, v * 0.25, smoothstep(0.0, 0.12, min(ed.x, ed.y)));    // past the edge of the shadow map the air is simply lit
   }
-  float farK = smoothstep(90.0, 160.0, vD);
-  if (farK > 0.0) lit *= mix(1.0, terrainLit(P), farK);               // a ridge between the air and the sun puts it in shadow
+  lit *= terrainLit(P);               // a ridge between the air and the sun puts it in shadow
   vec2 cp = P.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - P.y);
   lit *= 1.0 - uCloudShade * cloudDensity(cp, 2);                       // and the cloud deck's shadow
   float cs = dot(rd, uSunWorld);

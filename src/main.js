@@ -1571,6 +1571,14 @@ function tick(dt, draw = true) {
   // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
   const damp = boxels.sample(p.x, p.z).u;
   atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
+  {
+    // is the sun behind a ridge? compare the highest skyline angle along the sun's azimuth with the sun's elevation
+    const sd = sky.sunDir, hz = Math.hypot(sd.x, sd.z) || 1;
+    let skyline = -1;
+    for (let d = 40; d < 16000; d *= 1.3) skyline = Math.max(skyline, (world.height(eye.x + (sd.x / hz) * d, eye.z + (sd.z / hz) * d) - eye.y) / d);
+    const gap = Math.atan2(sd.y, hz) - Math.atan(skyline);
+    sky.terrainBlock += ((sd.y > 0 ? 1 - smoothstep(-0.006, 0.014, gap) : 0) - sky.terrainBlock) * Math.min(1, (state.paused ? 1 : dt) * 3);
+  }
   sky.update(state.hour, eye, focus, t, weather);
   // snow underfoot bounces light back up into the shadows
   const onSnow = onSnowAt(p.y);

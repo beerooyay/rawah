@@ -125,7 +125,7 @@ export function updateAtmosphere(sky, camera) {
   atmosphere.uViewInv.value.copy(camera.matrixWorld);
   const day = Math.max(0, Math.min(1, (sky.sunDir.y + 0.04) / 0.2));
   atmosphere.uSunFog.value.copy(sky.uniforms.uGlow.value).lerp(sky.uniforms.uHorizon.value, 0.35).multiplyScalar((0.55 + 0.45 * day) * (1 - 0.7 * sky.overcast));
-  atmosphere.uSunCol.value.copy(sky.sun.color).multiplyScalar(day * 0.9 * (1 - 0.8 * sky.overcast) * (1 - 0.85 * sky.sunBlock));
+  atmosphere.uSunCol.value.copy(sky.sun.color).multiplyScalar(day * 0.9 * (1 - 0.8 * sky.overcast) * (1 - 0.85 * sky.sunBlock) * (1 - sky.terrainBlock));
   atmosphere.uCloudShade.value = 0.85 * day;
 }
 
