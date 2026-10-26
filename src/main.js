@@ -1604,7 +1604,7 @@ function tick(dt, draw = true) {
   waterCells.update(state.paused ? 0 : dt, { p, wind: WATER.uWind.value, precip: weather.precip * (1 - weather.snowK), onStream, lakeAt: openLake, flowAt: currentAt });
   // the air the boxels hold, and the light shafts that show it
   mist.update(state.paused ? 0 : dt, { p, moisture: (x, z) => boxels.sample(x, z).u, sunUp: sky.sunDir.y, hour: state.hour, lakeAt: openLake, precip: weather.precip * (1 - weather.snowK) });
-  shafts.update({ camera, sky, weather, plume, mist, ground: p.y, t, sun: sky.sun, shadows: settings.shadows && renderer.shadowMap.enabled });
+  shafts.update({ camera, sky, weather, plume, mist, hour: state.hour, dampness: Math.max(weather.wet, boxels.sample(p.x, p.z).u), ground: p.y, t, sun: sky.sun, shadows: settings.shadows && renderer.shadowMap.enabled });
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);

@@ -28,8 +28,8 @@ export const SHAFT = {
   uMist: { value: null }, uMistExt: { value: 4096 },
   uSmoke: { value: null }, uSmokeBox: { value: new THREE.Vector3(0, 0, 96) },
   uShadow: { value: null }, uShadowMat: { value: new THREE.Matrix4() },
-  uGround: { value: 3000 }, uGain: { value: 1 }, uHaze: { value: 1.1e-3 }, uMistK: { value: 0.02 }, uRainK: { value: 0 },
-  uSlices: { value: 24 }, uNear: { value: 3 }, uFar: { value: 1800 }, uShT: { value: 0 },
+  uGround: { value: 3000 }, uGain: { value: 1 }, uFog: { value: 0 }, uHaze: { value: 1.1e-3 }, uMistK: { value: 0.02 }, uRainK: { value: 0 },
+  uSlices: { value: 24 }, uNear: { value: 2.5 }, uFar: { value: 900 }, uShT: { value: 0 },
 };
 
 const VERT = /* glsl */ `
@@ -52,7 +52,7 @@ const FRAG = /* glsl */ `
 uniform sampler2D uMist, uSmoke, uShadow;
 uniform mat4 uShadowMat;
 uniform vec3 uSmokeBox, uSunCol, uSunWorld;
-uniform float uMistExt, uGround, uGain, uHaze, uMistK, uRainK, uShT, uCloudShade;
+uniform float uMistExt, uGround, uGain, uHaze, uMistK, uRainK, uShT, uCloudShade, uFog;
 varying vec3 vW;
 varying float vD, vDz;
 ${CLOUD_GLSL}
@@ -69,7 +69,7 @@ void main() {
   vec3 P = vW + rd * (jit * delta);
   float h = max(P.y - uGround, 0.0);
   // the air: a thin haze, the mist the boxels hold, smoke from the fire, and the rain itself
-  float dens = uHaze * exp(-h / 260.0) + uRainK * 0.003;
+  float dens = uHaze * exp(-h / 260.0) + uRainK * 0.003 + uFog * 0.011 * exp(-h / 55.0);   // a thin haze, the rain, and the morning's ground fog
   float mist = texture2D(uMist, P.xz / uMistExt + 0.5).r;
   dens += mist * uMistK * exp(-h / 22.0);
   vec2 sp = (P.xz - uSmokeBox.xy) / uSmokeBox.z + 0.5;
@@ -85,9 +85,10 @@ void main() {
   }
   vec2 cp = P.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - P.y);
   lit *= 1.0 - uCloudShade * cloudDensity(cp, 2);                       // and the cloud deck's shadow
-  float phase = hg(dot(rd, uSunWorld), 0.68);
+  float cs = dot(rd, uSunWorld);
+  float phase = hg(cs, 0.68) * 0.75 + hg(cs, 0.93) * 0.25;                 // a broad forward lobe and a tight glow around the sun itself
   vec3 S = uSunCol * (lit * phase * dens * delta * 6.0 * uGain);
-  float fade = 1.0 - smoothstep(0.6, 1.0, vD / 1800.0);              // the far slices thin out
+  float fade = 1.0 - smoothstep(0.6, 1.0, vD / 900.0);              // the far slices thin out
   float a = (1.0 - exp(-dens * delta * 0.7)) * 0.5;
   gl_FragColor = vec4(S * fade, a * fade);
 }`;
@@ -133,8 +134,11 @@ export class Shafts {
     SHAFT.uMist.value = mist.b.texture; SHAFT.uMistExt.value = this.world.extent;
     // low sun, long and gold; under a thick deck there is less direct sun to make a shaft with
     const low = 1 - Math.min(1, sunUp / 0.5);
-    SHAFT.uGain.value = power * (0.9 + 1.3 * low) * (1 - 0.7 * sky.overcast);
+    SHAFT.uGain.value = power * (1.1 + 1.6 * low) * (1 - 0.7 * sky.overcast);
     SHAFT.uRainK.value = weather.precip * (1 - weather.snowK);
+    // ground fog: what the weather puts down, and the cool of the early morning on damp country
+    const hr = ctx.hour, dawn = Math.min(1, Math.max(0, (9.5 - hr) / 4)) * Math.min(1, Math.max(0, (hr - 4.5) / 1.5));
+    SHAFT.uFog.value = Math.min(1, weather.fog * 0.8 + dawn * 0.85 * (0.55 + 0.45 * Math.min(1, ctx.dampness || 0)));
     const map = ctx.sun.shadow.map;
     if (map) { SHAFT.uShadow.value = map.texture; SHAFT.uShadowMat.value = ctx.sun.shadow.matrix; }
     // the plume's smoke
