@@ -117,6 +117,14 @@ export const ALBEDO = /* glsl */ `
           vec3 rock = photo * vec3(1.08, 0.98, 0.86) * (0.9 + bed * 0.2) * (1.0 - clamp(crack, 0.0, 1.0) * 0.35);
           albedo = mix(albedo, rock, faceK);
         }
+        // relief of the ridges and gullies, baked from the lidar (terrainbake.js): gullies and cuts darker, spines brighter.
+        // the middle distance outward; up close the ground has its own detail
+        if (uTSOn > 0.5 && max(abs(vWPos.x), abs(vWPos.z)) < uExtent * 0.5) {
+          vec2 cav = texture2D(uTerrShadow, vWPos.xz / uExtent + 0.5).gb;
+          float cavK = smoothstep(20.0, 260.0, camD);
+          float ao = mix(0.5, 1.0, smoothstep(0.3, 0.95, cav.x));
+          albedo *= mix(1.0, ao * (1.0 + (cav.y - 0.5) * 0.6), cavK * 0.9);
+        }
         diffuseColor.rgb = albedo;`;
 
 // Cellular noise: distance to the nearest jittered point, that cell's hash, and

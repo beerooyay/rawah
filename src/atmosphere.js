@@ -35,6 +35,9 @@ export const atmosphere = {
   // sky view (skyview.js): how much skylight reaches each spot
   uSkyView: { value: null },
   uSkyExtent: { value: 1 },
+  // terrainbake.js: where the mountains' own shadows fall (the sun's shadow map only reaches ~220 m)
+  uTerrShadow: { value: null },
+  uTSOn: { value: 0 },
 };
 
 // how much a point on the ground is pressed down right now (0 untouched, 1 flat)
@@ -144,7 +147,8 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
       uniform vec3 uSunView, uSunFog, uSunCol, uSunWorld;
       uniform mat4 uViewInv;
       uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen, uValley;
-      uniform sampler2D uSkyView;
+      uniform sampler2D uTerrShadow;
+      uniform float uTSOn;
       ${CLOUD_GLSL}
       ${PRESS_GLSL}`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
@@ -152,9 +156,13 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
         vec3 wp = (uViewInv * vec4(vFogView, 1.0)).xyz;
         vec2 cp = wp.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - wp.y);
         float shade = 1.0 - uCloudShade * cloudDensity(cp, 2);
+        vec4 tf = texture2D(uTerrShadow, wp.xz / uSkyExtent + 0.5);   // R sun shadow, GBA static (terrainbake.js); A the sky view
+        // the mountains' shadows on whatever is far enough that the sun's own shadow map no longer covers it
+        float tsh = mix(1.0, tf.r, smoothstep(150.0, 420.0, length(vFogView)) * uTSOn);
+        shade *= tsh;
         reflectedLight.directDiffuse *= shade;
         reflectedLight.directSpecular *= shade;
-        float skyView = texture2D(uSkyView, wp.xz / uSkyExtent + 0.5).r;
+        float skyView = tf.a;
         reflectedLight.indirectDiffuse *= mix(1.0, 0.25 + 0.95 * skyView, ${occlusion.toFixed(2)});
       }`)
     .replace('#include <fog_fragment>', `

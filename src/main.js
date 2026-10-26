@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
+import { TerrainShadow, bakeStatic } from './terrainbake.js';
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
@@ -75,6 +76,7 @@ if (DEV) {
 settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
 settings.flare ??= true;
+settings.relief ??= QUALITY !== 'low';
 settings.mirror ??= Q.shafts > 0;
 settings.mountain ??= Q.soil !== false;
 settings.soil ??= Q.soil !== false;
@@ -151,6 +153,13 @@ const farMat = terrainMaterial(colorTexture(F.image), F.N * F.cell, noiseTex);
 await frame();
 
 const terrain = new CDLODTerrain(world, { colorMap: colorTexture(world.colorImage), coverMap: coverTexture(world.coverData, world.coverN), noise: noiseTex, detail: QUALITY !== 'low' });
+// far-mountain detail from the height texture, nearly free per frame (src/terrainbake.js)
+const staticField = bakeStatic(renderer, terrain.uniforms, world.extent, atmosphere.uSkyView.value);   // ridge and gully relief, baked once
+const tshadow = new TerrainShadow(renderer, terrain.uniforms, world.extent, staticField);   // where the mountains' own shadows fall
+atmosphere.uTerrShadow.value = tshadow.texture;   // one texture: R live sun shadow, G B relief, A sky view
+atmosphere.uTSOn.value = settings.relief ? 1 : 0;
+const _ld = new THREE.Vector3();
+tshadow.update(_ld.set(0.3, 0.8, 0.5).normalize());   // fills every channel once (the sky view lives here too), whether or not the shadows are on
 scene.add(terrain.group);
 scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene, renderer);
@@ -631,6 +640,8 @@ loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
 loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });   // the mountain terrain pack (src/mountain.js)   // the soil pack: the close ground (src/soil.js)
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
+$('set-relief').checked = settings.relief;
+$('set-relief').onchange = () => { settings.relief = $('set-relief').checked; atmosphere.uTSOn.value = settings.relief ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-mirror').checked = settings.mirror;
 $('set-mirror').onchange = () => { settings.mirror = $('set-mirror').checked; storeJSON('rawah-settings', settings); };
 $('set-mtn').checked = settings.mountain;
@@ -1602,6 +1613,7 @@ function tick(dt, draw = true) {
     sky.terrainBlock += ((sd.y > 0 ? 1 - smoothstep(-0.006, 0.014, gap) : 0) - sky.terrainBlock) * Math.min(1, (state.paused ? 1 : dt) * 3);
   }
   sky.update(state.hour, eye, focus, t, weather);
+  if (settings.relief) tshadow.update(_ld.copy(sky.sun.position).sub(sky.sun.target.position).normalize());
   // snow underfoot bounces light back up into the shadows
   const onSnow = onSnowAt(p.y);
   sky.hemi.groundColor.lerp(_snowBounce.setScalar(0.55 * sky.light + 0.04), onSnow * 0.7);
@@ -1758,7 +1770,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

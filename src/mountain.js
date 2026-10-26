@@ -100,6 +100,34 @@ void mtnSample(float layer, vec2 uv, vec2 dx, vec2 dy, float doN, out vec3 alb, 
   float k = inversesqrt(max(w2, 1e-4));            // keeps the contrast the blend would otherwise average away
   alb = max(avg + aSum * k, 0.0);
   nh = vec3(nSum * k, hSum);
+}
+// a set on a surface of any slope: the flat plane (hex-tiled when hex is set) for the part facing up, and the two vertical planes
+// for the part facing sideways, so cliffs get the photograph undistorted instead of the ground tile smeared down them.
+// tw: the triplanar weights (x: the plane across x, y: the ground plane, z: the plane across z).
+// noff: the normal offset in world axes; ht: the height channel.
+void mtnTri(float layer, float tile, vec3 wp, vec2 pdx, vec2 pdy, vec3 wdx, vec3 wdy, vec3 tw, float hex, float doN, out vec3 alb, out vec3 noff, out float ht) {
+  alb = vec3(0.0); noff = vec3(0.0); ht = 0.0;
+  if (tw.y > 0.01) {
+    vec3 a, nh;
+    vec2 uv = wp.xz / tile;
+    if (hex > 0.5) mtnSample(layer, uv, pdx / tile, pdy / tile, doN, a, nh);
+    else { a = textureGrad(uMtnA, vec3(uv, layer), pdx / tile, pdy / tile).rgb; nh = vec3(0.0, 0.0, 0.5); }
+    alb += a * tw.y; noff += vec3(nh.x, 0.0, nh.y) * tw.y; ht += nh.z * tw.y;
+  }
+  if (tw.x > 0.01) {
+    vec2 uv = vec2(wp.z, wp.y) / tile + vec2(0.17, 0.41), dx = vec2(wdx.z, wdx.y) / tile, dy = vec2(wdy.z, wdy.y) / tile;
+    vec2 so = vec2(0.0); float h = 0.5;
+    vec3 a = textureGrad(uMtnA, vec3(uv, layer), dx, dy).rgb;
+    if (doN > 0.5) { vec3 n = textureGrad(uMtnN, vec3(uv, layer), dx, dy).rgb; so = (n.rg - 0.5) * 4.0; h = n.b; }
+    alb += a * tw.x; noff += vec3(0.0, so.y, so.x) * tw.x; ht += h * tw.x;
+  }
+  if (tw.z > 0.01) {
+    vec2 uv = vec2(wp.x, wp.y) / tile + vec2(0.53, 0.29), dx = vec2(wdx.x, wdx.y) / tile, dy = vec2(wdy.x, wdy.y) / tile;
+    vec2 so = vec2(0.0); float h = 0.5;
+    vec3 a = textureGrad(uMtnA, vec3(uv, layer), dx, dy).rgb;
+    if (doN > 0.5) { vec3 n = textureGrad(uMtnN, vec3(uv, layer), dx, dy).rgb; so = (n.rg - 0.5) * 4.0; h = n.b; }
+    alb += a * tw.z; noff += vec3(so.x, so.y, 0.0) * tw.z; ht += h * tw.z;
+  }
 }`;
 
 /**
@@ -111,7 +139,10 @@ export const MTN_NORMAL = /* glsl */ `
         vec3 mtnAlb0 = vec3(0.5), mtnAlb1 = vec3(0.5), mtnAvg0 = vec3(0.5), mtnAvg1 = vec3(0.5);
         float mtnMix = 0.0, mtnWet = 0.0, mtnHt = 0.5;
         vec2 mpx = dFdx(p), mpy = dFdy(p);
-        if (uMtnOn > 0.5 && camD < 2400.0) {
+        vec3 wdx = dFdx(vWPos), wdy = dFdy(vWPos);
+        vec3 tw = pow(abs(wn), vec3(4.0));
+        tw /= tw.x + tw.y + tw.z;
+        if (uMtnOn > 0.5 && camD < 9000.0) {
           vec4 mc = texture2D(uCover, p / uExtent + 0.5);
           float forest = clamp(mc.r * 1.3 + mc.b, 0.0, 1.0), rock = clamp(mc.a * 1.4, 0.0, 1.0), burn = clamp(mc.g, 0.0, 1.0);
           float ny = wn.y, alt = vWPos.y;
@@ -131,34 +162,42 @@ export const MTN_NORMAL = /* glsl */ `
           int i1 = i0 == 0 ? 1 : 0;
           for (int k = 0; k < 5; k++) if (k != i0 && ws[k] > ws[i1]) i1 = k;
           mtnMix = ws[i1] / (ws[i0] + ws[i1] + 1e-4);
-          mtnW = clamp((ws[i0] + ws[i1] * 0.5) * 1.2, 0.0, 1.0) * (1.0 - smoothstep(1400.0, 2400.0, camD));
+          mtnW = clamp((ws[i0] + ws[i1] * 0.5) * 1.2, 0.0, 1.0) * (1.0 - smoothstep(4500.0, 9000.0, camD));
           if (mtnW > 0.003) {
             float t0 = MTN_TILE[i0], t1 = MTN_TILE[i1];
-            vec2 u0 = p / t0, u1 = p / t1;
-            vec3 a0, a1, n0 = vec3(0.0, 0.0, 0.5), n1 = vec3(0.0, 0.0, 0.5);
-            float doN = camD < 140.0 ? 1.0 : 0.0;
-            if (camD < 450.0) {
-              mtnSample(float(i0), u0, mpx / t0, mpy / t0, doN, a0, n0);
-              mtnSample(float(i1), u1, mpx / t1, mpy / t1, doN, a1, n1);
-            } else {
-              a0 = textureGrad(uMtnA, vec3(u0, float(i0)), mpx / t0, mpy / t0).rgb;
-              a1 = textureGrad(uMtnA, vec3(u1, float(i1)), mpx / t1, mpy / t1).rgb;
-            }
-            // a much larger, turned copy, so the small tile never repeats at the scale of the big one
-            mat2 Rb = mat2(0.82, 0.57, -0.57, 0.82);
-            vec2 b0 = Rb * (p / (t0 * 6.1)) + 0.31, b1 = Rb * (p / (t1 * 6.1)) + 0.63;
-            vec3 big0 = textureGrad(uMtnA, vec3(b0, float(i0)), Rb * mpx / (t0 * 6.1), Rb * mpy / (t0 * 6.1)).rgb;
-            vec3 big1 = textureGrad(uMtnA, vec3(b1, float(i1)), Rb * mpx / (t1 * 6.1), Rb * mpy / (t1 * 6.1)).rgb;
+            float doN = camD < 110.0 ? 1.0 : 0.0, hexOn = camD < 220.0 ? 1.0 : 0.0;
+            vec3 a0, a1 = vec3(0.5), no0, no1 = vec3(0.0);
+            float h0v, h1v = 0.5;
+            bool lite = camD > 1500.0;            // far: a tile is under a pixel, so one tap on the plane the ground mostly faces, one set
+            if (lite) {
+              bool isFlat = tw.y > 0.5, zy = tw.x > tw.z;
+              vec2 fu = (isFlat ? p : (zy ? vec2(vWPos.z, vWPos.y) : vec2(vWPos.x, vWPos.y))) / t0;
+              vec2 fdx = (isFlat ? mpx : (zy ? vec2(wdx.z, wdx.y) : vec2(wdx.x, wdx.y))) / t0, fdy = (isFlat ? mpy : (zy ? vec2(wdy.z, wdy.y) : vec2(wdy.x, wdy.y))) / t0;
+              a0 = textureGrad(uMtnA, vec3(fu, float(i0)), fdx, fdy).rgb;
+              no0 = vec3(0.0); h0v = 0.5;
+            } else mtnTri(float(i0), t0, vWPos, mpx, mpy, wdx, wdy, tw, hexOn, doN, a0, no0, h0v);
+            bool second = !lite && mtnMix > 0.04;
+            if (second) mtnTri(float(i1), t1, vWPos, mpx, mpy, wdx, wdy, tw, hexOn, doN, a1, no1, h1v);
+            else { a1 = a0; no1 = no0; h1v = h0v; }
             mtnAvg0 = textureLod(uMtnA, vec3(0.5, 0.5, float(i0)), 10.0).rgb;
-            mtnAvg1 = textureLod(uMtnA, vec3(0.5, 0.5, float(i1)), 10.0).rgb;
+            mtnAvg1 = second ? textureLod(uMtnA, vec3(0.5, 0.5, float(i1)), 10.0).rgb : mtnAvg0;
+            // a much larger, turned copy (on the plane the surface mostly faces), so the small tile never repeats at the scale of the big one
+            vec3 big0 = mtnAvg0, big1 = mtnAvg1;
+            if (camD < 900.0) {
+              mat2 Rb = mat2(0.82, 0.57, -0.57, 0.82);
+              vec2 bp = tw.y > 0.5 ? p : (tw.x > tw.z ? vec2(vWPos.z, vWPos.y) : vec2(vWPos.x, vWPos.y));
+              vec2 bdx = tw.y > 0.5 ? mpx : (tw.x > tw.z ? vec2(wdx.z, wdx.y) : vec2(wdx.x, wdx.y));
+              vec2 bdy = tw.y > 0.5 ? mpy : (tw.x > tw.z ? vec2(wdy.z, wdy.y) : vec2(wdy.x, wdy.y));
+              big0 = textureGrad(uMtnA, vec3(Rb * (bp / (t0 * 6.1)) + 0.31, float(i0)), Rb * bdx / (t0 * 6.1), Rb * bdy / (t0 * 6.1)).rgb;
+              big1 = second ? textureGrad(uMtnA, vec3(Rb * (bp / (t1 * 6.1)) + 0.63, float(i1)), Rb * bdx / (t1 * 6.1), Rb * bdy / (t1 * 6.1)).rgb : big0;
+            }
             float macro = texture2D(uNoise, p / 137.0 + 0.4).r * 0.55 + texture2D(uNoise, p / 43.0).r * 0.45;
             float bigK = 0.32 + 0.2 * smoothstep(60.0, 300.0, camD);
             mtnAlb0 = (a0 + (big0 - mtnAvg0) * bigK) * (0.84 + 0.32 * macro);
             mtnAlb1 = (a1 + (big1 - mtnAvg1) * bigK) * (0.84 + 0.32 * macro);
             if (doN > 0.5) {
-              vec2 so = mix(n0.xy, n1.xy, mtnMix);
-              mtnHt = mix(n0.z, n1.z, mtnMix);
-              wn = normalize(wn + vec3(so.x, 0.0, so.y) * uMtnNormal * mtnW * (1.0 - smoothstep(60.0, 140.0, camD)) * (1.0 - 0.35 * mtnWet));
+              mtnHt = mix(h0v, h1v, mtnMix);
+              wn = normalize(wn + mix(no0, no1, mtnMix) * uMtnNormal * mtnW * (1.0 - smoothstep(50.0, 110.0, camD)) * (1.0 - 0.35 * mtnWet));
             }
           }
         }`;
