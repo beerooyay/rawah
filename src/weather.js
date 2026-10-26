@@ -18,12 +18,14 @@ export const REGIMES = {
   fair: { label: 'Fair-weather cumulus', cloud: 0.44, thick: 0.3, precip: 0, fog: 0, wind: 0.05, temp: 0, storm: 0 },
   building: { label: 'Clouds building', cloud: 0.56, thick: 0.62, precip: 0, fog: 0, wind: 0.2, temp: -1.5, storm: 0 },
   storm: { label: 'Thunderstorm', cloud: 0.94, thick: 1, precip: 0.9, fog: 0.25, wind: 0.75, temp: -5, storm: 1 },
+  severe: { label: 'Severe thunderstorm', cloud: 1, thick: 1, precip: 1, fog: 0.3, wind: 0.95, temp: -6, storm: 1, severe: 1 },
   showers: { label: 'Showers', cloud: 0.86, thick: 0.82, precip: 0.45, fog: 0.3, wind: 0.3, temp: -4, storm: 0 },
   overcast: { label: 'Overcast', cloud: 0.9, thick: 0.7, precip: 0, fog: 0.1, wind: 0.2, temp: -3, storm: 0 },
   front: { label: 'Snow squalls', cloud: 1, thick: 0.95, precip: 0.75, fog: 0.55, wind: 0.6, temp: -9, storm: 0 },
   fog: { label: 'Fog', cloud: 0.75, thick: 0.55, precip: 0, fog: 1, wind: -0.25, temp: -2, storm: 0 },
 };
-const KEYS = ['cloud', 'thick', 'precip', 'fog', 'wind', 'temp', 'storm'];
+for (const r of Object.values(REGIMES)) r.severe ??= 0;
+const KEYS = ['cloud', 'thick', 'precip', 'fog', 'wind', 'temp', 'storm', 'severe'];
 
 /** Smooth 1-D noise in 0..1: value noise on an integer lattice, hashed from the seed. */
 function lat(seed, i) {
@@ -68,7 +70,8 @@ export function sampleWeather(seed, T, climate = { storms: 0.32, fair: 0.26, fro
   const fog = clamp(dawn * smoothstep(0.5, 0.82, fogRoll) * (1 - deck * 0.4) + frontish * 0.55 + shower * 0.25, 0, 1);
   const wind = clamp(0.03 + 0.28 * deck + 0.65 * frontish + 0.5 * storm + 0.25 * conv + 0.14 * cumulus - fog * 0.3 + (fbm1(seed + 89, T / 2.6) - 0.5) * 0.25, -0.25, 1);
   const temp = -(2.2 * deck + 4.5 * storm + 9 * frontish + 1.6 * shower * 2 + 1.4 * cloud * thick);
-  return { cloud, thick, precip, fog, wind, temp, storm };
+  const severe = smoothstep(0.84, 1, storm) * smoothstep(0.62, 0.9, fbm1(seed + 71, T / 3.1, 2));   // the rare supercell day
+  return { cloud, thick, precip, fog, wind, temp, storm, severe };
 }
 
 /** The named regime a state is closest to: for labels, the forecast and the journal. */
@@ -153,7 +156,7 @@ export class Weather {
   }
 
   get label() {
-    if (this.precip > 0.15) return this.storm > 0.5 ? 'Thunderstorm' : this.snowK > 0.6 ? 'Snow' : this.snowK > 0.25 ? 'Sleet' : 'Rain';
+    if (this.precip > 0.15) return this.storm > 0.5 ? (this.severe > 0.5 ? 'Severe thunderstorm' : 'Thunderstorm') : this.snowK > 0.6 ? 'Snow' : this.snowK > 0.25 ? 'Sleet' : 'Rain';
     if (this.fog > 0.6) return 'Fog';
     if (this.cloud > 0.82) return 'Overcast';
     if (this.cloud > 0.5) return this.thick > 0.55 ? 'Clouds building' : 'Mostly cloudy';
@@ -195,9 +198,11 @@ export class Weather {
     if (this.storm > 0.6) {
       this.nextBolt -= dt;
       if (this.nextBolt < 0) {
-        this.nextBolt = 4 + Math.random() * 16;
-        this.flash = 0.6 + Math.random() * 0.4;
-        this.events.push({ type: 'bolt', dist: 400 + Math.random() * 4500 });
+        // a severe storm flashes every second or two, and a few of the strikes land close
+        const sev = this.severe > 0.5;
+        this.nextBolt = sev ? 0.7 + Math.random() * 3.2 : 3 + Math.random() * 11;
+        const near = Math.random() < (sev ? 0.22 : 0.08);
+        this.events.push({ type: 'bolt', dist: near ? 150 + Math.random() * 700 : 700 + Math.random() * (sev ? 8200 : 4300), severe: this.severe });
       }
     }
   }

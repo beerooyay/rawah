@@ -42,6 +42,7 @@ import { Breakfast } from './breakfast.js';
 import { Plume } from './plume.js';
 import { WaveField, WATER } from './waves.js';
 import { WaterCells } from './waterbox.js';
+import { Lightning } from './lightning.js';
 import { Fireworks } from './fireworks.js';
 
 const SAVE_KEY = 'rawah-save-v2';
@@ -144,6 +145,7 @@ const sky = new Sky(scene, renderer);
 sky.moon = MOONS[settings.moon] || MOONS.new;
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
+const lightning = new Lightning(scene, world);   // voxel-grown bolts (src/lightning.js)
 const waterCells = new WaterCells(world);   // silt and foam the water remembers (src/waterbox.js)
 const lakes = buildLakes(world);
 const _flow = { x: 0, z: 0 };
@@ -1527,7 +1529,26 @@ function tick(dt, draw = true) {
   terrain.update(camera);
   // weather: eases toward the day's schedule; lightning, rain on you, warnings
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
-  for (const e of weather.events) if (e.type === 'bolt') { audio.thunder?.(e.dist); if (e.dist < 1500) input.rumble(0.6 * (1 - e.dist / 1500), 0.3, 400); }
+  for (const e of weather.events) if (e.type === 'bolt') {
+    // most flashes are somewhere you are looking, a few behind you
+    const fwd = Math.atan2(-Math.cos(hiker.yaw), -Math.sin(hiker.yaw));
+    const az = Math.random() < 0.7 ? fwd + (Math.random() - 0.5) * 2.2 : Math.random() * Math.PI * 2;
+    const r = Math.random(), type = r < 0.5 ? 'cg' : r < 0.85 ? 'ic' : 'cc';
+    lightning.strike({ from: camera.position, dist: e.dist, azimuth: az, type, rain: weather.precip * (1 - weather.snowK), severe: e.severe || 0 });
+  }
+  {
+    const px = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / renderer.domElement.height;
+    for (const e of lightning.update(state.paused ? 0 : dt, camera.position, weather, px)) {
+      if (e.type === 'thunder') { audio.thunder?.(e.dist, e.kind, e.strength); if (e.dist < 1500) input.rumble(0.6 * (1 - e.dist / 1500), 0.3, 400); }
+      else if (e.type === 'strike') {
+        boxels.dry(e.x, e.z, 0.85, 4); boxels.wear(e.x, e.z, 0.95);      // the ground it hit is scorched and dry
+        if (waterAt(e.x, e.z)) { waves.drop(e.x, e.z, 3, 0.25); waterCells.foam(e.x, e.z, 0.9); waterCells.stir(e.x, e.z, 0.3, onStream(e.x, e.z)); }
+        if (e.dist < 300) { rig.land(6 * (1 - e.dist / 300)); hud.toast('That one was close.', 'warn'); }
+      }
+    }
+    weather.flash = Math.max(weather.flash, lightning.flash);
+    for (let q = 0; q < 3; q++) { sky.uniforms.uBoltDir.value[q].copy(lightning.sky.dir[q]); sky.uniforms.uBoltCol.value[q].copy(lightning.sky.col[q]); }
+  }
   atmosphere.uWet.value = weather.wet;
   atmosphere.uTime.value = flora.uniforms.uTime.value;   // the clock the footprints spring back on
   // fresh snow from the weather on top of the season's snowpack
@@ -1687,7 +1708,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells,
+    plume, waves, waterAt, waterCells, lightning,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

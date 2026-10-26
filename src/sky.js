@@ -50,6 +50,8 @@ void main() {
 const FRAG = `varying vec3 vDir;
 uniform vec3 uSun, uMoon, uZenith, uHorizon, uGlow, uCloudLit, uCloudDark;
 uniform float uNight, uTime, uThick, uFlash, uMWk, uMoonK;
+uniform vec4 uBoltDir[3];   // direction (xyz) and strength (w) of the bolts lighting the cloud
+uniform vec3 uBoltCol[3];
 uniform samplerCube uMW;
 uniform mat3 uGal;
 ${CLOUD_GLSL}
@@ -109,6 +111,10 @@ void main() {
         vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
         c += uGlow * pow(sd, 5.0) * (1.0 - dn) * dn * 2.0 * (1.0 - uNight) * lit;     // silver lining
         c += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dn);
+        for (int q = 0; q < 3; q++) {   // a flash inside the cloud lights the cloud around it, broad and blue-white
+          float bw = uBoltDir[q].w;
+          if (bw > 0.0) { float bg = max(dot(d, uBoltDir[q].xyz), 0.0); c += uBoltCol[q] * bw * (pow(bg, 4.0) * 0.8 + pow(bg, 36.0) * 1.2 + 0.05) * (0.3 + dn); }
+        }
         float a = clamp(dn * (0.3 + 0.3 * uThick + 0.14 * k), 0.0, 1.0);   // each slice thin; the billowing tops carry more water than the bases
         acc += trans * a * c;
         trans *= 1.0 - a;
@@ -118,6 +124,7 @@ void main() {
     col = mix(col, col * trans + acc, fade);
     cloud = (1.0 - trans) * fade;
   }
+  for (int q = 0; q < 3; q++) { float bw = uBoltDir[q].w; if (bw > 0.0) col += uBoltCol[q] * bw * pow(max(dot(d, uBoltDir[q].xyz), 0.0), 14.0) * 0.1 * (1.0 - cloud); }
   col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0 * (1.0 - cloud);
   if (uNight > 0.0) {
     // the Milky Way, baked in galactic coordinates and turned to the sky overhead (dimmer toward the horizon, where the air is thick)
@@ -146,6 +153,7 @@ export class Sky {
       uNight: { value: 0 }, uTime: { value: 0 },
       uCloudLit: { value: new THREE.Color() }, uCloudDark: { value: new THREE.Color() },
       uThick: { value: 0 }, uFlash: { value: 0 },
+      uBoltDir: { value: [new THREE.Vector4(0, 1, 0, 0), new THREE.Vector4(0, 1, 0, 0), new THREE.Vector4(0, 1, 0, 0)] }, uBoltCol: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color()] },
       uMW: { value: this.stars.mw }, uGal: { value: this.stars.gal }, uMWk: { value: 0.2 }, uMoonK: { value: 0 },
       uCloudTex: atmosphere.uCloudTex, uCloudOff: atmosphere.uCloudOff, uCloudCover: atmosphere.uCloudCover, uCloudAlt: atmosphere.uCloudAlt,
     };

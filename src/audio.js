@@ -386,11 +386,11 @@ export class Audio {
   }
 
   /** Thunder from a strike `dist` metres away: crack for close ones, then a long rolling rumble. */
-  thunder(dist) {
+  thunder(dist, kind = 'cg', strength = 1) {
     if (!this.ctx) return;
     const ctx = this.ctx, when = ctx.currentTime + dist / 343;
-    const near = Math.max(0, 1 - dist / 2500);
-    if (near > 0.3) this.#burst(0.25, 1800, 0.6, 0.5 * near, 'bandpass', dist / 343, this.white);
+    const near = Math.max(0, 1 - dist / 2500) * (kind === 'cg' ? 1 : 0.55) * Math.min(1.2, strength + 0.2);
+    if (near > 0.3 && kind === 'cg') this.#burst(0.25, 1800, 0.6, 0.5 * near, 'bandpass', dist / 343, this.white);
     const src = ctx.createBufferSource();
     src.buffer = this.noise; src.loop = true;
     const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 160 + near * 260; f.Q.value = 0.9;
