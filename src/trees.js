@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { NOISE_GLSL } from './detail.js';
 import { WIND_GLSL } from './wind.js';
 import { withAtmosphere } from './atmosphere.js';
+import { BOXEL } from './terrain.js';
 
 // Procedural trees. Everything is generated at startup: an atlas of painted
 // foliage sprays and bark strips, card-based tree meshes built from them
@@ -464,15 +465,124 @@ function tinted(shader) {
     .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;');
 }
 
+// ------------------------------------------------------------------ bark: real textures, and the boxel field on them
+// The painted atlas strips stay (impostors are baked from them, and a failed load falls back to them), but anywhere a
+// trunk is drawn close up its bark comes from four tileable photographic sets: spruce (also used for fir and the
+// krummholz stem), lodgepole, aspen and snag, each an albedo and a normal+height map, 1024 squared, in texture arrays.
+// A fragment is bark when it samples the bottom half of the atlas with an unsaturated vertex colour (the pale cut
+// faces of a felled tree use the aspen strip too, tinted); the species is the strip. Bark is mapped triplanar in the
+// tree's own space (trunk along Y, so two projections), so there is no seam, whatever the trunk's radius or taper.
+// What the boxel field adds: moisture at the foot of the tree (rain, a creek or lake beside it, the fire's drying)
+// darkens the bark, fills its crevices first, and gives it a wet sheen.
+const BARK_FILES = ['spruce', 'lodgepole', 'aspen', 'snag'];
+export const BARK_TEX = { uBarkA: { value: null }, uBarkN: { value: null }, uBarkOn: { value: 0 } };
+
+export async function loadBark(base = './assets/bark/') {
+  try {
+    const S = 1024, A = new Uint8Array(S * S * 4 * 4), N = new Uint8Array(S * S * 4 * 4);
+    const cv = document.createElement('canvas'); cv.width = cv.height = S;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    const load = (url) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error(url)); im.src = url; });
+    for (let i = 0; i < 4; i++) {
+      for (const [file, arr] of [['albedo.jpg', A], ['nh.webp', N]]) {
+        const im = await load(`${base}${BARK_FILES[i]}_${file}`);
+        g.clearRect(0, 0, S, S); g.drawImage(im, 0, 0, S, S);
+        arr.set(g.getImageData(0, 0, S, S).data, i * S * S * 4);
+      }
+    }
+    const make = (data, srgb) => {
+      const t = new THREE.DataArrayTexture(data, S, S, 4);
+      t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType;
+      t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter; t.generateMipmaps = true;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+      if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;
+      return t;
+    };
+    BARK_TEX.uBarkA.value = make(A, true);
+    BARK_TEX.uBarkN.value = make(N, false);
+    BARK_TEX.uBarkOn.value = 1;
+  } catch (e) { console.warn('bark textures not loaded, keeping the painted bark:', e.message); }
+}
+
+function barked(shader, uniforms) {
+  Object.assign(shader.uniforms, BARK_TEX, { uBoxel: BOXEL, uExt: uniforms.uExt });
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vBL, vBN;\nvarying vec2 vBW;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vBL = position; vBN = objectNormal;
+      #ifdef USE_INSTANCING
+        vBW = instanceMatrix[3].xz;
+      #else
+        vBW = vec2(0.0);
+      #endif`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform highp sampler2DArray uBarkA, uBarkN;
+      uniform float uBarkOn, uExt;
+      uniform sampler2D uBoxel;
+      varying vec3 vBL, vBN;
+      varying vec2 vBW;
+      // tangent-space normal onto the surface, with the tangent frame taken from the screen-space derivatives of the uv
+      vec3 barkPerturb(vec3 eyePos, vec3 N, vec3 mapN, vec2 uv, float face) {
+        vec3 q0 = dFdx(eyePos), q1 = dFdy(eyePos);
+        vec2 s0 = dFdx(uv), s1 = dFdy(uv);
+        vec3 q1p = cross(q1, N), q0p = cross(N, q0);
+        vec3 T = q1p * s0.x + q0p * s1.x, B = q1p * s0.y + q0p * s1.y;
+        float det = max(dot(T, T), dot(B, B));
+        float sc = det == 0.0 ? 0.0 : face * inversesqrt(det);
+        return normalize(T * (mapN.x * sc) + B * (mapN.y * sc) + N * mapN.z);
+      }`)
+    .replace('#include <map_fragment>', `#include <map_fragment>
+      float isBark = 0.0, bLayer = 0.0, bWet = 0.0, bFade = 0.0, bHeight = 0.5;
+      vec3 bW = vec3(0.0); vec2 bUx = vec2(0.0), bUz = vec2(0.0);
+      if (uBarkOn > 0.5 && vMapUv.y < 0.5 && vColor.r - vColor.b < 0.05) {
+        float dist = length(vFogView);
+        bFade = 1.0 - smoothstep(60.0, 150.0, dist);
+        if (bFade > 0.0) {
+          isBark = 1.0;
+          bLayer = floor(vMapUv.x * 4.0);
+          vec3 w = pow(abs(normalize(vBN)), vec3(4.0));
+          bW = vec3(w.x, 0.0, w.z); bW /= max(bW.x + bW.z, 1e-3);
+          bUx = vBL.zy / 0.9; bUz = vBL.xy / 0.9;
+          vec3 ax = texture(uBarkA, vec3(bUx, bLayer)).rgb, az = texture(uBarkA, vec3(bUz, bLayer)).rgb;
+          float hx = texture(uBarkN, vec3(bUx, bLayer)).b, hz = texture(uBarkN, vec3(bUz, bLayer)).b;
+          bHeight = hx * bW.x + hz * bW.z;
+          vec3 alb = ax * bW.x + az * bW.z;
+          alb *= 0.55 + 0.6 * bHeight;                                   // crevices are darker
+          // the boxel field: moisture at the foot of the tree wets the bark, crevices first
+          float moist = texture2D(uBoxel, vBW / uExt + 0.5).r;
+          bWet = clamp(smoothstep(0.02, 0.35, moist) + uWet * 0.45, 0.0, 1.0) * (0.55 + 0.45 * (1.0 - bHeight));
+          alb *= 1.0 - 0.5 * bWet;
+          diffuseColor.rgb = mix(diffuseColor.rgb, alb * 1.35, bFade);
+        }
+      }`)
+    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      if (isBark > 0.5) {
+        vec2 nxy = texture(uBarkN, vec3(bUx, bLayer)).xy * 2.0 - 1.0, nzy = texture(uBarkN, vec3(bUz, bLayer)).xy * 2.0 - 1.0;
+        float k = 1.1 * bFade * (1.0 - 0.3 * bWet);
+        vec3 mx = vec3(nxy * k, sqrt(max(0.05, 1.0 - dot(nxy * k, nxy * k)))), mz = vec3(nzy * k, sqrt(max(0.05, 1.0 - dot(nzy * k, nzy * k))));
+        vec3 Nx = barkPerturb(-vFogView, normal, mx, bUx, faceDirection), Nz = barkPerturb(-vFogView, normal, mz, bUz, faceDirection);
+        normal = normalize(Nx * bW.x + Nz * bW.z);
+      }`)
+    .replace('#include <opaque_fragment>', `
+      if (isBark > 0.5 && bWet > 0.0) {   // wet bark shines: a little sky and sun on the damp surfaces
+        vec3 V = normalize(-vFogView), Rf = reflect(-V, normal);
+        outgoingLight += (uSunCol * pow(max(dot(Rf, uSunView), 0.0), 18.0) * 0.9 + vec3(0.06, 0.08, 0.1) * pow(1.0 - max(dot(V, normal), 0.0), 3.0)) * bWet * bFade * 0.5;
+      }
+      #include <opaque_fragment>`);
+}
+
 /** Foliage material: alpha-tested atlas, vertex shade, wind, light through the leaves. */
 export function foliageMaterial(atlas, uniforms) {
   const mat = new THREE.MeshLambertMaterial({ map: atlas, alphaTest: 0.35, alphaToCoverage: true, side: THREE.DoubleSide, vertexColors: true });
   mat.onBeforeCompile = (shader) => {
     windy(shader, uniforms);
     tinted(shader);
+    barked(shader, uniforms);
     withAtmosphere(shader, { translucency: 0.55, weather: 0.6, occlusion: 0.7 });
   };
-  mat.customProgramCacheKey = () => 'rawah-foliage';
+  mat.customProgramCacheKey = () => 'rawah-foliage-bark';
   return mat;
 }
 

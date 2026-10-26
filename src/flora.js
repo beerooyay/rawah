@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash2, clamp } from './noise.js';
-import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
+import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial, loadBark } from './trees.js';
 import { rockGeometries, rockMaterial } from './rocks.js';
 import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
@@ -67,12 +67,13 @@ export class Flora {
     this.cardR = card;          // full trees inside this radius
     this.radius = radius;       // impostors out to here
     this.thin = thin;           // beyond this, every other impostor
-    this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 } };
+    this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 }, uExt: { value: world.extent } };
     const atlas = paintAtlas(leaves);
     this.species = buildSpecies();
     const foliage = this.foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);
-    this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);
+    this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);   // baked with the painted bark: the real textures load after
+    loadBark();
 
     this.group = new THREE.Group();
     scene.add(this.group);
