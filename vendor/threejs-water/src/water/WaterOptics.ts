@@ -1,0 +1,75 @@
+/**
+ * @file WaterOptics.ts
+ * @description Defines the descriptors and types used to configure optical physical shapes
+ * interactively in the water simulation, such as spheres, boxes, torus knots, or custom meshes.
+ */
+
+import type * as THREE from 'three';
+import type { MeshWaterRayTracing } from './MeshWaterRayTracing';
+
+/**
+ * Union type representing the shape descriptor for objects that interact with light
+ * and create refraction, reflection, and caustic shadows within the pool.
+ */
+export type WaterOpticsDescriptor =
+  /** Represents no optical physical shape in the water. */
+  | { kind: 'none' }
+  /** Represents a spherical optical physical shape in the water. */
+  | {
+      kind: 'sphere';
+      /** The world space center position of the sphere (fallback). */
+      center: THREE.Vector3;
+      /** The radius of the sphere (fallback). */
+      radius: number;
+      /** Array of centers of all spheres. */
+      centers: THREE.Vector3[];
+      /** Array of radii of all spheres. */
+      radii: number[];
+      /** The number of spheres. */
+      count: number;
+    }
+  /** Represents a box/cuboid optical physical shape in the water. */
+  | {
+      kind: 'box';
+      /** The world space center position of the box (fallback). */
+      center: THREE.Vector3;
+      /** The half-extents of the box in the x, y, and z dimensions (fallback). */
+      halfSize: THREE.Vector3;
+      /** Array of centers of all boxes. */
+      centers: THREE.Vector3[];
+      /** Array of halfSizes of all boxes. */
+      halfSizes: THREE.Vector3[];
+      /** The number of boxes. */
+      count: number;
+    }
+  /** Represents a torus knot optical physical shape in the water. */
+  | {
+      kind: 'torusknot';
+      /** The world space center position of the torus knot (fallback). */
+      center: THREE.Vector3;
+      /** Array of centers of all torus knots. */
+      centers: THREE.Vector3[];
+      /** The number of torus knots. */
+      count: number;
+    }
+  /** Represents a custom mesh optical physical shape in the water. */
+  | {
+      kind: 'mesh';
+      /** Triangle data shared by the mesh instances, available once the asset loads. */
+      rayTracing: MeshWaterRayTracing | null;
+      /** The world space center position of the custom mesh (fallback). */
+      center: THREE.Vector3;
+      /** Bounding radius of the mesh for physics or intersection approximation. */
+      boundingRadius: number;
+      /** Custom radius used for soft shadow projection (falls back to boundingRadius). */
+      shadowRadius?: number;
+      /** Array of centers of all meshes. */
+      centers: THREE.Vector3[];
+      /** The number of meshes. */
+      count: number;
+    };
+
+/**
+ * Constant representing a null or empty water optics configuration.
+ */
+export const NO_WATER_OPTICS: WaterOpticsDescriptor = { kind: 'none' };
