@@ -38,6 +38,7 @@ const ROCK_R = 240;        // boulders and logs inside this radius
 // REFILL_M, so the frustum used to fill them is wider than the camera's by CULL.margin
 // (culling.js), which must stay above ROT_REFILL.
 const ROT_REFILL = 0.12;   // radians
+const SLICE_MS = 1.6;      // milliseconds a frame may spend building tiles and refilling the instance buffers
 const OCC_FROM = 120;      // impostors nearer than this are never tested against the skyline
 const TALL = 30;           // tallest tree, for tile bounds
 const LOW_SUN = 0.55;      // below this (33 degrees up) shadows run long, and down a slope they run on without end: keep every caster
@@ -132,6 +133,11 @@ export class Flora {
     this.fill = { key: -1, dir: new THREE.Vector3(0, 0, -1), cam: new THREE.Vector3(Infinity, 0, 0), fov: 0, aspect: 0, horizon: -1, light: new THREE.Vector3(), shadows: false };
     this._dir = new THREE.Vector3();
     this.stats = { kept: 0, outside: 0, hidden: 0 };
+    // building a tile (~5 ms) and refilling the buffers (~5 ms) are generators, stepped a little each frame
+    this.slice = null;          // { until }: when this frame's share of the time is up (null = run to the end)
+    this.job = null;            // the tile being built: { key, i, j, gen }
+    this.fillJob = null;        // the refill being done into the spare buffers
+    this.stage = null;
   }
 
   /** The camera, the terrain skyline and the direction the light comes from (null when nothing casts a shadow). */
@@ -167,7 +173,7 @@ export class Flora {
     for (const key of [...this.tiles.keys()]) {
       const i = key % this.nt, j = Math.floor(key / this.nt);
       const tx = i * size - w.half, tz = j * size - w.half;
-      if (tx <= x1 && tx + size >= x0 && tz <= z1 && tz + size >= z0) { this.tiles.delete(key); this.dirty = true; }
+      if (tx <= x1 && tx + size >= x0 && tz <= z1 && tz + size >= z0) { this.tiles.delete(key); this.dirty = true; if (this.job?.key === key) this.job = null; }
     }
   }
 
@@ -197,17 +203,42 @@ export class Flora {
     }
     for (const key of this.tiles.keys()) if (!want.has(key)) { this.tiles.delete(key); this.dirty = true; }
     todo.sort((a, b) => a[0] - b[0]);
-    const n = Math.min(budget, todo.length);
-    for (let k = 0; k < n; k++) {
-      const [, key, i, j] = todo[k];
-      this.tiles.set(key, this.#populate(i, j));
-      this.dirty = true;
+    if (this.job && !want.has(this.job.key)) this.job = null;
+    const stale = () => this.dirty || this.filledAt.distanceTo(pos) > REFILL_M || this.#viewStale();
+    if (budget > 1) {
+      // the boot and a fast-travel landing: everything now, in one go
+      this.job = this.fillJob = null; this.slice = null;
+      const n = Math.min(budget, todo.length);
+      for (let k = 0; k < n; k++) { this.tiles.set(todo[k][1], this.#populate(todo[k][2], todo[k][3])); this.dirty = true; }
+      if (stale()) this.#fillNow(pos);
+      return todo.length - n;
     }
-    if (this.dirty || this.filledAt.distanceTo(pos) > REFILL_M || this.#viewStale()) this.#fill(pos);
-    return todo.length - n;
+    // walking and riding: a few milliseconds a frame, the tile first, the refill with what is left
+    const t0 = performance.now(), tileEnd = t0 + SLICE_MS * 0.6, end = t0 + SLICE_MS;
+    if (!this.job && budget > 0 && todo.length) { const [, key, i, j] = todo[0]; this.job = { key, gen: this.#populateGen(i, j) }; }
+    if (this.job) {
+      this.slice = { until: tileEnd };
+      const r = this.job.gen.next();      // runs until this frame's share is up, or the tile is done
+      if (r.done) { this.tiles.set(this.job.key, r.value); this.dirty = true; this.job = null; }
+    }
+    if (!this.fillJob && stale()) this.fillJob = this.#fillGen(pos);
+    if (this.fillJob) {
+      this.slice = { until: end };
+      if (this.fillJob.next().done) this.fillJob = null;
+    }
+    this.slice = null;
+    return todo.length - (this.job ? 1 : 0);
   }
 
+  /** Build a tile now. */
   #populate(ti, tj) {
+    const g = this.#populateGen(ti, tj);
+    let r;
+    while (!(r = g.next()).done);
+    return r.value;
+  }
+
+  *#populateGen(ti, tj) {
     const w = this.world, size = this.tile * w.cell;
     const x0 = ti * size - w.half, z0 = tj * size - w.half;
     const n = Math.floor(size / SPACING);
@@ -267,6 +298,7 @@ export class Flora {
     // so a fan or outcrop that straddles a tile edge is built the same on both sides
     const cs = size / FORM;
     for (let b = -1; b <= FORM; b++) {
+      if (this.slice && performance.now() > this.slice.until) yield;
       for (let a = -1; a <= FORM; a++) {
         const fi = ti * FORM + a, fj = tj * FORM + b;
         const h0 = hash2(fi, fj, 41), h1 = hash2(fi, fj, 42), h2 = hash2(fi, fj, 43), h3 = hash2(fi, fj, 44);
@@ -319,6 +351,7 @@ export class Flora {
     }
 
     for (let b = 0; b < n; b++) {
+      if (this.slice && performance.now() > this.slice.until) yield;
       for (let a = 0; a < n; a++) {
         const gi = ti * n + a, gj = tj * n + b;
         const r1 = hash2(gi, gj, 1), r2 = hash2(gi, gj, 2), r3 = hash2(gi, gj, 3);
@@ -381,18 +414,38 @@ export class Flora {
     return { ti, tj, items, solids: new Float32Array(solids), x0, z0, size, minY, maxY };
   }
 
-  /** Refill every instanced mesh from the tiles in range, leaving out what the camera cannot see. */
-  #fill(pos) {
+  /** Refill now. */
+  #fillNow(pos) {
+    this.slice = null;
+    const g = this.#fillGen(pos);
+    while (!g.next().done);
+  }
+
+  /** The spare copy of every instance buffer the refill writes into while the others are being drawn. */
+  #spare() {
+    if (this.stage) return;
+    this.stage = new Map();
+    for (const m of Object.values(this.meshes).flat()) this.stage.set(m, { mat: new Float32Array(m.instanceMatrix.array.length), col: new Float32Array(m.instanceColor.array.length) });
+    const imp = this.imp;
+    this.stageImp = { im: new Float32Array(imp.instanceMatrix.array.length), ic: new Float32Array(imp.instanceColor.array.length), cell: new Float32Array(imp.geometry.attributes.aCell.array.length) };
+  }
+
+  /**
+   * Refill every instanced mesh from the tiles in range, leaving out what the camera cannot see. It writes into
+   * spare buffers a few milliseconds a frame and swaps them in at the end, so what is drawn never half-changes.
+   */
+  *#fillGen(pos) {
+    this.#spare();
     this.filledAt.copy(pos);
     this.dirty = false;
-    const counts = new Map();
+    const counts = new Map(), stage = this.stage;
     const all = Object.values(this.meshes).flat();
     for (const m of all) counts.set(m, 0);
     let ni = 0;
-    const imp = this.imp, im = imp.instanceMatrix.array, ic = imp.instanceColor.array, cell = imp.geometry.attributes.aCell.array;
+    const imp = this.imp, im = this.stageImp.im, ic = this.stageImp.ic, cell = this.stageImp.cell;
     const cells = this.impostors.cells;
     const shade = (mesh, k, v) => {
-      const c = mesh.instanceColor.array;
+      const c = stage.get(mesh).col;
       c[k * 3] = v; c[k * 3 + 1] = v * 0.99; c[k * 3 + 2] = v * 0.96;
     };
 
@@ -432,7 +485,7 @@ export class Flora {
       const k = counts.get(mesh);
       if (k >= mesh.instanceMatrix.count) return;
       counts.set(mesh, k + 1);
-      writeMatrix(mesh.instanceMatrix.array, k, x, y, z, sx, sy, sz, rot);
+      writeMatrix(stage.get(mesh).mat, k, x, y, z, sx, sy, sz, rot);
       shade(mesh, k, v);
     };
     // rocks are squashed, yawed and leaned a little, each different, all from one number
@@ -442,11 +495,12 @@ export class Flora {
       counts.set(mesh, k + 1);
       rockPose(kind, s, r, _q, _s);
       _m.compose(_p.set(x, y, z), _q, _s);
-      _m.toArray(mesh.instanceMatrix.array, k * 16);
+      _m.toArray(stage.get(mesh).mat, k * 16);
       shade(mesh, k, 0.9 + r * 0.2);
     };
     const rr = ROCK_R + REFILL_M;
-    for (const tile of this.tiles.values()) {
+    for (const tile of [...this.tiles.values()]) {
+      if (this.slice && performance.now() > this.slice.until) yield;
       // whole-tile rejection: off screen (shadows included), or behind a ridge with nothing but far impostors in it
       if (planes || sky) {
         const cx = tile.x0 + tile.size / 2, cz = tile.z0 + tile.size / 2;
@@ -496,15 +550,25 @@ export class Flora {
         }
       }
     }
+    // upload only the part of each buffer that is in use: the impostor buffers are tens of megabytes, a few percent of it filled
+    const upload = (attr, spare, used) => {
+      const live = attr.array;
+      attr.array = spare;                                   // the buffer we just filled goes live; the old one is the next spare
+      attr.clearUpdateRanges();
+      if (used > 0) { attr.addUpdateRange(0, used * attr.itemSize); attr.needsUpdate = true; }
+      return live;
+    };
     for (const m of all) {
+      const S = stage.get(m);
       m.count = counts.get(m);
-      m.instanceMatrix.needsUpdate = true;
-      m.instanceColor.needsUpdate = true;
+      S.mat = upload(m.instanceMatrix, S.mat, m.count);
+      S.col = upload(m.instanceColor, S.col, m.count);
     }
+    const SI = this.stageImp, aCell = imp.geometry.attributes.aCell;
     imp.count = ni;
-    imp.instanceMatrix.needsUpdate = true;
-    imp.instanceColor.needsUpdate = true;
-    imp.geometry.attributes.aCell.needsUpdate = true;
+    SI.im = upload(imp.instanceMatrix, SI.im, ni);
+    SI.ic = upload(imp.instanceColor, SI.ic, ni);
+    SI.cell = upload(aCell, SI.cell, ni);
   }
 
   #gone(kind, x, z) { return this.removed.size > 0 && this.removed.has(itemKey(kind, x, z)); }

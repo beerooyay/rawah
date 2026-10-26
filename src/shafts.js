@@ -49,6 +49,8 @@ void main() {
 
 const FRAG = /* glsl */ `
 #include <packing>
+uniform highp usampler2D uHeight;
+uniform float uN, uCell, uHScale, uHOffset;
 uniform sampler2D uMist, uSmoke, uShadow;
 uniform mat4 uShadowMat;
 uniform vec3 uSmokeBox, uSunCol, uSunWorld;
@@ -56,6 +58,22 @@ uniform float uMistExt, uGround, uGain, uHaze, uMistK, uRainK, uShT, uCloudShade
 varying vec3 vW;
 varying float vD, vDz;
 ${CLOUD_GLSL}
+float gH(ivec2 p) { p = clamp(p, ivec2(0), ivec2(int(uN) - 1)); return float(texelFetch(uHeight, p, 0).r) * uHScale + uHOffset; }
+float terrH(vec2 xz) {
+  vec2 u = xz / uCell + uN * 0.5, f = fract(u);
+  ivec2 i = ivec2(floor(u));
+  return mix(mix(gH(i), gH(i + ivec2(1, 0)), f.x), mix(gH(i + ivec2(0, 1)), gH(i + ivec2(1, 1)), f.x), f.y);
+}
+// beyond the shadow map the sun can still be behind a ridge: march toward it over the lidar heightfield
+float terrainLit(vec3 P) {
+  float lit = 1.0, t = 80.0;
+  for (int k = 0; k < 10; k++) {
+    vec3 Q = P + uSunWorld * t;
+    lit = min(lit, smoothstep(-6.0, 30.0, Q.y - terrH(Q.xz)));
+    t *= 1.6;
+  }
+  return lit;
+}
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / (12.566371 * pow(1.0 + g2 - 2.0 * g * c, 1.5)); }
 float shadowTap(vec2 uv, float z) { return step(z, unpackRGBAToDepth(texture2D(uShadow, uv))); }
@@ -67,11 +85,11 @@ void main() {
   // a different point in the slab for each pixel and frame, so the slices never show as layers
   float jit = hash(gl_FragCoord.xy + uShT) - 0.5;
   vec3 P = vW + rd * (jit * delta);
-  float h = max(P.y - uGround, 0.0);
+  float h = max(P.y - terrH(P.xz), 0.0);                            // height above the ground right here, not above the player's feet
   // the air: a thin haze, the mist the boxels hold, smoke from the fire, and the rain itself
-  float dens = uHaze * exp(-h / 260.0) + uRainK * 0.003 + uFog * 0.011 * exp(-h / 55.0);   // a thin haze, the rain, and the morning's ground fog
+  float dens = uHaze * exp(-h / 420.0) + uRainK * 0.003 + uFog * 0.011 * exp(-h / 90.0);   // a thin haze, the rain, and the morning's ground fog
   float mist = texture2D(uMist, P.xz / uMistExt + 0.5).r;
-  dens += mist * uMistK * exp(-h / 22.0);
+  dens += mist * uMistK * exp(-h / 38.0);
   vec2 sp = (P.xz - uSmokeBox.xy) / uSmokeBox.z + 0.5;
   if (sp.x > 0.0 && sp.y > 0.0 && sp.x < 1.0 && sp.y < 1.0) dens += texture2D(uSmoke, sp).r * 0.02 * exp(-max(h - 4.0, 0.0) / 14.0);
   // is the sun reaching this point?
@@ -83,6 +101,8 @@ void main() {
     vec2 ed = min(sc.xy, 1.0 - sc.xy);
     lit = mix(1.0, v * 0.25, smoothstep(0.0, 0.12, min(ed.x, ed.y)));    // past the edge of the shadow map the air is simply lit
   }
+  float farK = smoothstep(90.0, 160.0, vD);
+  if (farK > 0.0) lit *= mix(1.0, terrainLit(P), farK);               // a ridge between the air and the sun puts it in shadow
   vec2 cp = P.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - P.y);
   lit *= 1.0 - uCloudShade * cloudDensity(cp, 2);                       // and the cloud deck's shadow
   float cs = dot(rd, uSunWorld);
@@ -94,12 +114,12 @@ void main() {
 }`;
 
 export class Shafts {
-  constructor(scene, world, { slices = 24 } = {}) {
+  constructor(scene, world, { slices = 24, terrain } = {}) {
     this.world = world;
     SHAFT.uSlices.value = slices;
     this.mat = new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG,
-      uniforms: { ...SHAFT, uSunCol: atmosphere.uSunCol, uSunWorld: atmosphere.uSunWorld, uCloudTex: atmosphere.uCloudTex, uCloudOff: atmosphere.uCloudOff, uCloudCover: atmosphere.uCloudCover, uCloudAlt: atmosphere.uCloudAlt, uCloudShade: atmosphere.uCloudShade },
+      uniforms: { ...SHAFT, uHeight: terrain.uHeight, uN: terrain.uN, uCell: terrain.uCell, uHScale: terrain.uHScale, uHOffset: terrain.uHOffset, uSunCol: atmosphere.uSunCol, uSunWorld: atmosphere.uSunWorld, uCloudTex: atmosphere.uCloudTex, uCloudOff: atmosphere.uCloudOff, uCloudCover: atmosphere.uCloudCover, uCloudAlt: atmosphere.uCloudAlt, uCloudShade: atmosphere.uCloudShade },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
       blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
       fog: false,

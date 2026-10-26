@@ -239,7 +239,7 @@ const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
 const plume = new Plume(world, scene);
 const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
-const shafts = new Shafts(scene, world, { slices: Q.shafts || 18 });   // volumetric god rays: shadow-tested slices, boxel-density air
+const shafts = new Shafts(scene, world, { slices: Q.shafts || 18, terrain: terrain.uniforms });   // volumetric god rays: shadow-tested slices, boxel-density air
 shafts.on = settings.shafts && Q.shafts >= 0;
 let smokeToast = -99;
 const _pw = new THREE.Vector3();
