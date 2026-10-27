@@ -37,8 +37,8 @@ const ROCK_R = 240;        // boulders and logs inside this radius
 // Culling. The buffers are refilled only when the view has turned ROT_REFILL or moved
 // REFILL_M, so the frustum used to fill them is wider than the camera's by CULL.margin
 // (culling.js), which must stay above ROT_REFILL.
-const ROT_REFILL = 0.12;   // radians
-const SLICE_MS = 1.6;      // milliseconds a frame may spend building tiles and refilling the instance buffers
+const ROT_REFILL = 0.3;    // radians — wider slack so a small look-around doesn't re-cull the world
+const SLICE_MS = 2.2;      // milliseconds a frame may spend building tiles and refilling the instance buffers
 const OCC_FROM = 120;      // impostors nearer than this are never tested against the skyline
 const TALL = 30;           // tallest tree, for tile bounds
 const LOW_SUN = 0.55;      // below this (33 degrees up) shadows run long, and down a slope they run on without end: keep every caster

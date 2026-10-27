@@ -432,6 +432,19 @@ export function buildSigns(world, models) {
       }
     }
     if (!spot) continue;
+    if (th === main) {
+      // West Branch's real trailhead has a small gravel loop hanging off the road on the
+      // trail side: move the pull-in onto the loop's near arm when it lands on dry ground
+      const rp = road.dense[best];
+      const sd = Math.sign((th.x - rp[0]) * spot.rz - (th.z - rp[1]) * spot.rx) || 1;
+      const px = -spot.rz * sd, pz = spot.rx * sd;
+      const brook = world.nearestStream(rp[0] + px * 15, rp[1] + pz * 15);
+      const lake = world.lakeAt(rp[0] + px * 15, rp[1] + pz * 15);
+      if ((!brook.stream || brook.d > brook.stream.width / 2 + 9) && !lake) {
+        spot.lot = { px, pz, cx: rp[0] + px * 15, cz: rp[1] + pz * 15 };
+        spot.x = spot.lot.cx - px * 9; spot.z = spot.lot.cz - pz * 9;
+      }
+    }
     const cars = CAR_ORDER.map((model, i) => {
       const x = spot.x + spot.rx * i * CAR_SPACING, z = spot.z + spot.rz * i * CAR_SPACING;
       const obj = carModel(models[model]);
@@ -441,10 +454,39 @@ export function buildSigns(world, models) {
     });
     // the road the cars pulled in from, for the opening drive (src/intro.js): its points in driving order and where they park
     world.starts[th.name] = { cars, road: road.dense, roadRef: road, k: best, spot };
+    if (th === main && spot.lot) {
+      // the gravel loop itself: an oval ring of road tread around a worn island
+      const L = spot.lot, N = 30, pos = [], col = [], sid = [], idx = [];
+      for (let i = 0; i <= N; i++) {
+        const t = (i / N) * Math.PI * 2, ct = Math.cos(t), st = Math.sin(t);
+        const qx = L.cx + spot.rx * ct * 22 + L.px * st * 9, qz = L.cz + spot.rz * ct * 22 + L.pz * st * 9;
+        const tx = spot.rx * -st * 22 + L.px * ct * 9, tz = spot.rz * -st * 22 + L.pz * ct * 9;
+        const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
+        for (let s = 0; s < 2; s++) {
+          const off = (s - 0.5) * 4.6, x = qx + nx * off, z = qz + nz * off;
+          pos.push(x, world.height(x, z) + 0.06, z); sid.push(s, 1);
+          const v = 0.9 + hash2(i, s, 5) * 0.2;
+          col.push(0.2 * v, 0.185 * v, 0.16 * v);
+        }
+      }
+      for (let i = 0; i < N; i++) { const b = i * 2; idx.push(b, b + 3, b + 2, b, b + 2, b + 1); }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('aSide', new THREE.Float32BufferAttribute(sid, 2));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(g, draped({ vertexColors: true }));
+      m.receiveShadow = true;
+      group.add(m);
+      // keep the tread bare of grass: two clear circles along the loop's long axis
+      world.lot = { clear: [[L.cx - spot.rx * 9, L.cz - spot.rz * 9, 13], [L.cx + spot.rx * 9, L.cz + spot.rz * 9, 13]] };
+    }
     if (th === main) {
-      // the vault toilet sits at the end of the lot, a few metres behind the cars; its exact spot is approximate
-      const ox = spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3), oz = spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
-      place(landmark(models.outhouse, 2.5), ox, oz, spot.rx, spot.rz);
+      // the vault toilet sits inside the loop on the trail side, or behind the cars at other trailheads
+      const ox = spot.lot ? spot.lot.cx + spot.lot.px * 4.5 : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
+      const oz = spot.lot ? spot.lot.cz + spot.lot.pz * 4.5 : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
+      place(landmark(models.outhouse, 2.5), ox, oz, spot.lot ? -spot.lot.px : spot.rx, spot.lot ? -spot.lot.pz : spot.rz);
     }
     if (th === main) {
       // the sign stands where the trail leaves, on dry ground beside it

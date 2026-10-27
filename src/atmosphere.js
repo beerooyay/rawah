@@ -78,7 +78,7 @@ float cloudFbm(vec2 p, int oct) {
   vec2 q = cloudWarp((p + uCloudOff) / 20000.0);
   q.y *= 1.05;    // a slight pull along the drift, so banks have a grain
   float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, cloudRot1(q) * 2.73 + 0.31).r * 0.24;
-  if (oct > 2) f += texture2D(uCloudTex, cloudRot2(q) * 7.1 + 0.57).r * 0.13 + texture2D(uCloudTex, cloudRot3(q) * 19.3 + 0.11).r * 0.07;
+  if (oct > 2) f += texture2D(uCloudTex, cloudRot2(q) * 7.1 + 0.57).r * 0.12 + texture2D(uCloudTex, cloudRot3(q) * 11.3 + 0.11).r * 0.06;
   else f += 0.1;
   // clouds gather into banks: a low field decides where they mass, so the same cover
   // reads as clumps with blue between, not an even spread. relaxes toward real overcast.

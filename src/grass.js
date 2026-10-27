@@ -267,7 +267,8 @@ export class Grass {
           float t = position.y;
           // pressed down by what has walked or lain here, read from the press map around the camera
           vec4 pm = texture2D(uPress, (root - uPressC) / uPressS + 0.5);
-          float press = max(pm.a, bx.g * 0.75);   // the boxel field's wear lies the grass down too: walked paths stay walked
+          // the boxel's ~30 m wear blob reads as a walked path only at range; near, only real prints press
+          float press = max(pm.a, bx.g * 0.7 * smoothstep(50.0, 140.0, r));
           vec2 lean = (pm.gb - 0.5) * 4.0;
           vec3 p = vec3(root.x + lp.x * size * wm * 1.6, y0 - 0.03 + t * size * mix(0.72, 0.42, alpine) * (1.0 - press * 0.8), root.y + lp.z * size * wm * 1.6);
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared.

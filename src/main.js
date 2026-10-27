@@ -1728,7 +1728,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
+  grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip

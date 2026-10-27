@@ -13,7 +13,7 @@ import * as THREE from 'three';
 //              double-sided exceptions (cards, grass, impostors) are alpha
 //              cut-outs that must show both faces.
 
-export const CULL = { frustum: true, occlusion: true, casters: true, margin: 0.16 };
+export const CULL = { frustum: true, occlusion: true, casters: true, margin: 0.35 };
 
 const AZ = 512;                       // skyline bins around the circle
 const BIN = (Math.PI * 2) / AZ;

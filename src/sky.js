@@ -65,7 +65,7 @@ float noise(vec3 x) {
 // how much cloud one slice of the slab holds at a point: its footprint matches the shadows on the ground,
 // shrinking with height so the tops are smaller than the bases, and eroded so the edges billow
 float slab(vec2 P, float k, float dist) {
-  P += vec2(k * 130.0, k * -85.0);            // wind shear: towers lean downwind as they climb
+  P += vec2(k * 80.0, k * -55.0);             // wind shear: towers lean downwind as they climb
   float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
   float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
   float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
@@ -91,7 +91,7 @@ void main() {
     float stream = texture2D(uCloudTex, cloudRot3(q * 0.6 + 0.17 + uCloudOff * 0.00003)).r;
     vec2 qq = cloudWarp(q + vec2(stream * 0.18, 0.0));
     float s = texture2D(uCloudTex, qq).r * 0.62 + texture2D(uCloudTex, cloudRot1(qq) * vec2(2.9, 1.8) + 0.4).r * 0.38;
-    s *= 0.55 + 0.75 * stream;
+    s *= 0.3 + stream;   // carve harder: filaments where the streamer field says, not an even film
     float ci = smoothstep(0.62, 0.88, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
     col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 7.0) * 0.4, ci * 0.38 * (1.0 - uNight * 0.85));
   }
