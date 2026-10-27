@@ -138,6 +138,9 @@ void mtnTri(float layer, float tile, vec3 wp, vec2 pdx, vec2 pdy, vec3 wdx, vec3
 export const MTN_NORMAL = /* glsl */ `
         vec3 mtnAlb0 = vec3(0.5), mtnAlb1 = vec3(0.5), mtnAvg0 = vec3(0.5), mtnAvg1 = vec3(0.5);
         float mtnMix = 0.0, mtnWet = 0.0, mtnHt = 0.5;
+        // meso structure: once the photo tile blurs to its average the slopes still want
+        // ribs and mottle — only where the detail is gone, never underfoot
+        float mtnMeso = 0.5, mtnMesoK = smoothstep(140.0, 420.0, camD) * (1.0 - smoothstep(900.0, 2400.0, camD));
         vec2 mpx = dFdx(p), mpy = dFdy(p);
         vec3 wdx = dFdx(vWPos), wdy = dFdy(vWPos);
         vec3 tw = pow(abs(wn), vec3(4.0));
@@ -156,6 +159,18 @@ export const MTN_NORMAL = /* glsl */ `
           float wTil = smoothstep(0.76, 0.9, ny) * clamp(rock * 1.1 + alp * 0.6 + burn * 0.4, 0.0, 1.0) * open * (0.2 + 0.8 * smoothstep(0.35, 0.65, nz1 + (nz2 - 0.5) * 0.3));
           float wMed = smoothstep(0.74, 0.9, ny) * open * (1.0 - rock) * smoothstep(2500.0, 2900.0, alt) * (1.0 - 0.7 * smoothstep(0.45, 0.7, nz1));
           float wCrk = clamp(maskAt(p) * 1.3 + smoothstep(0.1, 0.5, moist) * 1.2, 0.0, 1.0) * smoothstep(0.68, 0.9, ny) * (1.0 - forest * 0.5);
+          // talus ribs run down the fall line, rock ribs and meadow patches alternate at
+          // tens of metres, so a slope is never one flat field of a single texture
+          if (mtnMesoK > 0.0) {
+            vec2 fd = wn.xz; float fl = length(fd); fd = fl > 1e-3 ? fd / fl : vec2(0.0, 1.0);
+            vec2 rp = vec2(dot(p, vec2(-fd.y, fd.x)) / 24.0, dot(p, fd) / 68.0);
+            float rib = texture2D(uNoise, rp + 0.19).r * 0.62 + texture2D(uNoise, rp * 2.7 + 0.53).r * 0.38;
+            float mott = texture2D(uNoise, p / 47.0 + 0.71).r;
+            mtnMeso = rib * 0.65 + mott * 0.35;
+            wTal *= 1.0 - mtnMesoK * 0.55 * smoothstep(0.5, 0.72, rib);
+            wBed += mtnMesoK * 0.5 * smoothstep(0.5, 0.72, rib) * smoothstep(0.4, 0.6, ny);
+            wMed *= 0.55 + 0.8 * smoothstep(0.35, 0.7, mott);
+          }
           float ws[5] = float[5](wTal, wTil, wBed, wMed, wCrk);
           int i0 = 0;
           for (int k = 1; k < 5; k++) if (ws[k] > ws[i0]) i0 = k;
@@ -198,6 +213,10 @@ export const MTN_NORMAL = /* glsl */ `
             if (doN > 0.5) {
               mtnHt = mix(h0v, h1v, mtnMix);
               wn = normalize(wn + mix(no0, no1, mtnMix) * uMtnNormal * mtnW * (1.0 - smoothstep(50.0, 110.0, camD)) * (1.0 - 0.35 * mtnWet));
+            } else if (!lite) {
+              // past the detail range the height channel's coarse mips still carry the massing
+              vec2 huv = tw.y > 0.5 ? p / t0 : (tw.x > tw.z ? vec2(vWPos.z, vWPos.y) / t0 : vec2(vWPos.x, vWPos.y) / t0);
+              mtnHt = mix(textureLod(uMtnN, vec3(huv, float(i0)), 5.0).b, 0.5, 0.35);
             }
           }
         }`;
@@ -212,6 +231,7 @@ export const MTN_COLOR = /* glsl */ `
           vec3 native = tex * pow(clamp(lumS / max(lumA, 0.02), 0.5, 1.8), 0.6);           // the photograph's own colour, lit like the land
           vec3 col = mix(relative, native, (1.0 - smoothstep(30.0, 380.0, camD)) * 0.85);
           col *= 0.78 + 0.44 * mtnHt;                                                      // crevices and gaps between stones are darker
+          col *= 0.86 + 0.28 * mix(0.5, mtnMeso, mtnMesoK);                                 // ribs, chutes and meadow mottle survive at range
           col *= 1.0 - 0.4 * mtnWet;                                                       // soaked rock and soil: darker, richer
           col = mix(col, col * vec3(0.9, 0.97, 1.04), mtnWet * 0.4);
           diffuseColor.rgb = mix(diffuseColor.rgb, col, mtnW * uMtnStrength);

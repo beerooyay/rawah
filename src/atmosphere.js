@@ -82,7 +82,8 @@ float cloudFbm(vec2 p, int oct) {
   else f += 0.1;
   // clouds gather into banks: a low field decides where they mass, so the same cover
   // reads as clumps with blue between, not an even spread. relaxes toward real overcast.
-  float bank = texture2D(uCloudTex, cloudRot3((p + uCloudOff) / 5200.0)).r;
+  // the field drifts slower than the layer, so banks gather and dissolve as clouds pass — shapes live, not just slide
+  float bank = texture2D(uCloudTex, cloudRot3((p + uCloudOff * 0.37) / 5200.0)).r;
   f *= mix(1.0, 0.5 + bank, 0.55 * (1.0 - uCloudCover * 0.6));
   return f;
 }
@@ -110,7 +111,7 @@ export function cloudDensityAt(x, z) {
   const ux = (x + off.x) / 20000, uy = (z + off.y) / 20000;
   const wx = at(ux * 0.61 + 0.23, uy * 0.61 + 0.41) - 0.5, wy = at(ux * 0.61 + 0.71, uy * 0.61 + 0.13) - 0.5;
   const u = ux + wx * 0.2, v = (uy + wy * 0.2) * 1.05;
-  const bx = (x + off.x) / 5200, by = (z + off.y) / 5200;
+  const bx = (x + off.x * 0.37) / 5200, by = (z + off.y * 0.37) / 5200;
   const bank = at(-0.68 * bx - 0.73 * by, 0.73 * bx - 0.68 * by);
   const cover = atmosphere.uCloudCover.value;
   const f = (at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1)
@@ -187,14 +188,16 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
         vec3 wn = normalize((uViewInv * vec4(normal, 0.0)).xyz);
         diffuseColor.rgb *= 1.0 - uWet * ${(0.32 * weather).toFixed(3)} * smoothstep(-0.2, 0.6, wn.y);
         if (uSnow > 0.0) {
-          float drift = texture2D(uCloudTex, wp.xz / 37.0).r * 0.6 + texture2D(uCloudTex, wp.xz / 4.1).r * 0.4;
+          float drift = texture2D(uCloudTex, wp.xz / 340.0).r * 0.45 + texture2D(uCloudTex, wp.xz / 37.0).r * 0.35 + texture2D(uCloudTex, wp.xz / 4.1).r * 0.2;
           float line = smoothstep(uSnowLine - 90.0, uSnowLine + 60.0, wp.y + (drift - 0.5) * 120.0);
           float cover = clamp(uSnow * 1.6 - (1.0 - drift) * 0.7, 0.0, 1.0) * line * smoothstep(0.3, 0.75, wn.y);
+          // thin packs patch, they don't tint: snow owns drifts and hollows, bare ribs show through
+          cover = smoothstep(0.18, 0.8, cover);
           // where something has stood the snow is pushed off: the ground under it shows, pressed darker
           float tp = length(vFogView) < 110.0 ? pressAt(wp.xz) : 0.0;
           cover *= 1.0 - tp * 0.95;
           diffuseColor.rgb *= 1.0 - tp * 0.4;
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.86, 0.92), cover * ${weather.toFixed(2)});
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.91, 0.96), cover * ${weather.toFixed(2)});
         }
       }`);
   }

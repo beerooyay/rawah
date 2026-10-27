@@ -87,7 +87,11 @@ void main() {
     float ht = 9000.0 - cameraPosition.y;
     vec2 P = cameraPosition.xz + d.xz * ht / h;
     vec2 q = (P + uCloudOff * 1.6) / vec2(42000.0, 17000.0);
-    float s = texture2D(uCloudTex, cloudWarp(q)).r * 0.62 + texture2D(uCloudTex, cloudRot1(q) * vec2(2.9, 1.8) + 0.4).r * 0.38;
+    // cirrus gathers into streamers, not an even film: a slow field bunches and shears it
+    float stream = texture2D(uCloudTex, cloudRot3(q * 0.6 + 0.17 + uCloudOff * 0.00003)).r;
+    vec2 qq = cloudWarp(q + vec2(stream * 0.3, 0.0));
+    float s = texture2D(uCloudTex, qq).r * 0.62 + texture2D(uCloudTex, cloudRot1(qq) * vec2(2.9, 1.8) + 0.4).r * 0.38;
+    s *= 0.55 + 0.75 * stream;
     float ci = smoothstep(0.6, 0.86, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
     col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 4.0) * 0.5, ci * 0.38 * (1.0 - uNight * 0.85));
   }
