@@ -128,7 +128,7 @@ export function updateAtmosphere(sky, camera) {
   atmosphere.uSunWorld.value.copy(sky.sunDir);
   atmosphere.uViewInv.value.copy(camera.matrixWorld);
   const day = Math.max(0, Math.min(1, (sky.sunDir.y + 0.04) / 0.2));
-  atmosphere.uSunFog.value.copy(sky.uniforms.uGlow.value).lerp(sky.uniforms.uHorizon.value, 0.35).multiplyScalar((0.55 + 0.45 * day) * (1 - 0.7 * sky.overcast));
+  atmosphere.uSunFog.value.copy(sky.uniforms.uGlow.value).lerp(sky.uniforms.uHorizon.value, 0.35).multiplyScalar((0.42 + 0.38 * day) * (1 - 0.7 * sky.overcast));
   atmosphere.uSunCol.value.copy(sky.sun.color).multiplyScalar(day * 0.9 * (1 - 0.8 * sky.overcast) * (1 - 0.85 * sky.sunBlock) * (1 - sky.terrainBlock));
   atmosphere.uCloudShade.value = 0.85 * day;
 }
@@ -177,7 +177,7 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
           fogFactor = 1.0 - (1.0 - fogFactor) * (1.0 - pool);
         }
         float toSun = max(dot(normalize(vFogView), uSunView), 0.0);
-        vec3 haze = mix(fogColor, uSunFog, pow(toSun, 7.0) * 0.75);
+        vec3 haze = mix(fogColor, uSunFog, pow(toSun, 10.0) * 0.7);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, haze, fogFactor);
       #endif`);
   if (weather > 0) {

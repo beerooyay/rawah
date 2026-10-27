@@ -81,7 +81,7 @@ void main() {
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
-  col += uGlow * (pow(sd, 6.0) * (0.1 + 0.18 * uSunVis) + pow(sd, 48.0) * 0.45 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
+  col += uGlow * (pow(sd, 12.0) * (0.07 + 0.15 * uSunVis) + pow(sd, 48.0) * 0.45 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
   // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
   if (h > 0.03) {
     float ht = 9000.0 - cameraPosition.y;
@@ -93,7 +93,7 @@ void main() {
     float s = texture2D(uCloudTex, qq).r * 0.62 + texture2D(uCloudTex, cloudRot1(qq) * vec2(2.9, 1.8) + 0.4).r * 0.38;
     s *= 0.55 + 0.75 * stream;
     float ci = smoothstep(0.62, 0.88, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
-    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 4.0) * 0.5, ci * 0.38 * (1.0 - uNight * 0.85));
+    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 7.0) * 0.4, ci * 0.38 * (1.0 - uNight * 0.85));
   }
   // clouds: a slab of cumulus cut into slices. Lower slices are wider and darker (the flat grey base),
   // higher ones shrink to billowing tops; each slice looks toward the sun to see what shades it

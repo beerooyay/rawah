@@ -447,10 +447,16 @@ export function buildSigns(world, models) {
       place(landmark(models.outhouse, 2.5), ox, oz, spot.rx, spot.rz);
     }
     if (th === main) {
-      // the sign stands where the trail leaves
+      // the sign stands where the trail leaves, on dry ground beside it
       const sx = th.x + (tp[0] - th.x) * 0.25, sz = th.z + (tp[1] - th.z) * 0.25;
       const fx = tp[0] - th.x, fz = tp[1] - th.z, fl = Math.hypot(fx, fz) || 1;
-      place(landmark(models.wildernessSign, 2.4), sx - (fz / fl) * 4, sz + (fx / fl) * 4, -fx / fl, -fz / fl);
+      for (const off of [4, 6, 8, -4, -6, 10]) {
+        const gx = sx - (fz / fl) * off, gz = sz + (fx / fl) * off;
+        const bk = world.nearestStream(gx, gz);
+        if ((bk.stream && bk.d < bk.stream.width / 2 + 1.2) || world.lakeAt(gx, gz)) continue;
+        place(landmark(models.wildernessSign, 2.4), gx, gz, -fx / fl, -fz / fl);
+        break;
+      }
       // the trailhead sign stands at the lot, on the car side
       place(landmark(models.trailheadSign, 2.2), th.x + (fz / fl) * 6, th.z - (fx / fl) * 6, -fx / fl, -fz / fl);
     }
