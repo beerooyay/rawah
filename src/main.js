@@ -271,6 +271,10 @@ const flare = new LensFlare();
 flare.on = settings.flare;
 const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
 const shafts = new Shafts(scene, world, { slices: Q.shafts || 18, terrain: terrain.uniforms });   // volumetric god rays: shadow-tested slices, boxel-density air
+// every certified field in the valley, on the one substrate (src/cells.js):
+// ground moisture/wear, water silt/foam, valley mist, campfire smoke and heat
+const fields = { ground: boxels, water: waterCells.b, mist: mist.b, smoke: plume.smoke, heat: plume.heat };
+fields.stats = () => { const s = { awake: 0, events: 0, violations: 0, merged: 0, retired: 0, ms: 0, per: {} }; for (const [k, f] of Object.entries(fields)) if (f.stats) { s.awake += f.awakeN; s.violations += f.stats.violations; s.merged += f.stats.merged; s.retired += f.stats.retired; s.ms += f.stats.ms || 0; s.events += f.stats.events + (f.sources ? f.sources.size : 0); s.per[k] = { awake: f.awakeN, live: f.stats.live, ms: +(f.stats.ms || 0).toFixed(4) }; } return s; };
 shafts.on = settings.shafts && Q.shafts >= 0;
 let smokeToast = -99;
 const _pw = new THREE.Vector3();
@@ -1865,7 +1869,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

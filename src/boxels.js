@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Cells } from './cells.js';
 
 // Certified-window world memory ("boxels"). A field over the valley holds
 // moisture and wear; every event gets a closed-form footprint from the cone
@@ -11,46 +12,29 @@ import * as THREE from 'three';
 // pair is merged into one event of summed mass. Weather rides the gauge clock
 // Theta = integral I dt: intensity only scales the action clock, it never
 // wakes a cell. Cost scales with what happens, not with world size.
+// The certificate machinery it shares with the valley's other fields is the
+// substrate in cells.js.
 
-export class Boxels {
+export class Boxels extends Cells {
   /**
    * n: grid side in cells covering world.extent. Moisture diffuses and dries
    * (D, k in theta-time); wear only fades. eps is the visibility tolerance.
    */
   constructor(world, { n = 512, d = 12, k = 0.02, kWear = 0.002, eps = 0.002, shift = 1 } = {}) {
+    super({ n, cell: world.extent / n, eps, nMax: 48, rho0: eps * 0.25 * k / 2, cellCutDiv: 9 });
     this.sShift = shift;                // cells the continuum envelope is moved inward to cover the lattice (more when the decay length is short)
-    this.n = n;
-    this.cell = world.extent / n;
-    this.d = d; this.k = k; this.kWear = kWear; this.eps = eps;
-    this.u = new Float32Array(n * n);   // moisture, 0..1
+    this.d = d; this.k = k; this.kWear = kWear;
     this.w = new Float32Array(n * n);   // wear, 0..1
     this.live = new Map();              // wear cells: cell index -> theta expiry (exact first passage)
     this.theta = 0;
-    // certified moisture composition (see #ledgerAdd): the tolerance eps is split three ways
-    this.epsWin = eps * 0.5;            // a cell sleeps while the summed peaks of the live events on it stay below this
-    this.epsRet = eps * 0.25;           // budget for retired events' residual fields (decays with the dissipation)
-    this.epsCut = eps * 0.25;           // budget for ledger tails dropped below `cut`
-    this.nMax = 48;                     // live events before the closest pair is merged
-    this.cut = this.epsCut / this.nMax;
-    this.rho0 = this.epsRet * k / 2;    // residual an event may leave when it retires (at most two retirements per theta unit)
-    this.retired = 0;                   // decaying sum of those residuals
     this.ev = [];                       // live events
-    this.L = new Float64Array(n * n);   // ledger: sum over live events of their certified peak at the cell
-    this.awake = new Int32Array(n * n); this.awakeN = 0;   // cells whose ledger exceeds epsWin, and where each sits in that list
-    this.slot = new Int32Array(n * n).fill(-1);
     this.sTab = null;
     this.px = new Uint8Array(n * n * 4);
     this.texture = new THREE.DataTexture(this.px, n, n);
     this.dirty = true;              // set by events and steps; #paint only runs when something changed
     this.paintT = -1;               // theta of the last repaint — moisture moves slowly, ~12 Hz is plenty
-    this.stats = { touched: 0, total: 0, ms: 0, live: 0, events: 0, violations: 0, merged: 0, retired: 0, deferred: 0, events_live: 0 };
     this.stepAcc = 0;
     this.ell = 1 / Math.acosh(1 + k / (2 * d));   // discrete decay length of the super-solution, in cells
-  }
-
-  #idx(x, z) {
-    const n = this.n, cx = Math.floor((x + this.n * this.cell / 2) / this.cell), cz = Math.floor((z + this.n * this.cell / 2) / this.cell);
-    return (cx < 0 || cz < 0 || cx >= n || cz >= n) ? -1 : cz * n + cx;
   }
 
   /** Cone radius in cells for an event of mass A: the certified window. */
@@ -111,32 +95,28 @@ export class Boxels {
   }
 
   /**
-   * Add (sign +1) or remove (-1) an event's certified peaks on every cell it
-   * can reach. The grid has reflecting edges, so the field is the free-space
-   * field plus its mirror images (Remark 6.9's finite-domain case): the event
-   * is also counted from its reflection across each edge and each corner.
+   * The grid has reflecting edges, so the field is the free-space field plus
+   * its mirror images (Remark 6.9's finite-domain case): the event is also
+   * counted from its reflection across each edge and each corner.
    */
-  #ledgerAdd(e, sign) {
-    const { n, L } = this, cut = this.cut / 9;
-    // reach: where A s(rho) falls under the cut
+  images(e) {
+    const n = this.n, xs = [e.cx, -1 - e.cx, 2 * n - 1 - e.cx], zs = [e.cz, -1 - e.cz, 2 * n - 1 - e.cz], out = [];
+    for (const ix of xs) for (const iz of zs) out.push({ cx: ix, cz: iz });
+    return out;
+  }
+
+  /** The certified peak an event puts on the cell dx, dz from an image centre: its mass times s(rho), never above its own deposit density (max principle). */
+  bound(dx, dz, e) {
+    const rho = Math.max(0, Math.hypot(dx, dz) - e.r);
+    return Math.min(e.a, e.A * this.#s(rho));
+  }
+
+  /** Ledger radius: where A s(rho) falls under the tail cut. */
+  reach(e) {
     let R = 0;
-    while (R < 1000 && e.A * this.#s(R + 1) >= cut) R++;
-    R += e.r + 1;
-    e.R = R;
-    const xs = [e.cx, -1 - e.cx, 2 * n - 1 - e.cx], zs = [e.cz, -1 - e.cz, 2 * n - 1 - e.cz];
-    for (const ix of xs) for (const iz of zs) {
-      const x0 = Math.max(0, ix - R), x1 = Math.min(n - 1, ix + R), z0 = Math.max(0, iz - R), z1 = Math.min(n - 1, iz + R);
-      for (let z = z0; z <= z1; z++) {
-        for (let x = x0; x <= x1; x++) {
-          const rho = Math.max(0, Math.hypot(x - ix, z - iz) - e.r);
-          const p = Math.min(e.a, e.A * this.#s(rho));   // never more than the event's own density (max principle)
-          if (p < cut) continue;
-          const i = z * n + x;
-          L[i] = Math.max(0, L[i] + sign * p);
-          if (sign > 0 && L[i] > this.epsWin && this.slot[i] < 0) { this.slot[i] = this.awakeN; this.awake[this.awakeN++] = i; }
-        }
-      }
-    }
+    while (R < 1000 && e.A * this.#s(R + 1) >= this.cellCut) R++;
+    e.R = R + e.r + 1;
+    return e.R;
   }
 
   /** Theta at which an event's whole field is certified under rho0: every part decays as e^(-k s) A / (4 pi D s) at its peak. */
@@ -158,7 +138,7 @@ export class Boxels {
       if (cost < best) { best = cost; bi = i; bj = j; }
     }
     const a = ev[bi], b = ev[bj];
-    this.#ledgerAdd(a, -1); this.#ledgerAdd(b, -1);
+    this.ledgerAdd(a, -1); this.ledgerAdd(b, -1);
     const d = Math.hypot(a.cx - b.cx, a.cz - b.cz);
     let big = a, small = b; if (b.r > a.r) { big = b; small = a; }
     let cx = big.cx, cz = big.cz, r = big.r;
@@ -172,13 +152,13 @@ export class Boxels {
     const m = { cx, cz, r, a: d <= a.r + b.r + 1 ? a.a + b.a : Math.max(a.a, b.a), A: a.A + b.A, parts: a.parts.concat(b.parts), ret: 0, R: 0 };
     m.ret = this.#retireAt(m);
     ev.splice(bj, 1); ev[bi] = m;
-    this.#ledgerAdd(m, +1);
+    this.ledgerAdd(m, +1);
     this.stats.merged++;
   }
 
   /** Moisture event: saturate every cell in the disc with a; the ledger adds the event's certified peak to every cell it can reach. */
   wet(x, z, a, r = 0) {
-    const i0 = this.#idx(x, z); if (i0 < 0) return;
+    const i0 = this.idx(x, z); if (i0 < 0) return;
     const cx = i0 % this.n, cz = (i0 / this.n) | 0;
     let cells = 0;
     for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
@@ -186,21 +166,21 @@ export class Boxels {
       if (dx * dx + dz * dz <= r * r && i >= 0 && i < this.u.length) {
         this.u[i] = Math.min(1, this.u[i] + a); cells++;
         // deposits stack in a sleeping cell: once it holds more than the sleeping tolerance it must be stepped
-        if (this.u[i] > this.epsWin && this.slot[i] < 0) { this.slot[i] = this.awakeN; this.awake[this.awakeN++] = i; }
+        if (this.u[i] > this.epsWin) this.wake(i);
       }
     }
     this.dirty = true;
     const e = { cx, cz, r, a, A: a * cells, parts: [[a * cells, this.theta]], ret: 0, R: 0 };
     e.ret = this.#retireAt(e);
     this.ev.push(e);
-    this.#ledgerAdd(e, +1);
+    this.ledgerAdd(e, +1);
     if (this.ev.length > this.nMax) this.#merge();
     this.stats.events++;
   }
 
   /** Drying event: pull `a` moisture out of every cell in the disc. Removing mass can only shrink the field, so every live certificate still holds: nothing to add. */
   dry(x, z, a, r = 0) {
-    const i0 = this.#idx(x, z); if (i0 < 0) return;
+    const i0 = this.idx(x, z); if (i0 < 0) return;
     const cx = i0 % this.n, cz = (i0 / this.n) | 0;
     for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
       const i = (cz + dz) * this.n + cx + dx;
@@ -212,13 +192,13 @@ export class Boxels {
 
   /** Moisture and wear at a world point, nearest cell. For game reads (mist, stamina), not the shader. */
   sample(x, z) {
-    const i = this.#idx(x, z);
+    const i = this.idx(x, z);
     return i < 0 ? { u: 0, w: 0 } : { u: this.u[i], w: this.w[i] };
   }
 
   /** Wear event: a footstep. No diffusion, so no cone: the mark fades on its own clock, and the cell sleeps at the exact first passage of its own value (Example 7.5), however many steps stacked on it. */
   wear(x, z, a) {
-    const i = this.#idx(x, z); if (i < 0) return;
+    const i = this.idx(x, z); if (i < 0) return;
     this.w[i] = Math.min(1, this.w[i] + a);
     this.live.set(i, this.theta + Math.log(Math.max(this.w[i], this.eps) / this.eps) / this.kWear);
     this.dirty = true;
@@ -227,37 +207,29 @@ export class Boxels {
 
   /** One gauge-clock step: retire what can retire, then integrate the cells the ledger says can matter. */
   #step(dt) {
-    const { u, w, L, n, d, k, kWear, epsWin } = this;
+    const { u, w, n, d, k, kWear } = this;
     const decay = Math.exp(-k * dt);
     this.retired *= decay;
     // retire events whose whole field is under rho0, while the retired residuals stay inside their budget
     for (let q = this.ev.length - 1; q >= 0; q--) {
       const e = this.ev[q];
       if (this.theta < e.ret) continue;
-      if (this.retired + this.rho0 > this.epsRet) { e.ret = this.theta + 1; this.stats.deferred++; continue; }
-      this.#ledgerAdd(e, -1);
-      this.retired += this.rho0;
+      if (!this.tryRetire()) { e.ret = this.theta + 1; this.stats.deferred++; continue; }
+      this.ledgerAdd(e, -1);
       this.ev.splice(q, 1);
       this.stats.retired++;
     }
     // moisture: only awake cells; a cell whose ledger has fallen under epsWin goes back to sleep (and is audited)
+    this.sweep();
     const next = this.next || (this.next = new Float32Array(this.awake.length));
-    let a = 0;
-    while (a < this.awakeN) {
+    for (let a = 0; a < this.awakeN; a++) {
       const i = this.awake[a];
-      if (L[i] <= epsWin) {
-        if (u[i] > epsWin * 1.5) this.stats.violations++;   // the ledger says nothing should be here: report it, and keep stepping the cell
-        if (u[i] <= epsWin) {                                // asleep, keeping the little it holds (stale, under the tolerance)
-          const last = this.awake[--this.awakeN]; this.awake[a] = last; this.slot[last] = a; this.slot[i] = -1; continue;
-        }
-      }
       const l = i % n, m = i - l;
       const lap = (l > 0 ? u[i - 1] : u[i]) + (l < n - 1 ? u[i + 1] : u[i]) + (m >= n ? u[i - n] : u[i]) + (m < u.length - n ? u[i + n] : u[i]) - 4 * u[i];
       next[a] = Math.max(0, u[i] + dt * (d * lap - k * u[i]));   // every cell reads the old values: the step does not depend on the order of the list
       this.stats.touched++; this.stats.total++;
-      a++;
     }
-    for (let q = 0; q < a; q++) u[this.awake[q]] = next[q];
+    for (let a = 0; a < this.awakeN; a++) u[this.awake[a]] = next[a];
     if (this.awakeN) this.dirty = true;
     // wear: only its own cells, each until its own first passage
     for (const [i, until] of this.live) {

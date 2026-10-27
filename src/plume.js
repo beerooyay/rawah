@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Cells } from './cells.js';
 
 // Smoke and heat from the campfire, carried by the paper's certified driven
 // front (Certified Locality in Diffusive Simulation, Rouyea and Bourgeois,
@@ -31,27 +32,19 @@ function rate(D, kAxis, v, down) {
   return lo;
 }
 
-export class Field {
+export class Field extends Cells {
   /**
    * n cells a side of `cell` metres. D (cell^2/s), k (1/s), v = [vx, vz] the
    * largest wind (cells/s); at run time the wind is that direction scaled by
    * 0..1. eps is the tolerance and U the largest level any source is held at.
    */
   constructor({ n = 96, cell = 1, D = 1, k = 0.03, v = [0, 0], eps = 0.02, U = 1, dt = 0.05 } = {}) {
-    this.n = n; this.cell = cell; this.D = D; this.k = k; this.v = v; this.eps = eps; this.U = U; this.dt = dt;
+    super({ n, cell, eps, nMax: 4, rho0: eps * 0.25 / 4 });
+    this.D = D; this.k = k; this.v = v; this.U = U; this.dt = dt;
     if (dt * (4 * D + Math.abs(v[0]) + Math.abs(v[1]) + k) > 1) throw new Error('step too large for a monotone scheme');
-    this.u = new Float32Array(n * n);
-    this.L = new Float64Array(n * n);                       // ledger: sum of the live sources' supersolutions
-    this.slot = new Int32Array(n * n).fill(-1);
-    this.awake = new Int32Array(n * n); this.awakeN = 0;
-    this.epsWin = eps * 0.5; this.epsRet = eps * 0.25; this.epsCut = eps * 0.25;
-    this.cut = this.epsCut / 4;                             // up to four live sources
-    this.rho0 = this.epsRet / 4;
-    this.retired = 0;
     this.sources = new Map();                               // id -> { cx, cz, r, level, off: null | time it may retire }
     this.wind = 1;                                          // 0..1 of v
     this.t = 0; this.acc = 0;
-    this.stats = { touched: 0, violations: 0, steps: 0 };
     // supersolution rates per axis and side (k split evenly between the axes); pos/neg: decay toward +/- axis
     const kA = k / 2, sx = sgn(v[0]), sz = sgn(v[1]), ax = Math.abs(v[0]), az = Math.abs(v[1]);
     // downwind the worst wind is the strongest; upwind it is no wind at all (the drift only helps there)
@@ -65,26 +58,14 @@ export class Field {
     return Math.min(this.U, this.U * Math.exp(ax * (r - Math.abs(dx)) + az * (r - Math.abs(dz))));
   }
 
-  /** Add or remove a source's supersolution from the ledger. */
-  #ledger(s, sign) {
-    const { n, L } = this;
-    let R = s.r;
-    while (R < 4 * n && (this.#w(R, 0, s.r) >= this.cut || this.#w(-R, 0, s.r) >= this.cut || this.#w(0, R, s.r) >= this.cut || this.#w(0, -R, s.r) >= this.cut)) R++;
-    R = Math.min(R + 1, 2 * n);
-    const x0 = Math.max(0, s.cx - R), x1 = Math.min(n - 1, s.cx + R), z0 = Math.max(0, s.cz - R), z1 = Math.min(n - 1, s.cz + R);
-    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
-      const p = this.#w(x - s.cx, z - s.cz, s.r);
-      if (p < this.cut) continue;
-      const i = z * n + x;
-      L[i] = Math.max(0, L[i] + sign * p);
-      if (sign > 0 && L[i] > this.epsWin && this.slot[i] < 0) { this.slot[i] = this.awakeN; this.awake[this.awakeN++] = i; }
-    }
-  }
+  /** A source's certified bound on an offset cell: its anisotropic upwind supersolution. */
+  bound(dx, dz, s) { return this.#w(dx, dz, s.r); }
 
-  /** (x, z) in metres relative to the field's centre -> cell index, or -1. */
-  idx(x, z) {
-    const n = this.n, cx = Math.floor(x / this.cell + n / 2), cz = Math.floor(z / this.cell + n / 2);
-    return cx < 0 || cz < 0 || cx >= n || cz >= n ? -1 : cz * n + cx;
+  /** Ledger radius: where the supersolution drops under the cut on every axis. */
+  reach(s) {
+    let R = s.r;
+    while (R < 4 * this.n && (this.#w(R, 0, s.r) >= this.cut || this.#w(-R, 0, s.r) >= this.cut || this.#w(0, R, s.r) >= this.cut || this.#w(0, -R, s.r) >= this.cut)) R++;
+    return Math.min(R + 1, 2 * this.n);
   }
 
   /** Start or update a driven source. Its level may change freely up to U. */
@@ -94,7 +75,7 @@ export class Field {
       const i = this.idx(x, z); if (i < 0) return;
       s = { cx: i % this.n, cz: (i / this.n) | 0, r, level: 0, off: null };
       this.sources.set(id, s);
-      this.#ledger(s, +1);
+      this.ledgerAdd(s, +1);
     }
     s.off = null;
     s.level = Math.min(this.U, Math.max(0, level));
@@ -110,29 +91,27 @@ export class Field {
 
   sample(x, z) { const i = this.idx(x, z); return i < 0 ? 0 : this.u[i]; }
 
+  /** Absorbing edges: a cleared cell forgets its tail outright. */
+  sleepCell(i) {
+    if (this.u[i] <= this.epsWin * 1.5) { this.u[i] = 0; return true; }
+    return false;
+  }
+
   #step(dt) {
-    const { u, L, n, D, k, epsWin } = this;
+    const { u, n, D, k } = this;
     const vx = this.v[0] * this.wind, vz = this.v[1] * this.wind;
     this.retired *= Math.exp(-k * dt);
     for (const [id, s] of this.sources) {
       if (s.off === null || this.t < s.off) continue;
-      if (this.retired + this.rho0 > this.epsRet) { s.off = this.t + 1; continue; }
-      this.#ledger(s, -1); this.retired += this.rho0; this.sources.delete(id);
+      if (!this.tryRetire()) { s.off = this.t + 1; continue; }
+      this.ledgerAdd(s, -1); this.sources.delete(id); this.stats.retired++;
     }
     // the driven cells are held at their level
     for (const s of this.sources.values()) if (s.off === null) for (let dz = -s.r; dz <= s.r; dz++) for (let dx = -s.r; dx <= s.r; dx++) {
       const x = s.cx + dx, z = s.cz + dz;
       if (dx * dx + dz * dz <= s.r * s.r && x >= 0 && x < n && z >= 0 && z < n) u[z * n + x] = s.level;
     }
-    let a = 0;
-    while (a < this.awakeN) {
-      const i = this.awake[a];
-      if (L[i] <= epsWin) {
-        if (u[i] > epsWin * 1.5) this.stats.violations++;
-        else { u[i] = 0; const last = this.awake[--this.awakeN]; this.awake[a] = last; this.slot[last] = a; this.slot[i] = -1; continue; }
-      }
-      a++;
-    }
+    this.sweep();
     // explicit monotone step: absorbing edges (ghost cells are 0), upwind drift
     const next = this.next || (this.next = new Float32Array(n * n));
     for (let q = 0; q < this.awakeN; q++) {
@@ -163,7 +142,7 @@ export class Field {
   }
 
   get asleep() { return this.awakeN === 0 && this.sources.size === 0; }
-  reset() { this.u.fill(0); this.L.fill(0); this.slot.fill(-1); this.awakeN = 0; this.sources.clear(); this.retired = 0; this.acc = 0; }
+  reset() { super.reset(); this.sources.clear(); this.acc = 0; }
 
   /**
    * Falsification: a fire at the centre with a flickering level and a wind that
