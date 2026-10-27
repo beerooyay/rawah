@@ -32,6 +32,8 @@ import gzip
 import json
 import math
 import os
+import sys
+import urllib.parse
 import urllib.request
 
 import numpy as np
@@ -120,67 +122,17 @@ def lonlat_to_world(lon, lat):
     return merc_to_world(*to_merc.transform(lon, lat))
 
 
-# ---------------------------------------------------------------- elevation
-def terrarium(z, x, y):
-    path = os.path.join(CACHE, f'terrarium_{z}_{x}_{y}.png')
-    if not os.path.exists(path):
-        urllib.request.urlretrieve(TERRARIUM.format(z=z, x=x, y=y), path)
-    a = np.asarray(Image.open(path).convert('RGB')).astype(np.float64)
-    return a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
-
-
-def mosaic(z, x0, y0, nx, ny):
-    return np.vstack([np.hstack([terrarium(z, x, y) for x in range(x0, x0 + nx)]) for y in range(y0, y0 + ny)])
-
-
-base = mosaic(Z, X0, Y0, NT, NT).astype(np.float32)
-H = ndimage.zoom(base, GRID / N_PX, order=1).astype(np.float32)
-
-def cached(name, build):
-    path = os.path.join(CACHE, f'{name}.npy')
-    if os.path.exists(path):
-        return np.load(path)
-    a = build()
-    np.save(path, a)
-    return a
-
-
-to_utm = Transformer.from_crs(4326, 26913, always_xy=True)
+to_geo = Transformer.from_crs(3857, 4326, always_xy=True)
 lon_w, lon_e = lon_of(X0 * 256, Z), lon_of((X0 + NT) * 256, Z)
 lat_n, lat_s = lat_of(Y0 * 256, Z), lat_of((Y0 + NT) * 256, Z)
-ex = [to_utm.transform(lo, la) for lo in (lon_w, lon_e) for la in (lat_n, lat_s)]
-tiles = [f'x{tx}y{ty}' for tx in range(int(min(e[0] for e in ex) // 1e4), int(max(e[0] for e in ex) // 1e4) + 1)
-         for ty in range(int(min(e[1] for e in ex) // 1e4) + 1, int(max(e[1] for e in ex) // 1e4) + 2)]
 
 
-def read_lidar():
-    out = np.full((GRID, GRID), np.nan, np.float32)
-    with rasterio.Env(**GDAL_ENV):
-        for proj in LIDAR_PROJECTS:   # earlier projects win where they overlap
-            for t in tiles:
-                url = '/vsicurl/' + LIDAR.format(p=proj, t=t)
-                try:
-                    src = rasterio.open(url)
-                except rasterio.errors.RasterioIOError:
-                    continue
-                with src, WarpedVRT(src, crs='EPSG:3857', transform=DST, width=GRID, height=GRID,
-                                    resampling=Resampling.bilinear, src_nodata=src.nodata, nodata=np.nan) as vrt:
-                    a = vrt.read(1).astype(np.float32)
-                ok = np.isfinite(a) & (a > 1000) & np.isnan(out)
-                out[ok] = a[ok]
-                print(f'lidar {proj} {t}: +{ok.mean() * 100:.1f}% of grid')
-    return out
+def world_to_lonlat(x, z):
+    mx = DST.a * ((x + EXTENT / 2) / CELL + 0.5) + DST.c
+    my = DST.e * ((z + EXTENT / 2) / CELL + 0.5) + DST.f
+    return to_geo.transform(mx, my)
 
 
-lidar = cached(f'lidar_{GRID}_{len(LIDAR_PROJECTS)}', read_lidar)
-have = np.isfinite(lidar)
-print(f'lidar coverage {have.mean() * 100:.1f}%')
-# feather lidar into the terrain-tile fill over ~150 m
-w = np.clip(ndimage.distance_transform_edt(have) / (150 / CELL), 0, 1).astype(np.float32)
-lid = np.where(have, lidar, H)
-H = H + (lid - H) * w
-
-# ---------------------------------------------------------------- vectors (Overture)
 def overture(theme, typ, cols):
     path = os.path.join(CACHE, f'overture_{OVERTURE_RELEASE}_{theme}_{typ}.parquet')
     if not os.path.exists(path):
@@ -197,9 +149,6 @@ def overture(theme, typ, cols):
     return rows
 
 
-segments = overture('transportation', 'segment', ['id', 'names', 'class', 'subtype', 'geometry'])
-water = overture('base', 'water', ['id', 'names', 'class', 'subtype', 'geometry'])
-land = overture('base', 'land', ['id', 'names', 'class', 'subtype', 'geometry', 'elevation'])
 geo_merc = lambda g: shapely.transform(g, lambda xy: np.column_stack(to_merc.transform(xy[:, 0], xy[:, 1])))
 
 
@@ -256,6 +205,251 @@ def cells_near(pts, radius):
     return out
 
 
+def merc_line(path, step=3.0):
+    """Web-mercator vertex list -> [x, z] world points resampled every `step` m."""
+    pts = [list(merc_to_world(x, y)) for x, y in path]
+    out = [pts[0]]
+    for a, b in zip(pts, pts[1:]):
+        n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / step))
+        out += [[a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n] for i in range(1, n + 1)]
+    return out
+
+
+NHD = 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6/query'
+NHD_CODES = set(range(46000, 46010)) | set(range(33600, 33610))  # stream/river + canal/ditch
+
+
+def nhd_streams():
+    """USGS NHD flowlines over the world window — surveyed channels where Overture generalises."""
+    path = os.path.join(CACHE, 'nhd.json')
+    if not os.path.exists(path):
+        lonw, latn = world_to_lonlat(-EXTENT / 2 - 300, -EXTENT / 2 - 300)
+        lone, lats = world_to_lonlat(EXTENT / 2 + 300, EXTENT / 2 + 300)
+        feats, T = [], 4          # the service crawls on big envelopes — tile it
+        for ty in range(T):
+            for tx in range(T):
+                gw = lonw + (lone - lonw) * tx / T
+                ge = lonw + (lone - lonw) * (tx + 1) / T
+                gs = lats + (latn - lats) * ty / T
+                gn = lats + (latn - lats) * (ty + 1) / T
+                off = 0
+                try:
+                    while True:
+                        q = urllib.parse.urlencode({
+                            'where': '1=1', 'geometry': f'{gw},{gs},{ge},{gn}',
+                            'geometryType': 'esriGeometryEnvelope', 'inSR': 4326, 'outSR': 3857,
+                            'outFields': 'gnis_name,fcode', 'returnGeometry': 'true',
+                            'resultOffset': off, 'resultRecordCount': 2000, 'f': 'json'})
+                        d = json.loads(urllib.request.urlopen(NHD + '?' + q, timeout=120).read())
+                        got = d.get('features', [])
+                        feats += got
+                        if len(got) < 2000:
+                            break
+                        off += 2000
+                except Exception as e:
+                    print(f'nhd tile {tx},{ty} failed:', e)
+                print(f'nhd tile {tx},{ty}: {len(feats)} feats')
+        seen, uniq = set(), []
+        for f in feats:  # tiles share edges — dedupe on exact geometry
+            key = json.dumps(f['geometry'])
+            if key not in seen:
+                seen.add(key)
+                uniq.append(f)
+        with open(path, 'w') as f:
+            json.dump(uniq, f)
+    out = []
+    for f in json.load(open(path)):
+        a = f['attributes']
+        if int(a.get('fcode') or 0) not in NHD_CODES:
+            continue
+        name = a.get('gnis_name')
+        if name and 'tunnel' in name.lower():
+            continue  # buried conduit — carving it trenches the ridge
+        w = 5.0 if name and 'river' in name.lower() else 2.4 if name else 1.6
+        for p in f['geometry']['paths']:
+            out.append({'name': name, 'width': w, 'pts': merc_line(p)})
+    return out
+
+
+def overture_streams(water):
+    out = []
+    for s in water:
+        if s['subtype'] not in ('stream', 'river', 'canal') or s['geom'].geom_type not in ('LineString', 'MultiLineString'):
+            continue
+        if s['name'] and 'tunnel' in s['name'].lower():
+            continue  # buried conduit — carving it trenches the ridge
+        w = 7.0 if s['subtype'] == 'river' else 2.4 if s['name'] else 1.6
+        for g in getattr(s['geom'], 'geoms', [s['geom']]):
+            out.append({'name': s['name'], 'width': w, 'pts': world_line(g, 3.0)})
+    return out
+
+
+def carve_streams(H, items):
+    """Snap each channel to the thalweg, force the bed monotonic, carve H, emit the ribbon."""
+    streams = []
+    for it in items:
+        for run in clip_runs(it['pts'], 5):
+            xs, zs = np.array(run).T
+            # snap each vertex to the lowest ground within ~6 m across the line
+            snapped = []
+            for i in range(len(run)):
+                a, b = run[max(0, i - 1)], run[min(len(run) - 1, i + 1)]
+                dx, dz = b[0] - a[0], b[1] - a[1]
+                L = math.hypot(dx, dz) or 1
+                nx, nz = -dz / L, dx / L
+                offs = np.linspace(-6, 6, 13)
+                hs = sample(H, xs[i] + nx * offs, zs[i] + nz * offs)
+                o = offs[int(hs.argmin())]
+                snapped.append([xs[i] + nx * o, zs[i] + nz * o])
+            sm = np.array(snapped)
+            for _ in range(3):  # relax the zig-zag from snapping
+                sm[1:-1] = 0.25 * sm[:-2] + 0.5 * sm[1:-1] + 0.25 * sm[2:]
+            hs = sample(H, sm[:, 0], sm[:, 1])
+            if hs[0] < hs[-1]:
+                sm, hs = sm[::-1], hs[::-1]
+            surf = np.minimum.accumulate(hs)   # water only flows downhill
+            for i in range(1, len(surf)):      # but the bed may climb out over a spur
+                surf[i] = min(surf[i - 1] + 0.5, hs[i])
+            w = it['width']
+            for (r, c), (d, i) in cells_near(sm.tolist(), w / 2 + CELL).items():
+                bed = surf[i] - 0.35 - 0.4 * (1 - d / (w / 2 + CELL))
+                H[r, c] = max(H[r, c] - 4.0, min(H[r, c], bed))  # cut a channel, never a trench
+            for i, (x, z) in enumerate(sm):
+                surf[i] = min(surf[i], sample(H, x, z) + 0.04)
+            streams.append({'name': it['name'], 'width': w,
+                            'pts': [[round(float(x), 1), round(float(z), 1), round(float(y) - 0.12, 2)]
+                                    for (x, z), y in zip(sm, surf)]})
+    return streams
+
+
+def grade_tracks(H, trails):
+    """Flatten across and smooth along road and track beds."""
+    for t in trails:
+        if t['kind'] == 'trail':
+            continue
+        pts = np.array(t['pts'])
+        prof = sample(H, pts[:, 0], pts[:, 1])
+        prof = ndimage.gaussian_filter1d(prof, 6 if t['kind'] == 'road' else 3, mode='nearest')
+        half = 3.4 if t['kind'] == 'road' else 2.0
+        for (r, c), (d, i) in cells_near(pts.tolist(), half + CELL * 1.5).items():
+            wgt = 1.0 if d <= half else 1 - (d - half) / (CELL * 1.5)
+            H[r, c] += (prof[i] - H[r, c]) * wgt
+
+
+def dem_decode():
+    px = np.asarray(Image.open(os.path.join(OUT, 'dem.png')), np.uint8).reshape(-1)
+    q = np.frombuffer(px[:GRID * GRID * 2].tobytes(), '<u2').reshape(GRID, GRID).astype(np.int64)
+    return ((np.cumsum(np.cumsum(q, axis=0), axis=1) & 0xFFFF) / H_SCALE + H_OFFSET).astype(np.float32)
+
+
+def dem_encode(H):
+    import pack_png
+    q = np.clip(np.round((H - H_OFFSET) * H_SCALE), 0, 65535).astype('<u2').reshape(GRID, GRID).astype(np.int64)
+    q[:, 1:] = (q[:, 1:] - q[:, :-1]) & 0xFFFF
+    q[1:, :] = (q[1:, :] - q[:-1, :]) & 0xFFFF
+    pack_png.pack(q.astype('<u2').tobytes(), os.path.join(OUT, 'dem.png'))
+
+
+if '--streams' in sys.argv:
+    # patch pass: re-carve channels from NHD over the existing DEM, no raster re-pull
+    H = dem_decode()
+    world = json.load(open(os.path.join(OUT, 'world.json')))
+    lake = np.zeros((GRID, GRID), bool)
+    for l in world['lakes']:
+        for r, c0, c1 in l['runs']:
+            lake[r, c0:c1 + 1] = True
+    mask = np.zeros((GRID, GRID), bool)
+    for st in world['streams']:
+        for r, c in cells_near([[p[0], p[1]] for p in st['pts']], st['width'] / 2 + CELL):
+            mask[r, c] = True
+    mask &= ~lake
+    if mask.any():  # heal the old channel cuts, then the new survey carves fresh
+        i0, i1 = ndimage.distance_transform_edt(mask, return_indices=True)[1]
+        H[mask] = H[i0[mask], i1[mask]]
+        for _ in range(40):
+            P = np.pad(H, 1, 'edge')
+            H[mask] = ((P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:]) / 4)[mask]
+    if '--overture' in sys.argv:
+        items = overture_streams(overture('base', 'water', ['id', 'names', 'class', 'subtype', 'geometry']))
+        world['sources']['streams'] = f'Overture Maps {OVERTURE_RELEASE} water'
+    else:
+        items = nhd_streams()
+        if not items:
+            sys.exit('nhd fetch failed')
+        world['sources']['streams'] = 'USGS NHD flowlines (the National Map)'
+    world['streams'] = carve_streams(H, items)
+    grade_tracks(H, world['trails'])  # road bed wins wherever a new channel dips under it
+    with open(os.path.join(OUT, 'world.json'), 'w') as f:
+        json.dump(world, f, separators=(',', ':'))
+    dem_encode(H)
+    print(f"{len(world['streams'])} stream runs re-carved from NHD")
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------- elevation
+def terrarium(z, x, y):
+    path = os.path.join(CACHE, f'terrarium_{z}_{x}_{y}.png')
+    if not os.path.exists(path):
+        urllib.request.urlretrieve(TERRARIUM.format(z=z, x=x, y=y), path)
+    a = np.asarray(Image.open(path).convert('RGB')).astype(np.float64)
+    return a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
+
+
+def mosaic(z, x0, y0, nx, ny):
+    return np.vstack([np.hstack([terrarium(z, x, y) for x in range(x0, x0 + nx)]) for y in range(y0, y0 + ny)])
+
+
+base = mosaic(Z, X0, Y0, NT, NT).astype(np.float32)
+H = ndimage.zoom(base, GRID / N_PX, order=1).astype(np.float32)
+
+def cached(name, build):
+    path = os.path.join(CACHE, f'{name}.npy')
+    if os.path.exists(path):
+        return np.load(path)
+    a = build()
+    np.save(path, a)
+    return a
+
+
+to_utm = Transformer.from_crs(4326, 26913, always_xy=True)
+ex = [to_utm.transform(lo, la) for lo in (lon_w, lon_e) for la in (lat_n, lat_s)]
+tiles = [f'x{tx}y{ty}' for tx in range(int(min(e[0] for e in ex) // 1e4), int(max(e[0] for e in ex) // 1e4) + 1)
+         for ty in range(int(min(e[1] for e in ex) // 1e4) + 1, int(max(e[1] for e in ex) // 1e4) + 2)]
+
+
+def read_lidar():
+    out = np.full((GRID, GRID), np.nan, np.float32)
+    with rasterio.Env(**GDAL_ENV):
+        for proj in LIDAR_PROJECTS:   # earlier projects win where they overlap
+            for t in tiles:
+                url = '/vsicurl/' + LIDAR.format(p=proj, t=t)
+                try:
+                    src = rasterio.open(url)
+                except rasterio.errors.RasterioIOError:
+                    continue
+                with src, WarpedVRT(src, crs='EPSG:3857', transform=DST, width=GRID, height=GRID,
+                                    resampling=Resampling.bilinear, src_nodata=src.nodata, nodata=np.nan) as vrt:
+                    a = vrt.read(1).astype(np.float32)
+                ok = np.isfinite(a) & (a > 1000) & np.isnan(out)
+                out[ok] = a[ok]
+                print(f'lidar {proj} {t}: +{ok.mean() * 100:.1f}% of grid')
+    return out
+
+
+lidar = cached(f'lidar_{GRID}_{len(LIDAR_PROJECTS)}', read_lidar)
+have = np.isfinite(lidar)
+print(f'lidar coverage {have.mean() * 100:.1f}%')
+# feather lidar into the terrain-tile fill over ~150 m
+w = np.clip(ndimage.distance_transform_edt(have) / (150 / CELL), 0, 1).astype(np.float32)
+lid = np.where(have, lidar, H)
+H = H + (lid - H) * w
+
+# ---------------------------------------------------------------- vectors (Overture)
+segments = overture('transportation', 'segment', ['id', 'names', 'class', 'subtype', 'geometry'])
+water = overture('base', 'water', ['id', 'names', 'class', 'subtype', 'geometry'])
+land = overture('base', 'land', ['id', 'names', 'class', 'subtype', 'geometry', 'elevation'])
+
+
 # ---------------------------------------------------------------- lakes
 lake_polys = [w_ for w_ in water if w_['geom'].geom_type in ('Polygon', 'MultiPolygon')
               and w_['subtype'] in ('lake', 'pond', 'reservoir', 'water')]
@@ -303,38 +497,9 @@ lakes.sort(key=lambda l: -l['area'])
 print(f'{len(lakes)} lakes, {sum(1 for l in lakes if l["name"])} named')
 
 # ---------------------------------------------------------------- streams
-streams = []
-for s in water:
-    if s['subtype'] not in ('stream', 'river') or s['geom'].geom_type not in ('LineString', 'MultiLineString'):
-        continue
-    for g in getattr(s['geom'], 'geoms', [s['geom']]):
-        for run in clip_runs(world_line(g, 3.0), 5):
-            xs, zs = np.array(run).T
-            # snap each vertex to the lowest ground within ~6 m across the line
-            snapped = []
-            for i in range(len(run)):
-                a, b = run[max(0, i - 1)], run[min(len(run) - 1, i + 1)]
-                dx, dz = b[0] - a[0], b[1] - a[1]
-                L = math.hypot(dx, dz) or 1
-                nx, nz = -dz / L, dx / L
-                offs = np.linspace(-6, 6, 13)
-                hs = sample(H, xs[i] + nx * offs, zs[i] + nz * offs)
-                o = offs[int(hs.argmin())]
-                snapped.append([xs[i] + nx * o, zs[i] + nz * o])
-            sm = np.array(snapped)
-            for _ in range(3):  # relax the zig-zag from snapping
-                sm[1:-1] = 0.25 * sm[:-2] + 0.5 * sm[1:-1] + 0.25 * sm[2:]
-            hs = sample(H, sm[:, 0], sm[:, 1])
-            if hs[0] < hs[-1]:
-                sm, hs = sm[::-1], hs[::-1]
-            surf = np.minimum.accumulate(hs)   # water only flows downhill
-            width = 7.0 if s['subtype'] == 'river' else 2.4 if s['name'] else 1.6
-            for (r, c), (d, i) in cells_near(sm.tolist(), width / 2 + CELL).items():
-                H[r, c] = min(H[r, c], surf[i] - 0.35 - 0.4 * (1 - d / (width / 2 + CELL)))
-            streams.append({'name': s['name'], 'width': width,
-                            'pts': [[round(float(x), 1), round(float(z), 1), round(float(y) - 0.12, 2)]
-                                    for (x, z), y in zip(sm, surf)]})
-print(f'{len(streams)} stream runs')
+src = nhd_streams()
+streams = carve_streams(H, src or overture_streams(water))
+print(f'{len(streams)} stream runs ({"nhd" if src else "overture"})')
 
 # ---------------------------------------------------------------- trails and roads
 ROAD = {'primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'service'}
@@ -353,16 +518,7 @@ for s in segments:
                            'kind': kind, 'cls': cls, 'pts': [[round(x, 1), round(z, 1)] for x, z in run]})
 
 # grade roads and tracks: flatten across and smooth along
-for t in trails:
-    if t['kind'] == 'trail':
-        continue
-    pts = np.array(t['pts'])
-    prof = sample(H, pts[:, 0], pts[:, 1])
-    prof = ndimage.gaussian_filter1d(prof, 6 if t['kind'] == 'road' else 3, mode='nearest')
-    half = 3.4 if t['kind'] == 'road' else 2.0
-    for (r, c), (d, i) in cells_near(pts.tolist(), half + CELL * 1.5).items():
-        wgt = 1.0 if d <= half else 1 - (d - half) / (CELL * 1.5)
-        H[r, c] += (prof[i] - H[r, c]) * wgt
+grade_tracks(H, trails)
 print(f'{len(trails)} trail/road runs')
 
 # ---------------------------------------------------------------- places
@@ -538,6 +694,7 @@ world = {
         'elevation': 'USGS 3DEP 1 m lidar (CO_ArapahoRooseveltPikeNF_D23, CO_CameronPeakWildfire_2021_D21); Terrarium tiles elsewhere',
         'imagery': 'Copernicus Sentinel-2 L2A, 2023-09-28',
         'vectors': f'Overture Maps {OVERTURE_RELEASE} (© OpenStreetMap contributors, ODbL)',
+        'streams': 'USGS NHD flowlines (the National Map)' if src else f'Overture Maps {OVERTURE_RELEASE} water',
     },
     'size': GRID, 'cell': round(CELL, 5), 'hOffset': H_OFFSET, 'hScale': H_SCALE, 'demCoding': 'delta2',
     'color': COLOR, 'cover': COVER, 'lidar': round(float(have.mean()), 3),
