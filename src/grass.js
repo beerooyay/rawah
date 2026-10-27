@@ -375,10 +375,18 @@ export class Grass {
 
   update(camera, hiker, frost, cure, heading = 0, renderer = null) {
     this.uniforms.uCenter.value.set(camera.position.x, camera.position.z);
-    this.uniforms.uPressC.value.set(camera.position.x, camera.position.z);
     this.uniforms.uPlayer.value.copy(hiker.pos);
     this.#trample(hiker, heading);
-    if (renderer) this.press.render(renderer, camera.position.x, camera.position.z);
+    if (renderer) {
+      // redraw at ~30 Hz and when the camera has crossed a texel, not every frame:
+      // footprints are quasi-static, and the fbo switch is a pipeline stall
+      const now = this.uniforms.uTime.value, pc = this.uniforms.uPressC.value;
+      if (now - (this._pressAt ?? -1) > 0.033 || Math.hypot(camera.position.x - pc.x, camera.position.z - pc.y) > 0.24) {
+        this._pressAt = now;
+        pc.set(camera.position.x, camera.position.z);
+        this.press.render(renderer, pc.x, pc.y);
+      }
+    }
     this.uniforms.uFrost.value = frost;
     if (cure !== undefined) this.uniforms.uCure.value = cure;
     this.#cull(camera);

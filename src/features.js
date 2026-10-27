@@ -455,8 +455,10 @@ export function buildSigns(world, models) {
     // the road the cars pulled in from, for the opening drive (src/intro.js): its points in driving order and where they park
     world.starts[th.name] = { cars, road: road.dense, roadRef: road, k: best, spot };
     if (th === main && spot.lot) {
-      // the gravel loop itself: an oval ring of road tread around a worn island
+      // the gravel loop itself: an oval ring of road tread around a worn island,
+      // graded toward level like a real pull-off, so the lot cannot read as a pit
       const L = spot.lot, N = 30, pos = [], col = [], sid = [], idx = [];
+      const lotY = world.height(L.cx, L.cz);
       for (let i = 0; i <= N; i++) {
         const t = (i / N) * Math.PI * 2, ct = Math.cos(t), st = Math.sin(t);
         const qx = L.cx + spot.rx * ct * 22 + L.px * st * 9, qz = L.cz + spot.rz * ct * 22 + L.pz * st * 9;
@@ -464,7 +466,7 @@ export function buildSigns(world, models) {
         const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
         for (let s = 0; s < 2; s++) {
           const off = (s - 0.5) * 4.6, x = qx + nx * off, z = qz + nz * off;
-          pos.push(x, world.height(x, z) + 0.06, z); sid.push(s, 1);
+          pos.push(x, world.height(x, z) * 0.25 + lotY * 0.75 + 0.07, z); sid.push(s, 1);
           const v = 0.9 + hash2(i, s, 5) * 0.2;
           col.push(0.2 * v, 0.185 * v, 0.16 * v);
         }
@@ -586,7 +588,10 @@ function landmark(template, height) {
   inner.position.set(-c.x * s, -box.min.y * s, -c.z * s);
   const g = new THREE.Group();
   g.add(inner);
-  g.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
+  g.traverse((o) => {
+    o.castShadow = true; o.receiveShadow = true;
+    if (o.material && 'metalness' in o.material) o.material.metalness = 0;   // glTF defaults to metal; wood is not
+  });
   return g;
 }
 
