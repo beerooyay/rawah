@@ -110,7 +110,7 @@ export function buildTitle({ trailheads, pick, characters }) {
         mixer.setTime(1.05);
         model.updateMatrixWorld(true);
       }
-      shots[name] = renderThumb(model, { w: 400, h: 500, yaw: 0.45, lift: 0.2 });
+      shots[name] = renderThumb(model, { w: 460, h: 620, yaw: 0.45, lift: 0.2 });
       if (names[cur] === name) { img.src = shots[name]; img.classList.add('on'); }
     }).catch((err) => console.warn(`portrait for ${name} failed`, err));
   }

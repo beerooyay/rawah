@@ -19,11 +19,13 @@ export function renderThumb(root, { w = 360, h = 220, yaw = 0.6, lift = 0.4 } = 
   scene.add(sun);
   scene.add(root);
   root.updateMatrixWorld(true);
-  const sphere = new THREE.Box3().setFromObject(root).getBoundingSphere(new THREE.Sphere());
-  const cam = new THREE.PerspectiveCamera(28, w / h, 0.01, sphere.radius * 60);
-  const d = sphere.radius * 3.1;
-  cam.position.set(sphere.center.x + Math.sin(yaw) * d, sphere.center.y + sphere.radius * lift, sphere.center.z + Math.cos(yaw) * d);
-  cam.lookAt(sphere.center);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+  const fov = 30, half = Math.tan(THREE.MathUtils.degToRad(fov / 2));
+  const d = Math.max(size.y / 2 / half, Math.max(size.x, size.z) / 2 / half / (w / h)) * 1.1;
+  const cam = new THREE.PerspectiveCamera(fov, w / h, 0.01, d + size.length() * 4);
+  cam.position.set(center.x + Math.sin(yaw) * d, center.y + size.y * lift * 0.5, center.z + Math.cos(yaw) * d);
+  cam.lookAt(center);
   renderer.render(scene, cam);
   const url = renderer.domElement.toDataURL('image/png');
   scene.remove(root);
