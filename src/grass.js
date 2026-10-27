@@ -221,11 +221,16 @@ export class Grass {
           // the corners outside the circle, the ones the detail ring has thinned out, the ones that cannot grow
           if (cell.x >= org.x + BW || cell.y >= org.y + BH) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           float h1 = ihash(cell), h2 = ihash(cell + ivec2(7919, 104729)), h3 = ihash(cell * 3 + ivec2(17, 3));
-          vec2 root = (vec2(cell) + vec2(h1, h2)) * uSpacing;
+          // jitter the root inside its cell, rotated per cell, so the lattice's rows stop reading at a grazing angle
+          vec2 jit = vec2(h1, h2) - 0.5;
+          float ja = h3 * 6.2832;
+          vec2 root = (vec2(cell) + 0.5 + vec2(jit.x * cos(ja) - jit.y * sin(ja), jit.x * sin(ja) + jit.y * cos(ja))) * uSpacing;
           float r = distance(root, uCenter);
           vec2 c2 = mod(vec2(cell), 2.0), c4 = mod(vec2(cell), 4.0);
           float align = (c4.x + c4.y == 0.0) ? 4.0 : ((c2.x + c2.y == 0.0) ? 2.0 : 1.0);
-          float f1 = smoothstep(uRing.x - 5.0, uRing.x + 1.0, r), f2 = smoothstep(uRing.y - 5.0, uRing.y + 1.0, r);
+          // stagger the boundary per clump: without it the whole ring resizes in one visible wave
+          float rr = r + (h3 - 0.5) * 6.0;
+          float f1 = smoothstep(uRing.x - 7.0, uRing.x + 2.0, rr), f2 = smoothstep(uRing.y - 7.0, uRing.y + 2.0, rr);
           float lodW = align > 3.5 ? 1.0 : (align > 1.5 ? 1.0 - f2 : 1.0 - f1);
           float wm = 1.0 + 0.87 * f1 + 1.63 * f2;      // the thinner the field, the wider each clump, so it still covers
           float fade = 1.0 - smoothstep(uRadius * 0.72, uRadius, r);
@@ -256,7 +261,8 @@ export class Grass {
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
-          float ang = h2 * 6.2832, ca = cos(ang), sa = sin(ang);
+          float cv = float(gl_VertexID / 4) * 0.5 - 0.5;   // each card leans a little differently, never one flat sprite
+          float ang = h2 * 6.2832 + cv * (h1 - 0.5) * 0.7, ca = cos(ang), sa = sin(ang);
           vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
           float t = position.y;
           // pressed down by what has walked or lain here, read from the press map around the camera
@@ -264,10 +270,14 @@ export class Grass {
           float press = max(pm.a, bx.g * 0.75);   // the boxel field's wear lies the grass down too: walked paths stay walked
           vec2 lean = (pm.gb - 0.5) * 4.0;
           vec3 p = vec3(root.x + lp.x * size * wm * 1.6, y0 - 0.03 + t * size * mix(0.72, 0.42, alpine) * (1.0 - press * 0.8), root.y + lp.z * size * wm * 1.6);
-          // wind: steady lean downwind plus the travelling gusts; bend grows with height squared
+          // wind: steady lean downwind plus the travelling gusts; bend grows with height squared.
+          // and even when the air is still the blades are not frozen: a small shimmer rides under the gusts
           float g = gustAt(root);
-          float bend = (0.1 + g * 0.8 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size;
-          p.xz += WIND_DIR * bend;
+          float flut = sin(uTime * 3.7 + root.x * 2.3 + root.y * 1.7) * sin(uTime * 2.9 + root.y * 3.1 - root.x * 1.3);
+          float bend = (0.1 + g * 0.8 + flut * 0.06 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size;
+          bend *= 1.0 + cv * (h2 - 0.5) * 0.9;
+          vec2 wdir = WIND_DIR;
+          p.xz += wdir * bend + vec2(-wdir.y, wdir.x) * flut * 0.07 * t * t * size;
           p.y -= bend * bend * 0.5;
           // part around the hiker
           vec2 away = root - uPlayer.xz;
