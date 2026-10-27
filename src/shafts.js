@@ -105,8 +105,8 @@ void main() {
   vec2 cp = P.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - P.y);
   lit *= 1.0 - uCloudShade * cloudDensity(cp, 2);                       // and the cloud deck's shadow
   float cs = dot(rd, uSunWorld);
-  float phase = hg(cs, 0.68) * 0.75 + hg(cs, 0.93) * 0.25;                 // a broad forward lobe and a tight glow around the sun itself
-  vec3 S = uSunCol * (lit * phase * dens * delta * 6.0 * uGain);
+  float phase = hg(cs, 0.88) * 0.3 + hg(cs, 0.95) * 0.12;                 // a broad forward lobe and a tight glow around the sun itself
+  vec3 S = uSunCol * (lit * phase * dens * delta * 1.5 * uGain);
   float fade = 1.0 - smoothstep(0.6, 1.0, vD / 900.0);              // the far slices thin out
   float a = (1.0 - exp(-dens * delta * 0.7)) * 0.5;
   gl_FragColor = vec4(S * fade, a * fade);

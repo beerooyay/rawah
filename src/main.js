@@ -16,6 +16,7 @@ import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
 import { Hud, keyCap } from './hud.js';
 import { GameMap } from './map.js';
+import { Route } from './route.js';
 import { Audio } from './audio.js';
 import { Input } from './input.js';
 import { CameraRig } from './camera.js';
@@ -244,7 +245,8 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
   const cy = s0.yaw ?? 0, rx = -Math.cos(cy), rz = Math.sin(cy), cs = world.carSpot || s0;
   let px = cs.x + rx * 3.4, pz = cs.z + rz * 3.4;
   if (world.lakeAt(px, pz) || world.localGrade(px, pz) > 0.3) { px = cs.x - rx * 3.4; pz = cs.z - rz * 3.4; }
-  atv.place(px, pz, cy);
+  if (parked && parked.quad) atv.place(parked.quad.x, parked.quad.z, parked.quad.yaw);
+  else atv.place(px, pz, cy);
 }
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
@@ -292,6 +294,7 @@ const checkpoints = world.places.filter((q) => q.kind === 'trailhead').map((q, i
 }));
 const guide = new Guide(checkpoints);
 const map = new GameMap(world, guide);
+const route = new Route(world, scene);
 const audio = new Audio();
 props.hud = hud; props.audio = audio; mind.audio = audio;
 party.onSwing = (x, y, z, nx, nz) => props.swingFx(x, y, z, nx, nz);
@@ -462,13 +465,22 @@ function toggleMap() {
   document.body.classList.add('map-open');
   const pad = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`;
   $('map-hint').innerHTML = input.mode === 'pad'
-    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('LB')}${pad('RB')} filter</span><span>${pad('A', 'a')} travel</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
+    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('LB')}${pad('RB')} filter</span><span>${pad('A', 'a')} hike</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
     : input.mode === 'touch' ? '<span>Tap a place · drag to pan · pinch to zoom</span>'
-      : `<span>Click a place · drag to pan · scroll to zoom</span><span>${keyCap('/', 'kbm')} search</span><span>${keyCap('Enter', 'kbm')} travel</span><span>${keyCap('M', 'kbm')} close</span>`;
+      : `<span>Click a place · drag to pan · scroll to zoom</span><span>${keyCap('/', 'kbm')} search</span><span>${keyCap('Enter', 'kbm')} start hike</span><span>${keyCap('M', 'kbm')} close</span>`;
   if (document.pointerLockElement) document.exitPointerLock();
 }
 map.onClose = () => { if (map.open) toggleMap(); };
 map.onTravel = (d) => startTravel(d);
+map.onHike = (d) => {
+  document.body.classList.remove('map-open');
+  lockPointer();
+  if (route.on && route.dest.name === d.name) { route.clear(); map.route = null; hud.toast('Route cleared'); return; }
+  const len = route.go(hiker.pos, d);
+  map.route = route;
+  hud.toast(`Route set to ${d.name} · ${len < 950 ? `${Math.round(len / 10) * 10} m` : `${(len / 1000).toFixed(1)} km`}`);
+};
+route.onArrive = (name) => { map.route = null; hud.toast(`You made it to ${name}`); };
 $('btn-map').onclick = () => { pause(false); toggleMap(); };
 $('btn-guide').onclick = () => { pause(false); toggleMap(); map.guideTab(); };
 
@@ -778,6 +790,7 @@ function act() {
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
+      else if (party.engageable(p, hiker.yaw)) toggleTogether(true, party.engageable(p, hiker.yaw));
       else if (si >= 0) sitDown(si);
     }
   } else if (state.seat >= 0 && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k))) standUp();
@@ -1396,15 +1409,18 @@ function raceGoal() {
 }
 
 let togetherGoal = null;
-function toggleTogether(open = !togetherOpen) {
+let togetherWho = null;
+function toggleTogether(open = !togetherOpen, who = null) {
   if (open && (!state.started || state.paused || map.open || state.travel)) return;
   togetherOpen = open;
+  togetherWho = open ? who : null;
+  if (who) party.engage(who); else if (!open) party.release();
   $('together').classList.toggle('hidden', !open);
   document.body.classList.toggle('together-open', open);
   if (open) {
     keys.clear();
     togetherGoal = raceGoal();
-    $('tog-who').textContent = `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
+    $('tog-who').textContent = who ? cap(who.name) : `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
     const race = $('tog-race');
     race.textContent = togetherGoal ? `Race to ${togetherGoal.name}` : 'Race (no summit or lake close enough)';
     race.disabled = !togetherGoal;
@@ -1416,6 +1432,7 @@ function toggleTogether(open = !togetherOpen) {
 for (const b of $('together').querySelectorAll('[data-stance]')) {
   b.onclick = () => {
     const s = b.dataset.stance;
+    if (s === 'chat') { party.chatWith(togetherWho || party.near(hiker.pos)); toggleTogether(false); return; }
     if (s === 'race') { if (!togetherGoal) return; party.command('race', togetherGoal); }
     else party.command(s);
     toggleTogether(false);
@@ -1467,6 +1484,7 @@ function tick(dt, draw = true) {
   input.move(ctl.move);
   if (map.open) map.analog(dt, input.padMove, input.padLook, input.trigger(6), input.trigger(7));
   if (!live) ctl.move.set(0, 0);
+  route.update(dt, hiker.pos, t);
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
   const mindOn = hiker.tool === 'mind';
@@ -1702,7 +1720,7 @@ function tick(dt, draw = true) {
   { const f = calendar.foliage; TONE.uFresh.value = f.fresh; TONE.uAutumn.value = f.autumn; TONE.uDrop.value = f.drop; TONE.uCold.value = f.cold; }
   // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
   const damp = boxels.sample(p.x, p.z).u;
-  atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
+  atmosphere.uValley.value = 0.00004 * (1 + 1.6 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
   {
     // is the sun behind a ridge? compare the highest skyline angle along the sun's azimuth with the sun's elevation
     const sd = sky.sunDir, hz = Math.hypot(sd.x, sd.z) || 1;
@@ -1798,6 +1816,8 @@ function tick(dt, draw = true) {
     if (!hint && state.seat < 0 && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[U] sit · [N] roast a marshmallow';
     if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: p, yaw: hiker.yaw, mode: hiker.mode })) hint = '[B] cast a line';
     if (!hint && !atv.riding && atv.near(p)) hint = '[U] ride the quad';
+    if (!hint && !atv.riding && hiker.mode === 'walk' && state.seat < 0) { const bud = party.engageable(p, hiker.yaw); if (bud) hint = `[U] talk to ${cap(bud.name)}`; }
+    if (!hint && route.on) hint = `Route to ${route.name} · ${route.left < 950 ? `${Math.round(route.left / 10) * 10} m` : `${(route.left / 1000).toFixed(1)} km`}`;
     if (weather.storm > 0.4 && p.y > cv.treeline - 40) hint = 'Lightning on the crest. Get below treeline.';
     const wxLabel = weather.label;
     if (wxLabel !== state.wxLabel) {
@@ -1871,7 +1891,7 @@ if (DEV) {
     benchRain(o) { return boxels.benchRain(o); },
     plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields,
     benchPlume(o) { return plume.smoke.bench(o); },
-    begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
+    begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },

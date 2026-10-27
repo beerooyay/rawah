@@ -94,7 +94,7 @@ export class ATV {
   #standIn() {
     const g = this.standIn = new THREE.Group();
     const M = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
-    const red = M(0xb3281f), black = M(0x1c1c1e), grey = M(0x6c6f72), seat = M(0x26262a);
+    const red = M(0x9a2a22), black = M(0x1c1c1e), grey = M(0x6c6f72), seat = M(0x26262a);
     const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z); m.rotation.set(rx, ry, rz);
@@ -104,12 +104,13 @@ export class ATV {
     };
     // nose is toward -z, like the hiker
     add(new THREE.BoxGeometry(0.55, 0.28, 1.15), black, 0, 0.5, 0.05);                 // frame / engine
-    add(new THREE.BoxGeometry(0.62, 0.3, 0.7), red, 0, 0.8, -0.05);                    // tank cover
-    add(new THREE.BoxGeometry(0.42, 0.14, 1.2), seat, 0, SEAT_Y + 0.04, 0.55);         // long two-up seat
-    add(new THREE.BoxGeometry(0.4, 0.06, 0.12), grey, 0, SEAT_Y + 0.14, 1.18);         // grab bar for the passenger
-    add(new THREE.BoxGeometry(0.7, 0.07, 0.5), red, 0, 0.7, -0.62, -0.18);             // front fascia
-    add(new THREE.BoxGeometry(0.75, 0.05, 0.4), red, 0, 0.8, 1.22, 0.1);               // rear fender
-    add(new THREE.BoxGeometry(0.5, 0.05, 0.3), grey, 0, 0.86, 1.5);                    // rack
+    add(new THREE.SphereGeometry(0.36, 14, 10).scale(0.95, 0.62, 1.25), red, 0, 0.82, -0.08);   // tank cover
+    add(new THREE.CapsuleGeometry(0.19, 0.9, 4, 12).rotateX(Math.PI / 2).scale(1, 0.5, 1), seat, 0, SEAT_Y + 0.05, 0.62); // long two-up seat
+    add(new THREE.TorusGeometry(0.17, 0.018, 6, 14, Math.PI), grey, 0, SEAT_Y + 0.12, 1.28, 0, Math.PI / 2);          // grab rail for the passenger
+    add(new THREE.SphereGeometry(0.4, 12, 8).scale(0.9, 0.3, 0.9), red, 0, 0.66, -0.7, -0.2);       // front fascia
+    add(new THREE.SphereGeometry(0.4, 12, 8).scale(0.95, 0.22, 0.85), red, 0, 0.82, 1.3, 0.12);     // rear fender
+    add(new THREE.BoxGeometry(0.5, 0.03, 0.34), grey, 0, 0.9, 1.52);                                // rack
+    add(new THREE.BoxGeometry(0.46, 0.03, 0.3), grey, 0, 0.78, -0.95);                              // front rack
     add(new THREE.CylinderGeometry(0.025, 0.025, 0.76, 8), grey, 0, 1.0, -0.28, 0, 0, Math.PI / 2); // handlebar
     add(new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8), grey, 0, 0.84, -0.3, -0.25);   // steering column
     for (const x of [-0.26, 0.26]) add(new THREE.BoxGeometry(0.12, 0.1, 0.1), M(0xfff3c4, { emissive: 0xffe9a8, emissiveIntensity: 0.5 }), x * 0.8, 0.82, -0.9); // lamps

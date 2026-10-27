@@ -36,6 +36,7 @@ const LINES = {
   idle: ['Nice day for it.', 'Your pace is good. I like it.', 'Water break soon?', 'Trail\'s easy to follow here.'],
   tired: ['Breather? I won\'t tell anyone.', 'You\'re gassed. Five minutes.', 'My legs are done. Sitting down.'],
   together: ['Right behind you.', 'Lead the way.'],
+  greet: ['Hey. What\'s up?', 'Yeah?', 'Hey, you good?', 'What do you need?'],
   wander: ['Gonna check out that ridge. Back in a bit.', 'I\'m going to look around. Holler if you need me.'],
   view: ['Oh, this is the spot.', 'Look at that. Worth the climb.'],
   back: ['Back! You would\'ve loved it.', 'Miss me?'],
@@ -221,6 +222,29 @@ export class Party {
     return best;
   }
 
+  /** A friend close in front of you, free to stop and talk. */
+  engageable(p, yaw) {
+    const [fx, fz] = fwd(yaw);
+    for (const a of this.actors) {
+      if (a === this._pin || a.riding || a.boarding || this.biz?.a === a || (this.work && this.work.a === a)) continue;
+      const dx = a.x - p.x, dz = a.z - p.z, d = Math.hypot(dx, dz);
+      if (d < 3 && d > 0.2 && (dx * fx + dz * fz) / d > 0.77) return a;
+    }
+    return null;
+  }
+
+  /** Stop them where they stand, turn to you and say hello. */
+  engage(a) {
+    this.hold = { a };
+    this.say('greet', {}, a, { force: true });
+  }
+
+  /** Let them go back to what they were doing, after a beat. */
+  release() { if (this.hold) this.hold.rel = 1; }
+
+  /** They say what is on their mind. */
+  chatWith(a) { this.say(this.#contextKind(), {}, a, { force: true }); }
+
   /** Say exactly this, now, over `who` (or the nearer friend). */
   tell(text, who = null, cool = 0) {
     const now = performance.now() / 1000;
@@ -400,6 +424,7 @@ export class Party {
     if (near > 120) this.gather(pl);   // fast travel, a long fall, or just left behind: catch up
 
     this.ctx.player = pl;
+    if (this.hold && this.hold.rel !== undefined && (this.hold.rel -= dt) <= 0) this.hold = null;
     if (dt > 0) {
       this.#needs(dt, pl, speed);
       this.#business(dt, pl);
@@ -422,6 +447,7 @@ export class Party {
       const pin = this.pins.get(a);
       if (pin) { a.goto(pin.x, pin.z, WALK + 0.5, 0.25, dt); a.b.face = false; a.b.lookAt = null; a.b.resting = false; }
       else if (a === this._pin) { a.goto(this.go.x, this.go.z, RUN, 0.3, dt); a.b.face = false; a.b.lookAt = null; }
+      else if (this.hold && this.hold.a === a) { a.goto(a.x + a.b.vel.x, a.z + a.b.vel.z, 0, 0, dt); a.face(pl.pos.x, pl.pos.z); a.b.lookAt = this.eye.set(pl.pos.x, pl.pos.y + 1.55, pl.pos.z); a.b.emote = ''; a.b.resting = false; }
       else if (a.boarding && this.atv) {
         const sx = Math.sin(this.atv.yaw), cz = Math.cos(this.atv.yaw);
         if (a.goto(this.atv.pos.x + sx * 1.7, this.atv.pos.z + cz * 1.7, RUN, 0.4, dt) < 0.6) { a.boarding = false; a.riding = true; this.say('ride', {}, a, { cool: 20 }); }
@@ -512,7 +538,7 @@ export class Party {
 
   /** The friend who is not off racing or roaming keeps by you. */
   #trail(a, pl, dt) {
-    if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a) return;
+    if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a || this.hold?.a === a) return;
     const i = this.actors.indexOf(a);
     const [fx, fz] = fwd(this.dir + (i ? 0.8 : -0.8)), r = 4.5 + i * 2.2;
     a.goto(pl.pos.x + fx * r, pl.pos.z + fz * r, RUN, 1.5, dt);
@@ -520,19 +546,45 @@ export class Party {
 
   // ------------------------------------------------------------ walking with you
   follow(dt, pl, speed) {
+    const walking = speed > 0.5, now = (this.clock = (this.clock || 0) + dt);
     this.actors.forEach((a, i) => {
-      if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a) return;
+      if (a === this._pin || a.riding || a.boarding || a.seat || this.biz?.a === a || this.hold?.a === a) return;
       if (this.work && this.work.a === a) return;
-      const ang = this.dir + (i ? 0.8 : -0.8), r = 4.5 + i * 2.2, [fx, fz] = fwd(ang);
-      const tx = pl.pos.x + fx * r, tz = pl.pos.z + fz * r, d = Math.hypot(tx - a.x, tz - a.z);
-      const top = d > 25 ? RUN : d > 12 ? JOG : d > 5 ? Math.max(JOG * 0.7, speed) : Math.max(WALK, speed * 0.95);
-      a.goto(tx, tz, top, speed > 0.5 ? 0.8 : 2.5, dt);
+      // each friend is their own person: they idle where they are, drift about near you, and only fall in
+      // behind once you have pulled away, a beat after you start (never in step with your every move)
+      const f = a.f || (a.f = { go: false, react: between(0.4, 1.2), spot: null, hold: between(2, 5), look: 0, watch: false, ph: Math.random() * 6.28 });
+      const d = Math.hypot(pl.pos.x - a.x, pl.pos.z - a.z), near = 3 + i * 1.2, far = 8 + i * 2.5;
+      if (!f.go) {
+        if (d > far) f.go = true;
+        else if (walking && d > near + 1.5) { if ((f.react -= dt) <= 0) f.go = true; }
+        else f.react = between(0.5, 1.4);
+      } else if (!walking && d < near) { f.go = false; f.hold = between(3, 7); f.spot = null; }
+      let tx, tz;
+      if (f.go) {
+        const [fx, fz] = fwd(this.dir), back = 2.8 + i * 1.6 + Math.sin(now * 0.23 + f.ph) * 0.7, side = (i ? 1.7 : -1.7) + Math.sin(now * 0.31 + f.ph * 2) * 0.8;
+        tx = pl.pos.x - fx * back - fz * side; tz = pl.pos.z - fz * back + fx * side;
+        const gap = Math.hypot(tx - a.x, tz - a.z);
+        const top = d > 25 ? RUN : d > 12 ? JOG : Math.min(JOG, Math.max(WALK * 0.75, speed * (0.9 + 0.15 * Math.sin(now * 0.4 + f.ph)) + Math.max(0, gap - 2) * 0.25));
+        a.goto(tx, tz, top, 0.7, dt);
+        f.spot = null;
+        if (!walking && gap < 1.6 && a.speed < 0.3) { f.go = false; f.hold = between(3, 7); }
+      } else {
+        if ((f.hold -= dt) <= 0) {
+          for (let k = 0; k < 6 && !f.spot; k++) {
+            const ang = Math.random() * 6.28, r = between(2.2, 4.8), x = pl.pos.x + Math.sin(ang) * r, z = pl.pos.z + Math.cos(ang) * r;
+            if (a.passable(x, z)) f.spot = [x, z];
+          }
+          f.hold = between(5, 10);
+        }
+        if (f.spot && a.goto(f.spot[0], f.spot[1], WALK * 0.6, 0.3, dt) < 0.5) f.spot = null;
+        else if (!f.spot) a.goto(a.x + a.b.vel.x, a.z + a.b.vel.z, 0, 0, dt);
+      }
       a.b.face = false; a.b.emote = ''; a.b.resting = false;
-      // glance at you when you are close and in front of them, otherwise at the way ahead
-      const near = Math.hypot(pl.pos.x - a.x, pl.pos.z - a.z) < 14;
-      a.b.lookAt = near ? this.eye.set(pl.pos.x, pl.pos.y + 1.55, pl.pos.z) : null;
+      // now and then glance at you when you are near, otherwise the way ahead
+      if ((f.look -= dt) <= 0) { f.watch = d < 14 && Math.random() < 0.65; f.look = between(2.5, 6); }
+      a.b.lookAt = f.watch ? this.eye.set(pl.pos.x, pl.pos.y + 1.55, pl.pos.z) : null;
       // wedged against something for a while with you far off: rejoin
-      a.stuck = d > 10 && a.speed < 0.3 ? a.stuck + dt : 0;
+      a.stuck = f.go && d > 12 && a.speed < 0.3 ? a.stuck + dt : 0;
       if (a.stuck > 5) { this.rejoin(a, pl, i); a.stuck = 0; }
     });
     this.separate(pl);

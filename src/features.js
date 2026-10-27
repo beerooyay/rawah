@@ -207,12 +207,13 @@ function draped(params) {
 }
 
 const CHUNK_M = 1000;
+const ROAD = [0.3, 0.23, 0.15];
 
 export function buildTrails(world) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true });
   const geos = [];
-  const tones = { road: [0.2, 0.185, 0.16], track: [0.15, 0.12, 0.085], trail: [0.13, 0.095, 0.06] };
+  const tones = { road: ROAD, track: [0.15, 0.12, 0.085], trail: [0.13, 0.095, 0.06] };
   for (const t of world.trails) {
     if (!t.width) continue;
     const pts = t.dense, half = t.width / 2;
@@ -438,11 +439,13 @@ export function buildSigns(world, models) {
       const rp = road.dense[best];
       const sd = Math.sign((th.x - rp[0]) * spot.rz - (th.z - rp[1]) * spot.rx) || 1;
       const px = -spot.rz * sd, pz = spot.rx * sd;
-      const brook = world.nearestStream(rp[0] + px * 15, rp[1] + pz * 15);
-      const lake = world.lakeAt(rp[0] + px * 15, rp[1] + pz * 15);
-      if ((!brook.stream || brook.d > brook.stream.width / 2 + 9) && !lake) {
+      const wet = [15, 26].some((k) => {
+        const b = world.nearestStream(rp[0] + px * k, rp[1] + pz * k);
+        return (b.stream && b.d < b.stream.width / 2 + 4) || world.lakeAt(rp[0] + px * k, rp[1] + pz * k);
+      });
+      if (!wet) {
         spot.lot = { px, pz, cx: rp[0] + px * 15, cz: rp[1] + pz * 15 };
-        spot.x = spot.lot.cx - px * 9; spot.z = spot.lot.cz - pz * 9;
+        spot.x = spot.lot.cx - px * 11; spot.z = spot.lot.cz - pz * 11;
       }
     }
     const cars = CAR_ORDER.map((model, i) => {
@@ -457,21 +460,35 @@ export function buildSigns(world, models) {
     if (th === main && spot.lot) {
       // the gravel loop itself: an oval ring of road tread around a worn island,
       // graded toward level like a real pull-off, so the lot cannot read as a pit
-      const L = spot.lot, N = 30, pos = [], col = [], sid = [], idx = [];
-      const lotY = world.height(L.cx, L.cz);
-      for (let i = 0; i <= N; i++) {
+      const L = spot.lot, pos = [], col = [], sid = [], idx = [];
+      const ring = [], N = 64;
+      for (let i = 0; i < N; i++) {
         const t = (i / N) * Math.PI * 2, ct = Math.cos(t), st = Math.sin(t);
-        const qx = L.cx + spot.rx * ct * 22 + L.px * st * 9, qz = L.cz + spot.rz * ct * 22 + L.pz * st * 9;
-        const tx = spot.rx * -st * 22 + L.px * ct * 9, tz = spot.rz * -st * 22 + L.pz * ct * 9;
-        const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
-        for (let s = 0; s < 2; s++) {
-          const off = (s - 0.5) * 4.6, x = qx + nx * off, z = qz + nz * off;
-          pos.push(x, world.height(x, z) * 0.25 + lotY * 0.75 + 0.07, z); sid.push(s, 1);
-          const v = 0.9 + hash2(i, s, 5) * 0.2;
-          col.push(0.2 * v, 0.185 * v, 0.16 * v);
-        }
+        ring.push([L.cx + spot.rx * ct * 22 + L.px * st * 11, L.cz + spot.rz * ct * 22 + L.pz * st * 11]);
       }
-      for (let i = 0; i < N; i++) { const b = i * 2; idx.push(b, b + 3, b + 2, b, b + 2, b + 1); }
+      const level = ring.reduce((a, [x, z]) => a + world.height(x, z), 0) / N;
+      // a laid gravel apron: fills dips toward one grade, never sinks under a rise
+      const strip = (line, closed, flat) => {
+        const b0 = pos.length / 3, n = line.length;
+        for (let i = 0; i < n; i++) {
+          const a = line[closed ? (i + n - 1) % n : Math.max(0, i - 1)], b = line[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+          const tx = b[0] - a[0], tz = b[1] - a[1], tl = Math.hypot(tx, tz) || 1;
+          for (let s = 0; s < 2; s++) {
+            const off = (s - 0.5) * 6.8, x = line[i][0] - (tz / tl) * off, z = line[i][1] + (tx / tl) * off;
+            const h = Math.max(world.height(x, z), world.height(x + 1.2, z), world.height(x - 1.2, z), world.height(x, z + 1.2), world.height(x, z - 1.2));
+            pos.push(x, flat ? Math.max(h + 0.1, h * 0.2 + level * 0.8) : h + 0.1, z); sid.push(s, 1);
+            const v = 0.9 + hash2(i, s, 5) * 0.2;
+            col.push(ROAD[0] * v, ROAD[1] * v, ROAD[2] * v);
+          }
+        }
+        for (let i = 0; i < (closed ? n : n - 1); i++) { const a = b0 + i * 2, c = b0 + ((i + 1) % n) * 2; idx.push(a, c + 1, c, a, c, a + 1); }
+      };
+      strip(ring, true, true);
+      for (const e of [-1, 1]) {   // the two mouths where the loop meets the road
+        const line = [];
+        for (let k = 0; k <= 5; k++) line.push([L.cx + spot.rx * e * 22 - L.px * 3 * k, L.cz + spot.rz * e * 22 - L.pz * 3 * k]);
+        strip(line, false, false);
+      }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       g.setAttribute('aSide', new THREE.Float32BufferAttribute(sid, 2));
@@ -481,20 +498,25 @@ export function buildSigns(world, models) {
       const m = new THREE.Mesh(g, draped({ vertexColors: true }));
       m.receiveShadow = true;
       group.add(m);
-      // keep the tread bare of grass: two clear circles along the loop's long axis
-      world.lot = { clear: [[L.cx - spot.rx * 9, L.cz - spot.rz * 9, 13], [L.cx + spot.rx * 9, L.cz + spot.rz * 9, 13]] };
+      // keep the tread bare of grass (the island stays meadow): an arm each side and a cap at each end
+      const arm = (s) => [L.cx - spot.rx * 14 + L.px * 10.6 * s, L.cz - spot.rz * 14 + L.pz * 10.6 * s, L.cx + spot.rx * 14 + L.px * 10.6 * s, L.cz + spot.rz * 14 + L.pz * 10.6 * s, 4.6];
+      world.lot = { clear: [arm(1), arm(-1), [L.cx - spot.rx * 21, L.cz - spot.rz * 21, 6], [L.cx + spot.rx * 21, L.cz + spot.rz * 21, 6]] };
     }
     if (th === main) {
-      // the vault toilet sits inside the loop on the trail side, or behind the cars at other trailheads
-      const ox = spot.lot ? spot.lot.cx + spot.lot.px * 4.5 : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
-      const oz = spot.lot ? spot.lot.cz + spot.lot.pz * 4.5 : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
-      place(landmark(models.outhouse, 2.5), ox, oz, spot.lot ? -spot.lot.px : spot.rx, spot.lot ? -spot.lot.pz : spot.rz);
+      // the vault toilet stands on the island inside the loop, doors toward the cars, or behind the cars at other trailheads
+      const ox = spot.lot ? spot.lot.cx : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
+      const oz = spot.lot ? spot.lot.cz : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
+      place(landmark(models.outhouse, 2.5), ox, oz, cars[0].start.x - ox, cars[0].start.z - oz);
+      if (spot.lot) {   // the quad waits on the far arm, nose along the loop
+        const L = spot.lot, qx = L.cx + L.px * 10.6 - spot.rx * 9, qz = L.cz + L.pz * 10.6 - spot.rz * 9;
+        world.starts[th.name].quad = { x: qx, z: qz, yaw: Math.atan2(-spot.rx, -spot.rz) };
+      }
     }
     if (th === main) {
       // the sign stands where the trail leaves, on dry ground beside it
-      const sx = th.x + (tp[0] - th.x) * 0.25, sz = th.z + (tp[1] - th.z) * 0.25;
+      const sx = th.x + (tp[0] - th.x) * 0.3, sz = th.z + (tp[1] - th.z) * 0.3;
       const fx = tp[0] - th.x, fz = tp[1] - th.z, fl = Math.hypot(fx, fz) || 1;
-      for (const off of [4, 6, 8, -4, -6, 10]) {
+      for (const off of [2.6, -2.6, 4, -4, 6, 8]) {
         const gx = sx - (fz / fl) * off, gz = sz + (fx / fl) * off;
         const bk = world.nearestStream(gx, gz);
         if ((bk.stream && bk.d < bk.stream.width / 2 + 1.2) || world.lakeAt(gx, gz)) continue;

@@ -212,7 +212,7 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
 #map-card .mc-kind { font: 700 var(--t-xs) var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--accent); }
 #map-card .mc-name { margin-top: 4px; font: 400 var(--t-xl)/1.1 var(--display); }
 #map-card .mc-sub { font: 500 var(--t-sm) var(--sans); color: var(--dim); margin: 6px 0 14px; font-variant-numeric: tabular-nums; }
-#map-card .mc-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+#map-card .mc-actions { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
 #map-card .mc-actions button { padding: 13px 16px; }
 #map-card button:disabled { opacity: 0.4; }
 #map-hint { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3; padding: 10px 18px; border-radius: 999px;

@@ -81,7 +81,7 @@ void main() {
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
-  col += uGlow * (pow(sd, 12.0) * (0.05 + 0.11 * uSunVis) + pow(sd, 48.0) * 0.42 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
+  col += uGlow * (pow(sd, 36.0) * (0.04 + 0.08 * uSunVis) + pow(sd, 260.0) * 0.8 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
   // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
   if (h > 0.03) {
     float ht = 9000.0 - cameraPosition.y;

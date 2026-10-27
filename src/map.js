@@ -11,13 +11,13 @@ import { clamp } from './noise.js';
 const $ = (id) => document.getElementById(id);
 const ft = (m) => Math.round(m * 3.28084).toLocaleString();
 const dist = (m) => (m < 950 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
-const KIND = { tent: 'Your camp', car: 'Your car', trailhead: 'Trailhead', peak: 'Summit', lake: 'Lake', friend: 'Friend' };
-const FILTERS = [['all', 'All'], ['places', 'Places'], ['summits', 'Summits'], ['lakes', 'Lakes']];
-const GROUP_OF = { tent: 'places', car: 'places', trailhead: 'places', friend: 'places', peak: 'summits', lake: 'lakes' };
+const KIND = { tent: 'Your camp', car: 'Your car', trailhead: 'Trailhead', peak: 'Summit', lake: 'Lake', friend: 'Friend', trail: 'Trail' };
+const FILTERS = [['all', 'All'], ['places', 'Places'], ['trails', 'Trails'], ['summits', 'Summits'], ['lakes', 'Lakes']];
+const GROUP_OF = { tent: 'places', car: 'places', trailhead: 'places', friend: 'places', trail: 'trails', peak: 'summits', lake: 'lakes' };
 const MAX_ZOOM = 12;
 // brand: peach #f6d3bd, navy #37587b, black and white neutrals
 const C = { land: '#0d1117', peach: '#f6d3bd', navy: '#37587b', navyLight: '#8fb1d6', white: '#ffffff', ink: '#0a0d12' };
-const MARK = { tent: C.peach, car: C.peach, trailhead: C.peach, friend: C.white, peak: C.white, lake: C.navyLight };
+const MARK = { tent: C.peach, car: C.peach, trailhead: C.peach, friend: C.white, trail: C.peach, peak: C.white, lake: C.navyLight };
 
 export class GameMap {
   constructor(world, guide) {
@@ -38,6 +38,8 @@ export class GameMap {
     this.zoomTo = null;             // eased wheel zoom, anchored on the cursor
     this.lastT = 0;
     this.onTravel = () => {};
+    this.onHike = () => {};
+    this.route = null;              // { line: [[x, z]...], dest } while a guided hike is on
     this.onClose = () => {};
     this.cv = $('map-canvas');
     this.#bind();
@@ -139,6 +141,15 @@ export class GameMap {
     if (w.carSpot) out.push({ kind: 'car', name: 'Your car', x: w.carSpot.x, z: w.carSpot.z, group: 'places' });
     for (const f of s.friends || []) out.push({ kind: 'friend', name: f.name, x: f.x, z: f.z, group: 'places' });
     for (const p of w.places.filter((q) => q.kind === 'trailhead')) out.push({ kind: 'trailhead', name: p.name, x: p.x, z: p.z, group: 'places' });
+    // every named trail, as the end of it nearer to you
+    for (const t of w.trails) {
+      if (t.kind !== 'trail' || !t.name.endsWith('Trail') || t.name === 'Unnamed trail') continue;
+      const a = t.pts[0], b = t.pts[t.pts.length - 1];
+      const e = Math.hypot(a[0] - s.x, a[1] - s.z) < Math.hypot(b[0] - s.x, b[1] - s.z) ? a : b;
+      const prev = out.find((d) => d.kind === 'trail' && d.name === t.name);
+      if (prev) { if (Math.hypot(e[0] - s.x, e[1] - s.z) < Math.hypot(prev.x - s.x, prev.z - s.z)) { prev.x = e[0]; prev.z = e[1]; } continue; }
+      out.push({ kind: 'trail', name: t.name, x: e[0], z: e[1], len: w.trailLength.get(t.name), group: 'trails' });
+    }
     for (const p of w.places.filter((q) => q.kind === 'peak')) out.push({ kind: 'peak', name: p.name, x: p.x, z: p.z, elev: p.elev, group: 'summits', known: known(p) });
     // one entry per named water: where a name belongs to several pools (Twin Lakes, Camp Lake) keep the biggest
     const lakes = new Map();
@@ -171,6 +182,13 @@ export class GameMap {
     this.#renderResults();
   }
 
+  hike() {
+    if (!this.sel) return;
+    const d = this.sel;
+    this.hide();
+    this.onHike(d);
+  }
+
   travel() {
     if (!this.sel) return;
     const d = this.sel, lim = this.world.half - 60;
@@ -186,10 +204,13 @@ export class GameMap {
     const s = this.state;
     $('mc-kind').textContent = KIND[d.kind] || 'Place';
     $('mc-name').textContent = d.name;
-    const sub = [d.elev ? `${ft(d.elev)} ft` : '', `${dist(Math.hypot(d.x - s.x, d.z - s.z))} away`].filter(Boolean).join(' · ');
+    const sub = [d.elev ? `${ft(d.elev)} ft` : '', d.len ? `${dist(d.len)} long` : '', `${dist(Math.hypot(d.x - s.x, d.z - s.z))} away`].filter(Boolean).join(' · ');
     $('mc-sub').textContent = sub;
     $('mc-go').disabled = d.kind === 'car';
-    $('mc-go').textContent = d.kind === 'friend' ? 'Meet up' : 'Travel here';
+    $('mc-go').textContent = d.kind === 'friend' ? 'Meet up' : 'Fast travel';
+    const on = this.route && this.route.dest.name === d.name;
+    $('mc-hike').textContent = on ? 'Stop route' : 'Start hike';
+    $('mc-hike').classList.toggle('on', !!on);
   }
 
   // ---------------------------------------------------------------- DOM: filters, results, mode
@@ -220,7 +241,7 @@ export class GameMap {
       b.querySelector('.nm').textContent = d.name;
       b.querySelector('small').textContent = `${KIND[d.kind] || 'Place'} · ${dist(d.away)}`;
       b.onclick = () => { this.sel = d; this.#renderCard(); this.#renderResults(); this.#centerOn(d.x, d.z, Math.max(this.view.zoom, 2.4)); };
-      b.ondblclick = () => { this.sel = d; this.travel(); };
+      b.ondblclick = () => { this.sel = d; this.hike(); };
       el.appendChild(b);
     }
   }
@@ -434,6 +455,7 @@ export class GameMap {
     $('map-find').onclick = () => { if (this.state) { this.#centerOn(this.state.x, this.state.z, Math.max(this.view.zoom, 2.4)); this.#draw(); } };
     $('map-close').onclick = () => this.onClose();
     $('mc-go').onclick = () => this.travel();
+    $('mc-hike').onclick = () => this.hike();
     $('mc-clear').onclick = () => { this.sel = null; this.#renderCard(); this.#renderResults(); this.#draw(); };
     $('map-modes').querySelectorAll('button').forEach((b) => { b.onclick = () => { this.#setMode(b.dataset.mode); this.#draw(); }; });
     const search = $('map-search');
@@ -444,7 +466,7 @@ export class GameMap {
       if (e.key === '/') { e.preventDefault(); search.focus(); return; }
       if (e.key === '+' || e.key === '=') this.#zoomAt(1.4, cv.clientWidth / 2, cv.clientHeight / 2, true);
       else if (e.key === '-') this.#zoomAt(1 / 1.4, cv.clientWidth / 2, cv.clientHeight / 2, true);
-      else if (e.key === 'Enter') this.travel();
+      else if (e.key === 'Enter') this.hike();
       else if (/^Arrow/.test(e.key)) {
         const s = e.shiftKey ? 500 : 160 / this.view.zoom;
         const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
@@ -476,7 +498,7 @@ export class GameMap {
     else if (name === 'Up' || name === 'Left') this.#step(-1);
     else if (name === 'RB') this.#cycleFilter(1);
     else if (name === 'LB') this.#cycleFilter(-1);
-    else if (name === 'A') this.travel();
+    else if (name === 'A') this.hike();
     else if (name === 'Y') this.#centerOn(this.state.x, this.state.z, Math.max(this.view.zoom, 2.4));
     else if (name === 'X') this.#setMode('guide');
     else return false;
@@ -534,8 +556,18 @@ export class GameMap {
     g.imageSmoothingQuality = 'high';
     if (this.base) g.drawImage(this.base, x0, y0, w.extent * k, w.extent * k);
 
+    // the guided route, glowing
+    if (this.route) {
+      g.lineJoin = g.lineCap = 'round';
+      g.beginPath();
+      this.route.line.forEach(([x, z], i) => { const [px, py] = P(x, z); if (i) g.lineTo(px, py); else g.moveTo(px, py); });
+      g.strokeStyle = 'rgba(246,211,189,0.22)'; g.lineWidth = 11; g.stroke();
+      g.strokeStyle = 'rgba(246,211,189,0.55)'; g.lineWidth = 5; g.stroke();
+      g.strokeStyle = '#fff4e8'; g.lineWidth = 2; g.stroke();
+    }
+
     // a dashed line from you to the pick
-    if (this.sel && s) {
+    if (this.sel && s && !this.route) {
       const [ax, ay] = P(s.x, s.z), [bx, by] = P(this.sel.x, this.sel.z);
       g.strokeStyle = C.peach; g.lineWidth = 1.6; g.setLineDash([6, 6]);
       g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke(); g.setLineDash([]);
@@ -561,7 +593,7 @@ export class GameMap {
     }
 
     const placed = [];
-    const prio = (m) => (m.on ? 100 : m.hot ? 90 : { tent: 80, car: 78, friend: 76, trailhead: 70, peak: 60, lake: 40 }[m.d.kind] || 30);
+    const prio = (m) => (m.on ? 100 : m.hot ? 90 : { tent: 80, car: 78, friend: 76, trailhead: 70, trail: 66, peak: 60, lake: 40 }[m.d.kind] || 30);
     for (const m of marks.sort((a, b) => prio(b) - prio(a))) {
       const { d, x, y, on, hot } = m;
       if (!on && !hot && !labels && d.kind === 'lake' && this.view.zoom < 3.2) continue;   // the overview keeps to the big names
