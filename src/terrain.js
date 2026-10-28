@@ -3,6 +3,7 @@ import { withAtmosphere } from './atmosphere.js';
 import { SOIL, SOIL_PARS, SOIL_NORMAL, SOIL_COLOR } from './soil.js';
 import { MTN, MTN_PARS, MTN_NORMAL, MTN_COLOR } from './mountain.js';
 import { chunkGeometry } from './culling.js';
+import { LOWPOLY, LOWPOLY_PARS } from './lowpoly.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
 // and the distant horizon mesh. The near terrain itself is cdlod.js.
@@ -235,17 +236,21 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
   const mat = new THREE.MeshLambertMaterial();
   mat.onBeforeCompile = (shader) => {
     albedoUniforms(shader, colorMap, extent, noise, coverMap);
+    Object.assign(shader.uniforms, LOWPOLY);
     withAtmosphere(shader, { weather: 1 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNrm = mat3(modelMatrix) * objectNormal;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n${ALBEDO_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n${ALBEDO_UNIFORMS}\n${LOWPOLY_PARS}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float camD = length(vWPos - cameraPosition);
         vec3 wn = normalize(vWNrm);
+        // low poly: the horizon mesh's own triangles are the facets
+        if (uLowPoly > 0.5) wn = normalize(cross(dFdx(vWPos), dFdy(vWPos))) * sign(cross(dFdx(vWPos), dFdy(vWPos)).y + 1e-9);
         float mtnW = 0.0;
         ${ALBEDO}
+        if (uLowPoly > 0.5) diffuseColor.rgb = lpColor(vWPos.xz, max(60.0, camD * 0.01), wn, uGreen);
         // past the baked map the satellite colour has run out: paint invented ground, rock on the crests
         // and dark timber in the folds, fading in over the first few km
         float outK = smoothstep(0.0, 1500.0, max(abs(vWPos.x), abs(vWPos.z)) - uExtent * 0.5);
@@ -262,6 +267,11 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
           ${BOXEL_COLOR}
         }`);
   };
+  mat.onBeforeCompile = ((inner) => (shader) => {
+    inner(shader);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+      if (uLowPoly > 0.5) { normal = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition))); nonPerturbedNormal = normal; }`);
+  })(mat.onBeforeCompile);
   mat.customProgramCacheKey = () => 'rawah-far-terrain';
   return mat;
 }

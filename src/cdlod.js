@@ -4,6 +4,7 @@ import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR
 import { withAtmosphere } from './atmosphere.js';
 import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
 import { CULL } from './culling.js';
+import { LOWPOLY, LOWPOLY_PARS, LOWPOLY_FACET } from './lowpoly.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
 // A quadtree over the whole map picks, every frame, which nodes to draw and
@@ -101,7 +102,7 @@ export class CDLODTerrain {
 
     this.sculpt = world.sculpt = new Sculpt(world);
     this.uniforms = {
-      ...this.sculpt.uniforms,
+      ...this.sculpt.uniforms, ...LOWPOLY,
       uHeight: { value: heightTex }, uMask: { value: maskTex },
       uN: { value: N }, uCell: { value: world.cell }, uHScale: { value: world.hScale }, uHOffset: { value: world.hOffset },
       uRanges: { value: this.ranges }, uGrid: { value: GRID }, uCam: { value: new THREE.Vector3() },
@@ -143,7 +144,9 @@ export class CDLODTerrain {
           varying vec3 vWPos;
           ${ALBEDO_UNIFORMS}
           ${HEIGHT_GLSL}
-          ${WORLEY_GLSL}`)
+          ${WORLEY_GLSL}
+          ${LOWPOLY_PARS}
+          ${LOWPOLY_FACET}`)
         .replace('#include <normal_fragment_begin>', `
           float camD = length(vWPos - cameraPosition);
           float e = max(uCell * 0.55, camD * 0.0025);
@@ -169,10 +172,24 @@ export class CDLODTerrain {
           #ifdef NEAR_DETAIL
           ${NEAR_NORMAL}
           #endif
+          // low poly (lowpoly.js): light the facet, not the pixel, and drop every distance-limited detail layer
+          vec2 lpA = p, lpB = p; float lpF = 1.0, lpT = 0.0;
+          if (uLowPoly > 0.5) {
+            wn = lpNormal(p, camD, lpA, lpB, lpF, lpT);
+            mtnW = 0.0;
+            #ifdef NEAR_DETAIL
+            nearK = 0.0;
+            #endif
+          }
           float faceDirection = 1.0;
           vec3 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
           vec3 nonPerturbedNormal = normal;
           ${ALBEDO}
+          if (uLowPoly > 0.5) {
+            vec3 lpc = lpColor(lpA, lpF, wn, uGreen);
+            if (lpT > 0.0) lpc = mix(lpc, lpColor(lpB, lpF * 4.0, wn, uGreen), lpT);
+            diffuseColor.rgb = lpc;
+          }
           // a face you carved: the satellite image is stretched straight down it, so lay bare earth with bedding lines instead
           if (editSlope > 0.2) {
             float ek = smoothstep(0.2, 0.8, editSlope) * (1.0 - smoothstep(200.0, 900.0, camD));

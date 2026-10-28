@@ -3,6 +3,7 @@ import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
 import { TerrainShadow, bakeStatic } from './terrainbake.js';
 import { CDLODTerrain } from './cdlod.js';
+import { LOWPOLY } from './lowpoly.js';
 import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
 import { LeafFall } from './leaffall.js';
@@ -386,6 +387,7 @@ input.onPress = (code) => {
   if (code === 'KeyT' && !state.paused && !map.open) props.cycleTool();
   if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
   if (code === 'KeyP' && !map.open) swapPlayer();
+  if (code === 'Backslash' && !map.open) { setLowPoly(!settings.lowPoly); hud.toast(settings.lowPoly ? 'Low poly world' : 'Photographic world'); }
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
@@ -742,6 +744,11 @@ for (const [id, key] of [['set-crew-url', 'crewUrl'], ['set-crew-model', 'crewMo
   $(id).value = settings[key] || '';
   $(id).onchange = () => { settings[key] = $(id).value.trim(); storeJSON('rawah-settings', settings); };
 }
+// low poly look (src/lowpoly.js): one uniform, so it flips instantly. [\\] toggles it in play for side-by-sides
+LOWPOLY.uLowPoly.value = settings.lowPoly ? 1 : 0;
+const setLowPoly = (on) => { settings.lowPoly = on; LOWPOLY.uLowPoly.value = on ? 1 : 0; $('set-lowpoly').checked = on; storeJSON('rawah-settings', settings); };
+$('set-lowpoly').checked = !!settings.lowPoly;
+$('set-lowpoly').onchange = () => setLowPoly($('set-lowpoly').checked);
 $('set-relief').checked = settings.relief;
 $('set-relief').onchange = () => { settings.relief = $('set-relief').checked; atmosphere.uTSOn.value = settings.relief ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-mirror').checked = settings.mirror;
