@@ -790,7 +790,8 @@ function act() {
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
-      else if (party.engageable(p, hiker.yaw)) toggleTogether(true, party.engageable(p, hiker.yaw));
+      else if (party.hold) party.release();
+      else if (party.engageable(p, hiker.yaw)) party.engage(party.engageable(p, hiker.yaw));
       else if (si >= 0) sitDown(si);
     }
   } else if (state.seat >= 0 && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k))) standUp();
@@ -1409,18 +1410,15 @@ function raceGoal() {
 }
 
 let togetherGoal = null;
-let togetherWho = null;
-function toggleTogether(open = !togetherOpen, who = null) {
+function toggleTogether(open = !togetherOpen) {
   if (open && (!state.started || state.paused || map.open || state.travel)) return;
   togetherOpen = open;
-  togetherWho = open ? who : null;
-  if (who) party.engage(who); else if (!open) party.release();
   $('together').classList.toggle('hidden', !open);
   document.body.classList.toggle('together-open', open);
   if (open) {
     keys.clear();
     togetherGoal = raceGoal();
-    $('tog-who').textContent = who ? cap(who.name) : `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
+    $('tog-who').textContent = `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
     const race = $('tog-race');
     race.textContent = togetherGoal ? `Race to ${togetherGoal.name}` : 'Race (no summit or lake close enough)';
     race.disabled = !togetherGoal;
@@ -1432,7 +1430,6 @@ function toggleTogether(open = !togetherOpen, who = null) {
 for (const b of $('together').querySelectorAll('[data-stance]')) {
   b.onclick = () => {
     const s = b.dataset.stance;
-    if (s === 'chat') { party.chatWith(togetherWho || party.near(hiker.pos)); toggleTogether(false); return; }
     if (s === 'race') { if (!togetherGoal) return; party.command('race', togetherGoal); }
     else party.command(s);
     toggleTogether(false);
@@ -1816,6 +1813,7 @@ function tick(dt, draw = true) {
     if (!hint && state.seat < 0 && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[U] sit · [N] roast a marshmallow';
     if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: p, yaw: hiker.yaw, mode: hiker.mode })) hint = '[B] cast a line';
     if (!hint && !atv.riding && atv.near(p)) hint = '[U] ride the quad';
+    if (!hint && party.hold) hint = `[U] let ${cap(party.hold.a.name)} go`;
     if (!hint && !atv.riding && hiker.mode === 'walk' && state.seat < 0) { const bud = party.engageable(p, hiker.yaw); if (bud) hint = `[U] talk to ${cap(bud.name)}`; }
     if (!hint && route.on) hint = `Route to ${route.name} · ${route.left < 950 ? `${Math.round(route.left / 10) * 10} m` : `${(route.left / 1000).toFixed(1)} km`}`;
     if (weather.storm > 0.4 && p.y > cv.treeline - 40) hint = 'Lightning on the crest. Get below treeline.';

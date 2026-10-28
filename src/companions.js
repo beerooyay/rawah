@@ -233,17 +233,14 @@ export class Party {
     return null;
   }
 
-  /** Stop them where they stand, turn to you and say hello. */
+  /** Stop them where they stand, turn to you and say hello; they stay put until you let them go (U, or walking off). */
   engage(a) {
     this.hold = { a };
     this.say('greet', {}, a, { force: true });
   }
 
   /** Let them go back to what they were doing, after a beat. */
-  release() { if (this.hold) this.hold.rel = 1; }
-
-  /** They say what is on their mind. */
-  chatWith(a) { this.say(this.#contextKind(), {}, a, { force: true }); }
+  release() { if (this.hold && this.hold.rel === undefined) this.hold.rel = 0.8; }
 
   /** Say exactly this, now, over `who` (or the nearer friend). */
   tell(text, who = null, cool = 0) {
@@ -424,6 +421,7 @@ export class Party {
     if (near > 120) this.gather(pl);   // fast travel, a long fall, or just left behind: catch up
 
     this.ctx.player = pl;
+    if (this.hold && this.hold.rel === undefined && Math.hypot(this.hold.a.x - pl.pos.x, this.hold.a.z - pl.pos.z) > 14) this.release();
     if (this.hold && this.hold.rel !== undefined && (this.hold.rel -= dt) <= 0) this.hold = null;
     if (dt > 0) {
       this.#needs(dt, pl, speed);
@@ -495,7 +493,7 @@ export class Party {
     if (!b) {
       this.urge -= dt;
       if (this.urge > 0) return;
-      const calm = this.mode === 'follow' && !this.duo && !this.work && !this.race && !this.roam && !this.go && !this.atv && this.stance !== 'rest'
+      const calm = this.mode === 'follow' && !this.hold && !this.duo && !this.work && !this.race && !this.roam && !this.go && !this.atv && this.stance !== 'rest'
         && pl.mode === 'walk' && !pl.action && this.actors.every((a) => !a.seat && !a.riding && !a.boarding);
       if (!calm) { this.urge = 15; return; }
       const a = pick(this.actors), spot = this.#coverSpot(a, pl);
@@ -592,7 +590,7 @@ export class Party {
     this.next -= dt;
     const calm = pl.mode === 'walk' && pl.grounded && !pl.action;
     const close = this.actors.every((a) => Math.hypot(a.x - pl.pos.x, a.z - pl.pos.z) < 22);
-    if (this.next <= 0 && calm && close && !this.work && !this.biz) {
+    if (this.next <= 0 && calm && close && !this.work && !this.biz && !this.hold) {
       if (Math.random() < 0.4 && this.startWork(pl)) this.next = between(30, 60);
       else this.startDuo(pl);
     }
