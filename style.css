@@ -650,3 +650,8 @@ button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 
 .mc-sub { font: 600 10px/1 var(--sans); letter-spacing: .08em; color: var(--faint); text-transform: uppercase; }
 .crew-row { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
 .crew-row .togchip { padding: 8px 14px; font-size: 10px; }
+
+/* the global button rule gives every button a pill shape + hover fill —
+   icon buttons opt out */
+.pick-card .ic { border-radius: 0; }
+.pick-card .ic:hover { background: none; }
