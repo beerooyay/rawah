@@ -25,7 +25,7 @@ const TIMES = [['Dawn', 6], ['Morning', 9], ['Midday', 13], ['Golden hour', 18.5
  * Wires the title picks. `trailheads` are the places to park at and
  * `characters` maps each name to its model URL.
  */
-export function buildTitle({ trailheads, pick, characters }) {
+export function buildTitle({ trailheads, pick, characters, onTime }) {
   // a row of chips bound to a pick field; numbers mark the closest value, strings the exact one
   const chips = (rootId, items, get, set) => {
     const root = $(rootId);
@@ -46,7 +46,7 @@ export function buildTitle({ trailheads, pick, characters }) {
   };
 
   chips('chips-season', SEASONS, () => pick.doy, (v) => { pick.doy = v; });
-  chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; });
+  chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; onTime?.(v); });
 
   // ---- who: one hiker at a time, cycled by arrows, dots or the arrow keys
   const names = Object.keys(characters);

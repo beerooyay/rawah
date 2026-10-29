@@ -533,3 +533,70 @@ body.touch #ask { bottom: 150px; }
 #cine-place { font: 400 clamp(30px, 5vw, 54px)/1.05 var(--display); }
 #cine-sub { margin-top: 6px; font: 600 var(--t-md) var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 #cine-skip { position: absolute; right: 4vw; bottom: calc(11vh + 3vh); opacity: 0; font: 500 var(--t-xs) var(--sans); letter-spacing: 0.08em; color: var(--dim); }
+
+/* ------------------------------------------------------------ clips (src/recorder.js) */
+#rec { position: fixed; z-index: 45; top: 16px; right: var(--pad); display: none; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; min-width: 40px; min-height: 0; padding: 0 12px; border-radius: 999px; color: var(--ink); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+#rec i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); flex: none; transition: background 0.2s; }
+#rec .rec-t { font: 600 var(--t-sm) var(--sans); font-variant-numeric: tabular-nums; }
+#rec .rec-t:empty { display: none; }
+#rec.on { display: flex; background: var(--glass-strong); border-color: rgba(246, 211, 189, 0.55); }
+#rec.on i { background: var(--accent); animation: pulse 0.9s infinite alternate; }
+body.playing #rec { display: flex; }
+body.map-open #rec:not(.on) { display: none; }
+body.touch #rec { top: calc(max(12px, env(safe-area-inset-top)) + 50px); right: max(14px, env(safe-area-inset-right)); }
+
+#clip-pop { position: fixed; z-index: 55; right: var(--pad); bottom: 64px; display: grid; grid-template-columns: 168px auto; align-items: center; gap: 12px;
+  padding: 6px 18px 6px 6px; min-height: 0; text-align: left; background: var(--glass-strong); border-radius: 14px;
+  opacity: 0; transform: translateX(24px); pointer-events: none; transition: opacity 0.6s, transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+#clip-pop.show { opacity: 1; transform: none; pointer-events: auto; }
+#clip-pop img { width: 168px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 9px; display: block; background: #151a22; }
+#clip-pop b { display: block; font: 400 var(--t-md)/1.2 var(--display); }
+#clip-pop small { display: block; margin-top: 3px; font: 500 var(--t-xs) var(--sans); color: var(--dim); font-variant-numeric: tabular-nums; }
+#clip-pop:hover { border-color: var(--accent); }
+
+#viewer { z-index: 60; }
+.vw-sheet { width: min(980px, 100%); }
+.vw-body { padding: 16px 24px 8px; display: grid; gap: 14px; overflow-y: auto; }
+.vw-stage { background: #000; border-radius: 12px; overflow: hidden; display: grid; place-items: center; max-height: 56vh; }
+.vw-stage video { display: block; width: 100%; max-height: 56vh; object-fit: contain; cursor: pointer; }
+.vw-track { position: relative; height: 56px; border-radius: 10px; overflow: hidden; background: #151a22; cursor: pointer; touch-action: none; user-select: none; }
+.vw-strip { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.85; }
+.vw-segs i { position: absolute; top: 0; bottom: 0; box-shadow: inset 2px 0 0 var(--black); }
+.vw-segs i:first-child { box-shadow: none; }
+.vw-segs i.cut { background: repeating-linear-gradient(135deg, rgba(10, 13, 18, 0.82) 0 6px, rgba(10, 13, 18, 0.6) 6px 12px); }
+.vw-segs i.sel { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+.vw-shade { position: absolute; top: 0; bottom: 0; background: rgba(10, 13, 18, 0.78); pointer-events: none; }
+.vw-shade.l { left: 0; } .vw-shade.r { right: 0; }
+.vw-handle { position: absolute; top: 0; bottom: 0; width: 14px; margin-left: -7px; background: var(--accent); border-radius: 5px; cursor: ew-resize; z-index: 2; }
+.vw-handle::after { content: ''; position: absolute; left: 6px; top: 18px; bottom: 18px; width: 2px; border-radius: 2px; background: var(--accent-ink); opacity: 0.5; }
+.vw-head { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--white); box-shadow: 0 0 6px rgba(0, 0, 0, 0.7); pointer-events: none; z-index: 3; }
+.vw-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.vw-time { font: 600 var(--t-sm) var(--sans); font-variant-numeric: tabular-nums; color: var(--dim); min-width: 110px; }
+.vw-tools { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.vw-tools button { padding: 10px 16px; min-height: 40px; font-size: var(--t-sm); }
+.vw-tools button:disabled { opacity: 0.4; cursor: default; }
+.vw-hint { margin: 0; font: 500 var(--t-xs)/1.8 var(--sans); color: var(--faint); }
+.vw-keeps { align-self: center; font: 500 var(--t-sm) var(--sans); color: var(--dim); font-variant-numeric: tabular-nums; }
+.vw-ghost { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+.vw-close { margin-left: auto; }
+
+.clips-head { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.clips-head p { margin: 0; font-size: var(--t-sm); color: var(--dim); }
+.clips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.clip-card { display: grid; gap: 6px; }
+.cc-open { position: relative; padding: 0; min-height: 0; border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; background: #151a22; }
+.cc-open img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s; }
+.cc-open:hover img { transform: scale(1.04); }
+.cc-open:hover { border-color: var(--accent); }
+.cc-dur { position: absolute; right: 8px; bottom: 8px; padding: 3px 8px; border-radius: 999px; background: var(--glass-strong); font: 600 var(--t-xs) var(--sans); font-variant-numeric: tabular-nums; }
+.cc-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font: 500 var(--t-sm) var(--sans); }
+.cc-meta small { font-size: var(--t-xs); color: var(--faint); }
+.cc-del { justify-self: start; padding: 6px 10px; min-height: 32px; font-size: var(--t-xs); }
+.clips-empty { color: var(--faint); font-size: var(--t-sm); }
+@media (max-width: 700px) {
+  #clip-pop { grid-template-columns: 120px auto; bottom: 16px; }
+  #clip-pop img { width: 120px; }
+  .vw-body { padding: 12px 16px 6px; }
+  .vw-tools { margin-left: 0; }
+}

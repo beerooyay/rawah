@@ -242,7 +242,7 @@ export class World {
     for (const t of this.trails) {
       const pts = resample(t.pts, t.kind === 'road' ? 4 : 2.5);
       t.dense = pts;
-      t.width = t.kind === 'road' ? 5.2 : t.kind === 'track' ? 3 : 1.1;
+      t.width = t.kind === 'road' ? 6.6 : t.kind === 'track' ? 3 : 1.1;
       let len = 0;
       for (let i = 0; i < pts.length - 1; i++) {
         const s = { ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1], trail: t };

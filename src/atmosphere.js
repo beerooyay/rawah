@@ -25,7 +25,7 @@ export const atmosphere = {
   uCloudOff: { value: new THREE.Vector2() },
   uCloudCover: { value: 0 },
   uCloudShade: { value: 0 },
-  uCloudAlt: { value: 4700 },
+  uCloudAlt: { value: 4200 },
   // surfaces
   uWet: { value: 0 },
   uSnow: { value: 0 },
@@ -60,11 +60,15 @@ float pressAt(vec2 p) {
 }
 `;
 
-// Cloud density from a tiling noise texture: four octaves for the sky, two for shadows.
+// Cloud density: where and how much comes from the live weather field (cloudsim.js, packed into the G and B
+// channels of the noise texture over 64 km around the map), the shapes from the tiling noise in R: four octaves
+// for the sky, two for shadows.
 export const CLOUD_GLSL = /* glsl */ `
 uniform sampler2D uCloudTex;
 uniform vec2 uCloudOff;
 uniform float uCloudCover, uCloudAlt;
+// the weather field at a point: cover (0 clear to 1 solid) and how tall the cloud there grows
+vec2 cloudWx(vec2 p) { return texture2D(uCloudTex, clamp(p / 64000.0 + 0.5, 0.002, 0.998)).gb; }
 // each octave is turned by a different angle, and the whole field is domain-warped, so
 // no two octaves line up and the noise tile never shows as a grid
 vec2 cloudRot1(vec2 q) { return mat2(0.8, 0.6, -0.6, 0.8) * q; }
@@ -74,7 +78,7 @@ vec2 cloudWarp(vec2 q) {
   vec2 w = vec2(texture2D(uCloudTex, q * 0.61 + vec2(0.23, 0.41)).r, texture2D(uCloudTex, q * 0.61 + vec2(0.71, 0.13)).r) - 0.5;
   return q + w * 0.2;
 }
-float cloudFbm(vec2 p, int oct) {
+float cloudFbm(vec2 p, int oct, float cover) {
   vec2 q = cloudWarp((p + uCloudOff) / 20000.0);
   q.y *= 1.05;    // a slight pull along the drift, so banks have a grain
   float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, cloudRot1(q) * 2.73 + 0.31).r * 0.24;
@@ -84,12 +88,13 @@ float cloudFbm(vec2 p, int oct) {
   // reads as clumps with blue between, not an even spread. relaxes toward real overcast.
   // the field drifts slower than the layer, so banks gather and dissolve as clouds pass — shapes live, not just slide
   float bank = texture2D(uCloudTex, cloudRot3((p + uCloudOff * 0.37) / 5200.0)).r;
-  f *= mix(1.0, 0.5 + bank, 0.55 * (1.0 - uCloudCover * 0.6));
+  f *= mix(1.0, 0.5 + bank, 0.55 * (1.0 - cover * 0.6));
   return f;
 }
 float cloudDensity(vec2 p, int oct) {
-  float th = mix(0.74, 0.2, uCloudCover);
-  return smoothstep(th, th + 0.13, cloudFbm(p, oct));
+  float cover = cloudWx(p).x;
+  float th = mix(0.74, 0.2, cover);
+  return smoothstep(th, th + 0.13, cloudFbm(p, oct, cover));
 }
 `;
 
@@ -98,11 +103,11 @@ export function cloudDensityAt(x, z) {
   const tex = atmosphere.uCloudTex.value;
   if (!tex) return 0;
   const { data, width: n } = tex.image;
-  const at = (u, v) => {
+  const at = (u, v, ch = 0) => {
     const fx = u * n - 0.5, fy = v * n - 0.5;
     const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
     const px = (i) => ((i % n) + n) % n;
-    const s = (i, j) => data[(px(j) * n + px(i)) * 4] / 255;
+    const s = (i, j) => data[(px(j) * n + px(i)) * 4 + ch] / 255;
     const a = s(x0, y0), b = s(x0 + 1, y0), c = s(x0, y0 + 1), d = s(x0 + 1, y0 + 1);
     return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
   };
@@ -113,10 +118,10 @@ export function cloudDensityAt(x, z) {
   const u = ux + wx * 0.2, v = (uy + wy * 0.2) * 1.05;
   const bx = (x + off.x * 0.37) / 5200, by = (z + off.y * 0.37) / 5200;
   const bank = at(-0.68 * bx - 0.73 * by, 0.73 * bx - 0.68 * by);
-  const cover = atmosphere.uCloudCover.value;
+  const cover = at(Math.min(0.998, Math.max(0.002, x / 64000 + 0.5)), Math.min(0.998, Math.max(0.002, z / 64000 + 0.5)), 1);   // cloudWx
   const f = (at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1)
     * (1 + (0.5 + bank - 1) * 0.55 * (1 - cover * 0.6));
-  const th = 0.74 + (0.2 - 0.74) * atmosphere.uCloudCover.value;
+  const th = 0.74 + (0.2 - 0.74) * cover;
   const t = Math.min(1, Math.max(0, (f - th) / 0.13));
   return t * t * (3 - 2 * t);
 }

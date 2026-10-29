@@ -3,10 +3,12 @@ import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
 import { TerrainShadow, bakeStatic } from './terrainbake.js';
 import { CDLODTerrain } from './cdlod.js';
+import { CloudSim } from './cloudsim.js';
+import { CloudPass } from './clouds.js';
 import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
 import { LeafFall } from './leaffall.js';
-import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
+import { buildLakes, buildTrails, buildSigns, buildStreams, gradeLot } from './features.js';
 import { LakeMirror } from './mirror.js';
 import { Sky, setSun, MOONS } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
@@ -55,6 +57,7 @@ import { LensFlare } from './flare.js';
 import { SOIL, loadSoil } from './soil.js';
 import { MTN, loadMountain } from './mountain.js';
 import { Fireworks } from './fireworks.js';
+import { Recorder } from './recorder.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -168,6 +171,8 @@ tshadow.update(_ld.set(0.3, 0.8, 0.5).normalize());   // fills every channel onc
 scene.add(terrain.group);
 scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene, renderer);
+const cloudSim = new CloudSim(world, noiseTex);   // where clouds form: humidity and lift on the wind over the terrain (src/cloudsim.js)
+const clouds = new CloudPass(sky, Q.clouds);      // the cumulus themselves, drawn low-res with frames reused (src/clouds.js)
 sky.moon = MOONS[settings.moon] || MOONS.new;
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
@@ -317,6 +322,8 @@ const state = {
   ask: null,     // a yes/no question on screen
   cut: null,     // the scripted walk to the tent
 };
+weather.settle(state.day, state.hour);
+cloudSim.settle(weather, state.hour);
 let hudState = null; // the last thing the HUD showed; the map reads it too
 let frameNo = 0, togetherOpen = false;
 
@@ -357,6 +364,7 @@ function restore() {
   guide.load(s.guide);
   state.slept = s.slept || 0;
   mind.load(s.sculpt);
+  if (world.lot) gradeLot(world, world.lot);   // the graded pull-off survives a restore
   shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
 }
@@ -369,6 +377,7 @@ $('btn-continue').classList.toggle('hidden', !hasSave);
 const input = new Input(renderer.domElement);
 const { keys, pressed } = input;
 if (isTouch) input.enableTouch(document.body);
+const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
   if (state.intro) { intro.skip(); return; }
@@ -380,6 +389,7 @@ input.onPress = (code) => {
   if (togetherOpen && (code === 'Escape' || code === 'KeyH')) { toggleTogether(false); return; }
   if (!state.started || state.travel) return;
   if (document.activeElement?.tagName === 'INPUT' && document.activeElement.type === 'search') return;   // typing in the map's search
+  if (code === 'Backquote' && document.activeElement?.tagName !== 'INPUT') { recorder.toggle(); return; }
   if (code === 'Escape' && map.open) { toggleMap(); return; }
   if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
   if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
@@ -389,6 +399,7 @@ input.onPress = (code) => {
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
+  if (recorder.pad(name)) return;
   if (togetherOpen) {
     if (name === 'B' || name === 'Start') toggleTogether(false);
     else menuPad($('together'), name);
@@ -493,13 +504,14 @@ function pause(on) {
 }
 
 // pause-sheet tabs (LB / RB on a pad)
-const TABS = ['journal', 'settings', 'controls'];
+const TABS = ['journal', 'settings', 'controls', 'clips'];
 let tab = 'journal';
 function showTab(name) {
   tab = name;
   for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === name);
   for (const p of document.querySelectorAll('.panel')) p.classList.toggle('hidden', p.dataset.panel !== name);
   if (name === 'controls') renderControls($('controls-pause'), null);
+  if (name === 'clips') recorder.gallery($('clips'));
 }
 function cycleTab(dir) { showTab(TABS[(TABS.indexOf(tab) + dir + TABS.length) % TABS.length]); }
 for (const b of document.querySelectorAll('.tab')) b.onclick = () => showTab(b.dataset.tab);
@@ -511,11 +523,11 @@ function renderControls(el, mode) {
   const rows = {
     kbm: [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'], [k('X'), 'Crouch, lie down'],
       [t('Click'), 'Punch, swing, lift'], [t('Right click'), 'Hook, sink'], [k('E'), 'Pick up, grab, level'], [k('T'), 'Tool'], [k('V'), 'Camera'],
-      [k('C') + k('F'), 'Tent, campfire (a log feeds it)'], [k('U'), 'Sit, ride, take firewood, pour, eat'], [k('B'), 'Cast a line'], [k('N'), 'Marshmallow'], [k('K'), 'Cook: coffee, then breakfast'], [k('O'), 'Sip coffee'], [k('J'), 'Drop firewood'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('Esc'), 'Pause']],
+      [k('C') + k('F'), 'Tent, campfire (a log feeds it)'], [k('U'), 'Sit, ride, take firewood, pour, eat'], [k('B'), 'Cast a line'], [k('N'), 'Marshmallow'], [k('K'), 'Cook: coffee, then breakfast'], [k('O'), 'Sip coffee'], [k('J'), 'Drop firewood'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('`'), 'Record a clip'], [k('Esc'), 'Pause']],
     pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('↑'), 'Tool'],
-      [p('LB'), 'Together'], [p('Y', 'y'), 'Sit, ride, take firewood, pour, eat'], [p('↓'), 'Cast a line'], [p('←'), 'Marshmallow, or sip coffee'], [p('L3'), 'Cook, or drop firewood'], [p('R3'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Menu'), 'Pause']],
+      [p('LB'), 'Together'], [p('Y', 'y'), 'Sit, ride, take firewood, pour, eat'], [p('↓'), 'Cast a line'], [p('←'), 'Marshmallow, or sip coffee'], [p('L3'), 'Cook, or drop firewood'], [p('R3'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Guide'), 'Record a clip'], [p('Menu'), 'Pause']],
     touch: [['Left thumb', 'Walk'], ['Right thumb', 'Look'], [t('Hop') + t('Fast'), 'Hop, hike fast'], [t('Duck'), 'Crouch'], [t('Punch'), 'Punch, swing, lift'], [t('Hook'), 'Hook, sink'],
-      [t('Grab'), 'Pick up, grab, level'], [ t('Ride'), 'Sit, ride, take firewood'], [t('Fish'), 'Cast a line'], [t('Roast'), 'Marshmallow'], [t('Cook') + t('Sip') + t('Drop'), 'Camp cooking, coffee, firewood'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map']],
+      [t('Grab'), 'Pick up, grab, level'], [ t('Ride'), 'Sit, ride, take firewood'], [t('Fish'), 'Cast a line'], [t('Roast'), 'Marshmallow'], [t('Cook') + t('Sip') + t('Drop'), 'Camp cooking, coffee, firewood'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map'], [t('Record'), 'Record a clip (top right)']],
   };
   const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
   el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
@@ -548,7 +560,7 @@ function begin(fresh) {
     party.event('hello');
   } else restore();
   updateCalendar();
-  weather.settle(state.day, state.hour);
+  weather.settle(state.day, state.hour); cloudSim.settle(weather, state.hour);
   state.started = true;
   if (isTouch) {
     try { document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* not allowed */ }
@@ -650,7 +662,12 @@ $('btn-restart').onclick = () => {
 // title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
 const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
 const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
-buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pick, characters: CHARACTERS });
+buildTitle({
+  trailheads: world.places.filter((p) => p.kind === 'trailhead'),
+  pick,
+  characters: CHARACTERS,
+  onTime: (h) => { state.hour = h; weather.settle(state.day, h); cloudSim.settle(weather, h); },
+});
 function startFresh() {
   Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
   storeJSON('rawah-settings', settings);
@@ -716,7 +733,7 @@ $('set-weather').value = weather.override || 'live';
 $('set-weather').onchange = () => {
   settings.weather = $('set-weather').value;
   weather.override = REGIMES[settings.weather] ? settings.weather : null;
-  weather.settle(state.day, state.hour);
+  weather.settle(state.day, state.hour); cloudSim.settle(weather, state.hour);
   storeJSON('rawah-settings', settings);
 };
 $('set-tent').value = settings.tent;
@@ -1139,7 +1156,7 @@ function finishSleep() {
   let mins = (s.to - s.from) * 60;
   if (mins < 0) mins += 24 * 60;
   advanceClock(mins);
-  weather.settle(state.day, state.hour);
+  weather.settle(state.day, state.hour); cloudSim.settle(weather, state.hour);
   hiker.stamina = 100; hiker.warmth = Math.max(hiker.warmth, 85); hiker.injured = 0; hiker.wet = 0;
   camp.douse();
   if (s.night) state.slept = (state.slept || 0) + 1;
@@ -1687,6 +1704,8 @@ function tick(dt, draw = true) {
   terrain.update(camera);
   // weather: eases toward the day's schedule; lightning, rain on you, warnings
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
+  cloudSim.update(state.paused ? 0 : dt, state.paused ? 0 : gameMin * 60, weather, sky.sunDir.y);
+  clouds.slab = 1200 + 3000 * cloudSim.maxTall;
   for (const e of weather.events) if (e.type === 'bolt') {
     // most flashes are somewhere you are looking, a few behind you
     const fwd = Math.atan2(-Math.cos(hiker.yaw), -Math.sin(hiker.yaw));
@@ -1841,6 +1860,7 @@ function tick(dt, draw = true) {
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
+    clouds.render(renderer, camera);
     mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
     renderer.render(scene, camera);
   }
@@ -1882,20 +1902,21 @@ requestAnimationFrame(loop);
 // ------------------------------------------------------------------ dev hooks (local only)
 if (DEV) {
   window.__rawah = {
-    world, hiker, camp, state, flora, terrain, renderer, scene, camera, boxels,
+    THREE, world, hiker, camp, state, flora, terrain, renderer, scene, camera, boxels,
     bench(o) { return boxels.bench(o); },
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
     plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields,
     benchPlume(o) { return plume.smoke.bench(o); },
-    begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
+    begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, recorder, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
     goto(name) { const pl = world.places.find((q) => q.name === name); if (pl) this.teleport(pl.x, pl.z); return pl; },
-    setHour(h) { state.hour = h; weather.settle(state.day, h); },
-    weather(name) { weather.override = name || null; weather.settle(state.day, state.hour); return weather; },
+    setHour(h) { state.hour = h; weather.settle(state.day, h); cloudSim.settle(weather, h); },
+    weather(name) { weather.override = name || null; weather.settle(state.day, state.hour); cloudSim.settle(weather, state.hour); return weather; },
+    cloudSim, clouds,
     wx: weather,
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
     press(code) { pressed.add(code); },

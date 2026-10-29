@@ -207,7 +207,7 @@ function draped(params) {
 }
 
 const CHUNK_M = 1000;
-const ROAD = [0.3, 0.23, 0.15];
+const ROAD = [0.24, 0.205, 0.15];   // linear space: reads as packed grey-brown gravel
 
 export function buildTrails(world) {
   const group = new THREE.Group();
@@ -373,6 +373,29 @@ function mergeWood(group) {
 
 const fmtDist = (m) => `${(m / 1609.34).toFixed(1)} mi`;
 
+/** Grade a pull-off pad: every cell inside the loop eases to one level, like a
+ *  real graded apron, through the sculpt grid so terrain, grass and feet agree.
+ *  Returns the ring points; re-runnable after a save restores the sculpt atlas. */
+export function gradeLot(world, L) {
+  const N = 64, ring = [];
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2, ct = Math.cos(t), st = Math.sin(t);
+    const wwi = L.ww * (0.72 + 0.28 * ct);   // teardrop: wide far end, narrow neck at the road
+    ring.push([L.cx + L.ax * ct * L.hw + L.px * st * wwi, L.cz + L.az * ct * L.hw + L.pz * st * wwi]);
+  }
+  if (L.level === undefined) L.level = ring.reduce((a, [x, z]) => a + world.height(x, z), 0) / N;
+  if (!world.sculpt) return ring;
+  const lift = (cur, wx, wz, wt) => cur + (L.level + (hash2(wx * 0.37, wz * 0.37, 7) - 0.5) * 0.06 - world.height(wx, wz)) * wt;
+  for (const [x, z] of ring) world.sculpt.paint(x, z, 7.5, lift);
+  for (const e of [-0.55, 0, 0.55]) world.sculpt.paint(L.cx + L.ax * L.hw * e, L.cz + L.az * L.hw * e, L.ww * 0.9, lift);   // the island, end to end
+  for (const e of [-1, 1]) {
+    for (let k = 0; k <= 4; k++) {                                       // the mouths
+      world.sculpt.paint(L.cx + L.ax * e * L.hw - L.px * 3.2 * k, L.cz + L.az * e * L.hw - L.pz * 3.2 * k, 5.5, lift);
+    }
+  }
+  return ring;
+}
+
 export function buildSigns(world, models) {
   const group = new THREE.Group();
   const place = (obj, x, z, faceX, faceZ) => {
@@ -459,35 +482,52 @@ export function buildSigns(world, models) {
     world.starts[th.name] = { cars, road: road.dense, roadRef: road, k: best, spot };
     if (th === main && spot.lot) {
       // the gravel loop itself: an oval ring of road tread around a worn island,
-      // graded toward level like a real pull-off, so the lot cannot read as a pit
+      // on ground graded flat through the sculpt grid so it cannot read as warped
       const L = spot.lot, pos = [], col = [], sid = [], idx = [];
-      const ring = [], N = 64;
-      for (let i = 0; i < N; i++) {
-        const t = (i / N) * Math.PI * 2, ct = Math.cos(t), st = Math.sin(t);
-        ring.push([L.cx + spot.rx * ct * 22 + L.px * st * 11, L.cz + spot.rz * ct * 22 + L.pz * st * 11]);
+      L.ax = spot.rx; L.az = spot.rz; L.hw = 34; L.ww = 16;
+      const ring = gradeLot(world, L);
+      // the lot itself: one solid oval pad on the graded ground, the rim fraying
+      // into meadow through the same ragged edge the trails wear (aSide.x runs
+      // 0.5 at the centre to 0 at the rim, so e climbs like a ribbon edge)
+      pos.push(L.cx, world.height(L.cx, L.cz) + 0.07, L.cz); sid.push(0.5, 1);
+      col.push(ROAD[0], ROAD[1], ROAD[2]);
+      const SEGS = 3, K = ring.length;
+      for (let s = 1; s <= SEGS; s++) {
+        const d = s / SEGS;
+        for (let i = 0; i < K; i++) {
+          const x = L.cx + (ring[i][0] - L.cx) * d, z = L.cz + (ring[i][1] - L.cz) * d;
+          const h = Math.max(world.height(x, z), world.height(x + 1.2, z), world.height(x - 1.2, z), world.height(x, z + 1.2), world.height(x, z - 1.2));
+          pos.push(x, h + 0.07, z); sid.push(0.5 - 0.5 * d, 1);
+          const v = 0.9 + hash2(i, s, 5) * 0.2;
+          col.push(ROAD[0] * v, ROAD[1] * v, ROAD[2] * v);
+        }
       }
-      const level = ring.reduce((a, [x, z]) => a + world.height(x, z), 0) / N;
-      // a laid gravel apron: fills dips toward one grade, never sinks under a rise
-      const strip = (line, closed, flat) => {
+      for (let i = 0; i < K; i++) idx.push(0, 1 + ((i + 1) % K), 1 + i);   // centre fan
+      for (let s = 0; s < SEGS - 1; s++) {
+        for (let i = 0; i < K; i++) {
+          const a = 1 + s * K + i, b = 1 + s * K + ((i + 1) % K), c = 1 + (s + 1) * K + i, d = 1 + (s + 1) * K + ((i + 1) % K);
+          idx.push(a, c, b, b, c, d);
+        }
+      }
+      const strip = (line) => {   // the mouths where the pad meets the road
         const b0 = pos.length / 3, n = line.length;
         for (let i = 0; i < n; i++) {
-          const a = line[closed ? (i + n - 1) % n : Math.max(0, i - 1)], b = line[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+          const a = line[Math.max(0, i - 1)], b = line[Math.min(n - 1, i + 1)];
           const tx = b[0] - a[0], tz = b[1] - a[1], tl = Math.hypot(tx, tz) || 1;
           for (let s = 0; s < 2; s++) {
             const off = (s - 0.5) * 6.8, x = line[i][0] - (tz / tl) * off, z = line[i][1] + (tx / tl) * off;
             const h = Math.max(world.height(x, z), world.height(x + 1.2, z), world.height(x - 1.2, z), world.height(x, z + 1.2), world.height(x, z - 1.2));
-            pos.push(x, flat ? Math.max(h + 0.1, h * 0.2 + level * 0.8) : h + 0.1, z); sid.push(s, 1);
+            pos.push(x, h + 0.08, z); sid.push(s, 1);
             const v = 0.9 + hash2(i, s, 5) * 0.2;
             col.push(ROAD[0] * v, ROAD[1] * v, ROAD[2] * v);
           }
         }
-        for (let i = 0; i < (closed ? n : n - 1); i++) { const a = b0 + i * 2, c = b0 + ((i + 1) % n) * 2; idx.push(a, c + 1, c, a, c, a + 1); }
+        for (let i = 0; i < n - 1; i++) { const a = b0 + i * 2, c = b0 + (i + 1) * 2; idx.push(a, c + 1, c, a, c, a + 1); }
       };
-      strip(ring, true, true);
-      for (const e of [-1, 1]) {   // the two mouths where the loop meets the road
+      for (const e of [-1, 1]) {
         const line = [];
-        for (let k = 0; k <= 5; k++) line.push([L.cx + spot.rx * e * 22 - L.px * 3 * k, L.cz + spot.rz * e * 22 - L.pz * 3 * k]);
-        strip(line, false, false);
+        for (let k = 0; k <= 5; k++) line.push([L.cx + L.ax * e * L.hw - L.px * 3.2 * k, L.cz + L.az * e * L.hw - L.pz * 3.2 * k]);
+        strip(line);
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -498,15 +538,16 @@ export function buildSigns(world, models) {
       const m = new THREE.Mesh(g, draped({ vertexColors: true }));
       m.receiveShadow = true;
       group.add(m);
-      // keep the tread bare of grass (the island stays meadow): an arm each side and a cap at each end
-      const arm = (s) => [L.cx - spot.rx * 14 + L.px * 10.6 * s, L.cz - spot.rz * 14 + L.pz * 10.6 * s, L.cx + spot.rx * 14 + L.px * 10.6 * s, L.cz + spot.rz * 14 + L.pz * 10.6 * s, 4.6];
-      world.lot = { clear: [arm(1), arm(-1), [L.cx - spot.rx * 21, L.cz - spot.rz * 21, 6], [L.cx + spot.rx * 21, L.cz + spot.rz * 21, 6]] };
+      // keep the pad bare of grass out to the frayed rim
+      world.lot = { cx: L.cx, cz: L.cz, ax: L.ax, az: L.az, px: L.px, pz: L.pz, hw: L.hw, ww: L.ww, level: L.level,
+        clear: [[L.cx - L.ax * 30, L.cz - L.az * 30, L.cx + L.ax * 30, L.cz + L.az * 30, 13],
+          [L.cx - L.ax * 33, L.cz - L.az * 33, 8], [L.cx + L.ax * 33, L.cz + L.az * 33, 8]] };
     }
     if (th === main) {
-      // the vault toilet stands on the island inside the loop, doors toward the cars, or behind the cars at other trailheads
-      const ox = spot.lot ? spot.lot.cx : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
-      const oz = spot.lot ? spot.lot.cz : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
-      place(landmark(models.outhouse, 2.5), ox, oz, cars[0].start.x - ox, cars[0].start.z - oz);
+      // the vault toilet stands on the island well inside the loop, door toward the mouth, or behind the cars elsewhere
+      const ox = spot.lot ? spot.lot.cx - spot.lot.ax * 19 : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
+      const oz = spot.lot ? spot.lot.cz - spot.lot.az * 19 : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
+      place(landmark(models.outhouse, 2.5), ox, oz, spot.lot ? -spot.lot.ax : cars[0].start.x - ox, spot.lot ? -spot.lot.az : cars[0].start.z - oz);
       if (spot.lot) {   // the quad waits on the far arm, nose along the loop
         const L = spot.lot, qx = L.cx + L.px * 10.6 - spot.rx * 9, qz = L.cz + L.pz * 10.6 - spot.rz * 9;
         world.starts[th.name].quad = { x: qx, z: qz, yaw: Math.atan2(-spot.rx, -spot.rz) };

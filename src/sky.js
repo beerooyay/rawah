@@ -55,26 +55,15 @@ uniform vec4 uBoltDir[3];   // direction (xyz) and strength (w) of the bolts lig
 uniform vec3 uBoltCol[3];
 uniform samplerCube uMW;
 uniform mat3 uGal;
+// the cirrus and the fallback sheet pick their noise mip from distance (see clouds.js for why)
+float cloudLod = 0.0;
+#undef texture2D
+#define texture2D(s, uv) textureLod(s, uv, cloudLod)
 ${CLOUD_GLSL}
 float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
-float noise(vec3 x) {
-  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
-             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
-}
-// how much cloud one slice of the slab holds at a point: its footprint matches the shadows on the ground,
-// shrinking with height so the tops are smaller than the bases, and eroded so the edges billow
-float slab(vec2 P, float k, float dist) {
-  P += vec2(k * 80.0, k * -55.0);             // wind shear: towers lean downwind as they climb
-  float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
-  float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
-  float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
-  float dn = smoothstep(th, th + 0.085 + far * 0.1, f);
-  // the rim frays into filaments where the density barely crosses — cumulus edges are ragged, not smooth
-  float rim = smoothstep(0.02, 0.45, dn) * (1.0 - dn) * (1.0 - far);
-  float fray = texture2D(uCloudTex, cloudRot3(P / 850.0 + uCloudOff * 0.00004)).r;
-  return clamp(dn - smoothstep(0.55, 0.85, fray) * rim * 0.8, 0.0, 1.0);
-}
+uniform sampler2D uCloudRT;   // the cumulus, drawn by clouds.js at a fraction of the resolution
+uniform mat4 uCloudVP;        // the view it was drawn from, rotation only
+uniform float uCloudOn;
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -82,52 +71,18 @@ void main() {
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
   col += uGlow * (pow(sd, 36.0) * (0.04 + 0.08 * uSunVis) + pow(sd, 260.0) * 0.8 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
-  // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
-  if (h > 0.03) {
-    float ht = 9000.0 - cameraPosition.y;
-    vec2 P = cameraPosition.xz + d.xz * ht / h;
-    vec2 q = (P + uCloudOff * 1.6) / vec2(42000.0, 17000.0);
-    // cirrus gathers into streamers, not an even film: a slow field bunches and shears it
-    float stream = texture2D(uCloudTex, cloudRot3(q * 0.6 + 0.17 + uCloudOff * 0.00003)).r;
-    vec2 qq = cloudWarp(q + vec2(stream * 0.18, 0.0));
-    float s = texture2D(uCloudTex, qq).r * 0.62 + texture2D(uCloudTex, cloudRot1(qq) * vec2(2.9, 1.8) + 0.4).r * 0.38;
-    s *= 0.3 + stream;   // carve harder: filaments where the streamer field says, not an even film
-    float ci = smoothstep(0.62, 0.88, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
-    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 8.0) * 0.3, ci * 0.38 * (1.0 - uNight * 0.85));
-  }
-  // clouds: a slab of cumulus cut into slices. Lower slices are wider and darker (the flat grey base),
-  // higher ones shrink to billowing tops; each slice looks toward the sun to see what shades it
+  // clouds: rendered by clouds.js (nubis 3d volume march at half resolution)
   float cloud = 0.0;
-  if (h > 0.0 && uCloudCover > 0.005) {
-    float dh = max(uCloudAlt - cameraPosition.y, 350.0);
-    float slabH = 900.0 + 1100.0 * uThick;
-    vec2 sunH = normalize(uSun.xz + 1e-4) * (260.0 / max(uSun.y, 0.12));
-    vec3 acc = vec3(0.0);
-    float trans = 1.0;
-    for (int i = 0; i < 6; i++) {
-      float k = (float(i) + 0.5) / 6.0;
-      float tt = (dh + k * slabH) / max(h, 0.015);
-      vec2 P = cameraPosition.xz + d.xz * tt;
-      float dn = slab(P, k, tt);
-      if (dn > 0.003) {
-        float occ = slab(P + sunH, min(k + 0.2, 1.0), tt) * 0.5 + slab(P + sunH * 2.4, min(k + 0.45, 1.0), tt) * 0.5;
-        float billow = 0.72 + 0.56 * texture2D(uCloudTex, cloudRot3((P + uCloudOff) / 1700.0) + 0.2).r;
-        float lit = clamp((1.0 - occ * (0.5 + 0.4 * uThick)) * (0.38 + 0.62 * k) * billow, 0.0, 1.0);
-        vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
-        c += uGlow * pow(sd, 6.0) * (1.0 - dn) * dn * 1.2 * (1.0 - uNight) * lit;     // silver lining
-        c += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dn);
-        for (int q = 0; q < 3; q++) {   // a flash inside the cloud lights the cloud around it, broad and blue-white
-          float bw = uBoltDir[q].w;
-          if (bw > 0.0) { float bg = max(dot(d, uBoltDir[q].xyz), 0.0); c += uBoltCol[q] * bw * (pow(bg, 4.0) * 0.8 + pow(bg, 36.0) * 1.2 + 0.05) * (0.3 + dn); }
-        }
-        float a = clamp(dn * (0.3 + 0.3 * uThick + 0.14 * k), 0.0, 1.0);   // each slice thin; the billowing tops carry more water than the bases
-        acc += trans * a * c;
-        trans *= 1.0 - a;
+  if (h > 0.0 && uCloudOn > 0.5) {
+    vec4 pc = uCloudVP * vec4(d, 1.0);
+    if (pc.w > 0.0) {
+      vec2 uv = pc.xy / pc.w * 0.5 + 0.5;
+      if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
+        vec4 c = textureLod(uCloudRT, uv, 0.0);
+        col = col * c.a + c.rgb;
+        cloud = 1.0 - c.a;
       }
     }
-    float fade = smoothstep(0.0, 0.07, h) * exp(-(dh / max(h, 0.015)) / 90000.0);
-    col = mix(col, col * trans + acc, fade);
-    cloud = (1.0 - trans) * fade;
   }
   for (int q = 0; q < 3; q++) { float bw = uBoltDir[q].w; if (bw > 0.0) col += uBoltCol[q] * bw * pow(max(dot(d, uBoltDir[q].xyz), 0.0), 14.0) * 0.1 * (1.0 - cloud); }
   col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 4.5 * (1.0 - cloud);
@@ -230,9 +185,11 @@ export class Sky {
     u.uGlow.value.multiplyScalar(0.85).multiplyScalar(1 - overcast * 0.7);
     u.uThick.value = wx.thick;
     u.uFlash.value = wx.flash;
-    const lit = smoothstep(-0.1, 0.25, s);
     const nightL = 0.035;
-    u.uCloudLit.value.copy(u.uGlow.value).lerp(this._a.setRGB(1, 0.98, 0.95), smoothstep(0.05, 0.4, s)).multiplyScalar(lerp(nightL, 1.05, lit) * (1 - wx.thick * 0.35));
+    // the light reaching the cloud deck: the sun, reddening as it sinks and staying on the clouds a little past
+    // sunset (they sit a couple of km over the valley), then the moon, faint and cool
+    if (s < -0.045) u.uCloudLit.value.setRGB(0.5, 0.58, 0.8).multiplyScalar(0.1 * this.moon.k * smoothstep(-0.02, 0.1, this.moonDir.y) * (1 - wx.thick * 0.5));
+    else u.uCloudLit.value.copy(this.#palette(s, 2)).lerp(this._b.setRGB(1, 0.97, 0.93), smoothstep(0.04, 0.4, s)).multiplyScalar(1.3 * smoothstep(-0.045, 0.03, s) * (1 - wx.thick * 0.35) * (1 - overcast * 0.35));
     u.uCloudDark.value.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.4);
     grey(u.uCloudDark.value, 0.6).multiplyScalar(lerp(0.4, 0.62, overcast) * (1 - wx.thick * 0.45) + nightL * 0.4);
     this.sunBlock += ((s > 0 ? cloudDensityAt(focus.x + (this.sunDir.x / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y), focus.z + (this.sunDir.z / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y)) : 0) - this.sunBlock) * 0.1;

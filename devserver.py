@@ -14,7 +14,7 @@ import sys
 import urllib.error
 import urllib.request
 from functools import partial
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 ROOT = os.path.dirname(os.path.abspath(__file__))  # serve this project regardless of cwd
 
@@ -60,4 +60,4 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5179
     print(f'No-cache dev server on http://localhost:{port}  (serving {ROOT})')
-    HTTPServer(('', port), partial(NoCacheHandler, directory=ROOT)).serve_forever()
+    ThreadingHTTPServer(('', port), partial(NoCacheHandler, directory=ROOT)).serve_forever()
