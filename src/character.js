@@ -269,7 +269,7 @@ export class Character {
    */
   #upright(h) {
     const hips = this.hips, neck = this.neck;
-    if (!hips || !neck || !this.group || UPRIGHT_SKIP.test(this.key)) return;
+    if (!hips || !neck || !this.group || h.action || UPRIGHT_SKIP.test(this.key)) return;
     this.group.updateMatrixWorld(true);
     const spine = _v3.subVectors(neck.getWorldPosition(_v2), hips.getWorldPosition(_v1)).normalize();
     if (spine.y > 0.99995) return;
@@ -372,7 +372,8 @@ export class Character {
   #place(dt, h, speed) {
     let want = this.heading;
     if (h.mode === 'climb') want = Math.atan2(-h.wallUp.x, -h.wallUp.y);
-    else if (h.action || this.back || h.face) want = h.yaw;
+    else if (h.action) want = speed > 0.3 ? Math.atan2(-h.vel.x, -h.vel.z) : h.yaw;
+    else if (this.back || h.face) want = h.yaw;
     else if (speed > 0.3) want = Math.atan2(-h.vel.x, -h.vel.z);
     let d = want - this.heading;
     d = Math.atan2(Math.sin(d), Math.cos(d));

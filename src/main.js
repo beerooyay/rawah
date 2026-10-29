@@ -397,7 +397,7 @@ input.onPress = (code) => {
   if (code === 'KeyT' && !state.paused && !map.open) props.cycleTool();
   if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
   if (code === 'KeyP' && !map.open) swapPlayer();
-  if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
+  if (code === 'Escape' && (input.mode !== 'kbm' || state.paused)) pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
   if (recorder.pad(name)) return;
@@ -501,7 +501,7 @@ function pause(on) {
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
   if (on) { renderJournal(); keys.clear(); showTab('journal'); $('bubble').classList.add('hidden'); }
-  else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
+  else { lockPointer(); $('btn-restart').textContent = 'Exit to menu'; }
 }
 
 // pause-sheet tabs (LB / RB on a pad)
@@ -651,14 +651,8 @@ function introStep(dt, env) {
 $('btn-start').onclick = () => startFresh();
 $('btn-continue').onclick = () => begin(false);
 $('btn-resume').onclick = () => pause(false);
-// starting over takes two presses, so it can't happen by accident
-let restartArmed = 0;
-$('btn-restart').onclick = () => {
-  if (performance.now() - restartArmed < 4000) { begin(true); return; }
-  restartArmed = performance.now();
-  $('btn-restart').textContent = 'Press again to clear your journal';
-  setTimeout(() => { if (performance.now() - restartArmed >= 3900) $('btn-restart').textContent = 'Start over'; }, 4000);
-};
+// quitting out reloads to the title screen; the save persists so Continue picks up here
+$('btn-restart').onclick = () => location.reload();
 
 // title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
 const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName, party: settings.party };
@@ -1781,7 +1775,7 @@ function tick(dt, draw = true) {
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
   grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
-  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
+  grass.update(camera, hiker, clamp(-tC / 3.5, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
   if (live) {

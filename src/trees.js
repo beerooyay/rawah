@@ -212,8 +212,8 @@ function paintAtlas(season = 'autumn') {
     g.fillStyle = base; g.fillRect(0, CELL * 1.6, CELL, CELL * 0.4);
   });
   bark(BARK.snag, () => {
-    g.fillStyle = '#9a948b'; g.fillRect(0, 0, CELL, CELL * 2);
-    for (let k = 0; k < 400; k++) { g.fillStyle = hsl(35, 6, 45 + R() * 30, 0.6); g.fillRect(R() * CELL, R() * CELL * 2, 2 + R() * 3, 30 + R() * 90); }
+    g.fillStyle = '#6e675f'; g.fillRect(0, 0, CELL, CELL * 2);
+    for (let k = 0; k < 400; k++) { g.fillStyle = hsl(35, 5, 30 + R() * 26, 0.6); g.fillRect(R() * CELL, R() * CELL * 2, 2 + R() * 3, 30 + R() * 90); }
     const ch = g.createLinearGradient(0, CELL * 2, 0, CELL * 1.25);
     ch.addColorStop(0, 'rgba(18,15,13,1)'); ch.addColorStop(0.6, 'rgba(25,21,18,0.85)'); ch.addColorStop(1, 'rgba(25,21,18,0)');
     g.fillStyle = ch; g.fillRect(0, CELL * 1.25, CELL, CELL * 0.75);

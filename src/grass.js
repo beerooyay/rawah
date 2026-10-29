@@ -300,7 +300,7 @@ export class Grass {
           vec3 green = mix(vec3(0.17, 0.27, 0.08), vSat * vec3(0.75, 1.05, 0.6), 0.3);
           vec3 col = mix(cured, green, alive) * (0.45 + gs.r * 0.6);
           col *= mix(0.38, 1.05, smoothstep(0.0, 0.75, gs.b));   // shade at the root
-          col = mix(col, vec3(0.86, 0.89, 0.93), uFrost * smoothstep(0.3, 1.0, gs.b) * 0.85);
+          col = mix(col, vec3(0.82, 0.85, 0.9), uFrost * smoothstep(0.3, 1.0, gs.b) * 0.62);
           diffuseColor.rgb = col;
           diffuseColor.a *= gs.a;`)
         // both faces of a card catch the sky the same way
