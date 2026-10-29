@@ -49,7 +49,6 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     const root = $(rootId);
     const btns = items.map(([label, v]) => {
       const b = el('button', 'ic');
-      b.title = label;
       b.setAttribute('aria-label', label);
       const badge = el('span', 'ic-badge');
       badge.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${IC[iconOf(label)] || ''}</svg>`;
@@ -79,7 +78,7 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
   const markCast = () => [...castRoot.children].forEach((b, i) => b.classList.toggle('on', i === cur));
   const castBtns = names.map((n, i) => {
     const b = el('button', 'ic cast-ic');
-    b.title = cap(n); b.setAttribute('aria-label', cap(n));
+    b.setAttribute('aria-label', cap(n));
     const img = document.createElement('img');
     img.alt = ''; img.draggable = false; img.className = 'cast-face';
     const wrap = el('span', 'face-wrap');
