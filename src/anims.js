@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // The Mixamo clip library. Every clip is one FBX in assets/characters/anims/,
 // loaded on demand and cleaned up so it can be driven by the hiker instead of
@@ -25,7 +26,32 @@ export const EXTRA = [
   'Punching', 'Punching (1)', 'Punch Combo', 'Hook', 'Stomp',
   'Big Side Hit', 'Kidney Hit', 'Light Hit To Head', 'Receiving An Uppercut', 'Receive Uppercut To The Face',
   'Carrying', 'Pushing', 'Stable Sword Outward Slash',
+  'Chop_Start_Fast', 'Chop_Loop_Fast',
 ];
+
+// the chop clips come from chop.glb (a Sketchfab rig), whose bones carry their
+// own names: retarget maps each mixamorig bone to the bone that animates it.
+const CHOP_MAP = new Map([['mixamorigSpine2', 'spine_upper_01']]);
+for (const [S, s, names] of [
+  ['Left', 'l', ['clavicle_l_02', 'arm_upper_l_03', 'arm_lower_l_04', 'hand_l_05',
+    'finger_index_01_l_00', 'finger_index_02_l_07', 'finger_index_03_l_08',
+    'finger_middle_01_l_013', 'finger_middle_02_l_014', 'finger_middle_03_l_015',
+    'finger_ring_01_l_017', 'finger_ring_02_l_018', 'finger_ring_03_l_019',
+    'finger_pinky_01_l_021', 'finger_pinky_02_l_022', 'finger_pinky_03_l_023',
+    'thumb_01_l_09', 'thumb_02_l_010', 'thumb_03_l_011']],
+  ['Right', 'r', ['clavicle_r_027', 'arm_upper_r_028', 'arm_lower_r_029', 'hand_r_030',
+    'finger_index_01_r_032', 'finger_index_02_r_033', 'finger_index_03_r_034',
+    'finger_middle_01_r_039', 'finger_middle_02_r_040', 'finger_middle_03_r_041',
+    'finger_ring_01_r_043', 'finger_ring_02_r_044', 'finger_ring_03_r_045',
+    'finger_pinky_01_r_047', 'finger_pinky_02_r_048', 'finger_pinky_03_r_049',
+    'thumb_01_r_035', 'thumb_02_r_036', 'thumb_03_r_037']],
+]) {
+  const L = `mixamorig${S}`, chain = ['Shoulder', 'Arm', 'ForeArm', 'Hand',
+    'HandIndex1', 'HandIndex2', 'HandIndex3', 'HandMiddle1', 'HandMiddle2', 'HandMiddle3',
+    'HandRing1', 'HandRing2', 'HandRing3', 'HandPinky1', 'HandPinky2', 'HandPinky3',
+    'HandThumb1', 'HandThumb2', 'HandThumb3'];
+  chain.forEach((b, i) => CHOP_MAP.set(`${L}${b}`, names[i]));
+}
 
 // per-clip fixes. `cap` limits hip height so a jump the controller already
 // lifts isn't lifted twice; `detrend` removes net vertical travel so a climb
@@ -107,8 +133,8 @@ export function straighten(srcRest, target) {
  * orientation; the hips height scales with the body.
  *   target: { bones: [{ name, parent, wq, wp }] parents first, rootQ (world rotation above the hips), hips (rest height in clip units) }
  */
-export function retarget(clip, srcRest, target) {
-  const hipsQ = clip.tracks.find((t) => t.name === 'mixamorigHips.quaternion');
+export function retarget(clip, srcRest, target, bmap = null) {
+  const hipsQ = clip.tracks.find((t) => t.name === 'mixamorigHips.quaternion') || clip.tracks.find((t) => t.name.endsWith('.quaternion'));
   if (!hipsQ) return clip;
   const times = hipsQ.times, n = times.length;
   const tracks = new Map();
@@ -135,7 +161,9 @@ export function retarget(clip, srcRest, target) {
       (D.get(name) || D.set(name, new THREE.Quaternion()).get(name)).copy(world).multiply(_b.copy(r.wq).invert());
     }
     for (const b of target.bones) {
-      const d = D.get(b.name) || (b.parent && D.get(b.parent)) || null;
+      const srcName = bmap ? bmap.get(b.name) : b.name;
+      const srcParent = bmap && b.parent ? bmap.get(b.parent) : b.parent;
+      const d = (srcName && D.get(srcName)) || (srcParent && D.get(srcParent)) || null;
       const pose = (Wt.get(b.name) || Wt.set(b.name, new THREE.Quaternion()).get(b.name));
       if (d) pose.copy(d).multiply(aligned.get(b.name) || b.wq); else pose.copy(b.wq);
       const parent = b.parent ? Wt.get(b.parent) : target.rootQ;
@@ -169,12 +197,18 @@ export class AnimLibrary {
 
   #one(name) {
     if (!this.pending.has(name)) {
-      this.pending.set(name, this.loader.loadAsync(`${DIR}${encodeURIComponent(name)}.fbx`)
-        .then((g) => {
-          if (!this.srcRest) this.srcRest = restOf(g);
-          this.clips.set(name, prepare(name, g.animations[0]));
-        })
-        .catch((err) => console.warn(`animation ${name} failed to load`, err)));
+      const job = name.startsWith('Chop_')
+        ? new GLTFLoader().loadAsync(`${DIR}chop.glb`).then((g) => {
+            if (!this.chopRest) this.chopRest = restOf(g.scene);
+            const clip = g.animations.find((a) => a.name === name);
+            if (clip) { const p = prepare(name, clip); Object.assign(p.userData, { srcRest: this.chopRest, bmap: CHOP_MAP }); this.clips.set(name, p); }
+          })
+        : this.loader.loadAsync(`${DIR}${encodeURIComponent(name)}.fbx`)
+          .then((g) => {
+            if (!this.srcRest) this.srcRest = restOf(g);
+            this.clips.set(name, prepare(name, g.animations[0]));
+          });
+      this.pending.set(name, job.catch((err) => console.warn(`animation ${name} failed to load`, err)));
     }
     return this.pending.get(name);
   }
