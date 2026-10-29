@@ -606,32 +606,31 @@ body.touch #rec { top: calc(max(12px, env(safe-area-inset-top)) + 50px); right: 
 .pick-card { background: rgba(10, 16, 26, 0.72); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 16px 18px; display: grid; gap: 12px; justify-items: center; backdrop-filter: blur(8px); }
 .mc-label { font: 600 var(--t-xs)/1.2 var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--faint); }
 .menu-cards { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; }
-.pick-card { background: rgba(10, 16, 26, 0.72); border: 1px solid rgba(255,255,255,0.08); border-radius: 22px; padding: 22px 26px; display: grid; gap: 16px; justify-items: center; backdrop-filter: blur(10px); min-width: 270px; }
+.pick-card { background: var(--glass); border: 1px solid var(--edge); border-radius: var(--r); padding: 24px 26px; display: grid; gap: 18px; justify-items: center; backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); min-width: 270px; }
 .mc-label { font: 600 var(--t-sm)/1.2 var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--faint); }
-.mc-icons { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+.mc-icons { display: grid; grid-template-columns: repeat(3, auto); gap: 16px 18px; justify-content: center; }
 .ic { display: grid; gap: 7px; justify-items: center; background: none; border: none; cursor: pointer; padding: 0; }
-.ic-badge { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.72); transition: border-color .15s, color .15s, transform .15s; }
-.ic-badge svg { width: 27px; height: 27px; }
+.ic-badge { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--edge); background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.72); transition: border-color .15s, color .15s, transform .15s; }
+.ic-badge svg { width: 30px; height: 30px; }
 .ic:hover .ic-badge { transform: scale(1.08); }
 .ic.on .ic-badge { border-color: var(--accent); color: var(--accent); }
 .ic-name { font: 600 10px/1 var(--sans); letter-spacing: .05em; color: var(--faint); text-transform: uppercase; }
 .ic.on .ic-name { color: var(--accent); }
 
-.face-wrap { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; border: 1.5px solid rgba(255,255,255,0.14); transition: border-color .15s, transform .15s; background: rgba(255,255,255,0.05); display: block; }
-.cast-face { width: 56px; height: 56px; object-fit: cover; object-position: 50% 6%; transform: scale(1.9); transform-origin: 50% 10%; }
+.face-wrap { width: 64px; height: 64px; border-radius: 50%; overflow: hidden; border: 1.5px solid var(--edge); transition: border-color .15s, transform .15s; background: rgba(255,255,255,0.05); display: block; }
+.cast-face { width: 64px; height: 64px; object-fit: cover; object-position: 50% 6%; transform: scale(1.9); transform-origin: 50% 10%; }
 .cast-ic:hover .face-wrap { transform: scale(1.08); }
 .cast-ic.on .face-wrap { border-color: var(--accent); }
 
-button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #8fbf7a); color: #14202e; font-weight: 700; border: none; }
-button.primary.big:hover { filter: brightness(1.08); }
+button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 999px; font-weight: 700; }
 
 #title .title-inner { justify-items: center; }
 #title .wordmark { width: clamp(260px, 34vw, 440px); }
-@media (max-width: 900px) { .pick-card { min-width: 0; width: min(330px, 92vw); padding: 16px 18px; } .ic-badge, .face-wrap, .cast-face { width: 46px; height: 46px; } .ic-badge svg { width: 22px; height: 22px; } }
+@media (max-width: 900px) { .pick-card { min-width: 0; width: min(330px, 92vw); padding: 16px 18px; } .ic-badge, .face-wrap, .cast-face { width: 50px; height: 50px; } .ic-badge svg { width: 24px; height: 24px; } }
 
 
 /* wordmark sits centred over the whole menu, whatever the grid below */
-#title .wordmark { grid-column: 1 / -1; justify-self: center; }
+#title .wordmark { grid-column: 1 / -1; justify-self: center; margin-bottom: 22px; }
 .menu-cards { grid-column: 1 / -1; }
 
 /* three cards across on desktop, wrap on small screens */
@@ -640,3 +639,8 @@ button.primary.big:hover { filter: brightness(1.08); }
 .pick-card { flex: 1; min-width: 0; }
 @media (max-width: 900px) { .menu-cards { flex-wrap: wrap; } .pick-card { flex: 1 1 46%; } }
 @media (max-width: 560px) { .pick-card { flex: 1 1 100%; } }
+
+/* who tryna come: small toggle chips inside the settings row */
+#set-party { display: flex; flex-wrap: wrap; gap: 6px; }
+.togchip { padding: 7px 14px; border-radius: 999px; font: 600 var(--t-xs)/1 var(--sans); border: 1px solid var(--edge); background: rgba(255,255,255,0.04); color: var(--dim); cursor: pointer; }
+.togchip.on { background: var(--accent); border-color: transparent; color: var(--accent-ink); }

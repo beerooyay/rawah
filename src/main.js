@@ -85,6 +85,7 @@ settings.flare ??= true;
 settings.relief ??= QUALITY !== 'low';
 settings.intro ??= true;           // the opening drive and arrival on a new game (src/intro.js)
 settings.crew ??= false;          // the friends talk about what reaches them (src/crewtalk.js); off until you turn it on
+settings.party ??= null;          // who is coming along — null means the usual two
 settings.mirror ??= Q.shafts > 0;
 settings.mountain ??= Q.soil !== false;
 settings.soil ??= Q.soil !== false;
@@ -254,7 +255,7 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
   else atv.place(px, pz, cy);
 }
 const avatar = new Character(scene, playerName);
-const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
+const party = new Party(world, flora, scene, avatar.lib, playerName, settings.party);   // whoever is coming along
 const crewTalk = new CrewTalk(party, settings);   // what they sense, and when it is worth a line (src/crew.js, from Blaize's companions)
 crewTalk.on = settings.crew;
 party.onEvent = (kind, vars) => crewTalk.event(kind, vars);
@@ -722,6 +723,23 @@ $('set-depth').onchange = () => {
   if (state.started) save();
   location.reload();     // the depth buffer is chosen when the renderer is made
 };
+// who tryna come: a toggle chip for each friend you are not playing as; empty = the usual two
+{
+  const root = $('set-party');
+  const all = () => (settings.party && settings.party.length ? settings.party : Object.keys(CHARACTERS).filter((n) => n !== playerName).slice(0, 2));
+  for (const name of Object.keys(CHARACTERS).filter((n) => n !== playerName)) {
+    const b = document.createElement('button');
+    b.className = 'togchip'; b.textContent = name[0].toUpperCase() + name.slice(1);
+    b.onclick = () => {
+      const cur = all();
+      settings.party = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
+      b.classList.toggle('on');
+      storeJSON('rawah-settings', settings);
+    };
+    b.classList.toggle('on', all().includes(name));
+    root.appendChild(b);
+  }
+}
 $('set-quality').value = settings.quality || 'auto';
 $('set-quality').onchange = () => {
   settings.quality = $('set-quality').value;

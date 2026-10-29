@@ -152,12 +152,13 @@ class Actor {
 
 export class Party {
   /** `lib` is the player's animation library, shared so every clip loads once. `player` is the character name to leave out. */
-  constructor(world, flora, scene, lib, player) {
+  constructor(world, flora, scene, lib, player, crew) {
     this.world = world; this.flora = flora; this.scene = scene; this.lib = lib;
     this.g = { x: 0, z: 0 };
     this.eye = new THREE.Vector3();
     this.ids = 1000;
-    this.actors = Object.keys(CHARACTERS).filter((n) => n !== player).slice(0, 2).map((n) => new Actor(this, n));
+    this.actors = (crew && crew.length ? crew : Object.keys(CHARACTERS).filter((n) => n !== player).slice(0, 2))
+      .filter((n) => n !== player && CHARACTERS[n]).map((n) => new Actor(this, n));
     this.dir = 0;                 // the way the player last walked
     this.placed = false;
     this.mode = 'follow'; this.t = 0; this.next = between(18, 30);
