@@ -36,13 +36,14 @@ const BULK_SCALE = { corey: 1.3, grant: 1, blaize: 1 };
 
 const ACTION_CLIP = {
   jab: 'Punching', cross: 'Punching (1)', combo: 'Punch Combo', hook: 'Hook', stomp: 'Stomp',
-  chop: 'Chop_Start_Fast', slash: 'Stable Sword Outward Slash',   // a real axe chop for felling; the machete keeps the slash
+  chop: 'Stable Sword Outward Slash', saw: 'Chop_Start_Fast',     // chop fells standing trees sideways like the fp viewmodel; saw is the authored overhead chop for a lying trunk
+  slash: 'Stable Sword Outward Slash',
   hitSide: 'Big Side Hit', hitKidney: 'Kidney Hit', hitHead: 'Light Hit To Head',
   hitUpper: 'Receiving An Uppercut', hitFace: 'Receive Uppercut To The Face',
   climbOut: 'Swimming To Edge',
 };
 // the part of the clip an action plays, as shares of its length (climbing out starts with swimming; the slash has a long lead-in and follow-through)
-const ACTION_SPAN = { climbOut: [0.25, 1], chop: [0, 1], slash: [0.12, 0.74] };
+const ACTION_SPAN = { climbOut: [0.25, 1], chop: [0.12, 0.74], saw: [0, 1], slash: [0.12, 0.74] };
 const FIDGETS = ['Wiping Sweat', 'Searching Pockets', 'Swatting Bugs', 'Looking', 'Happy Idle'];
 const GUARD = 4;   // s the fists stay up after a punch
 /**

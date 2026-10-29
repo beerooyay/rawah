@@ -230,7 +230,7 @@ export class Wood {
   }
 
   /** The lying trunk whose cut end is within the axe's reach of (x, z). */
-  #trunkNear(x, z, reach) {
+  trunkNear(x, z, reach) {
     let best = null, bd = Infinity, far = Infinity;
     for (const f of this.props.lying) {
       const t = this.#trunkOf(f);
@@ -276,7 +276,7 @@ export class Wood {
   /** An axe stroke from the hiker (a `strike` event). Returns true if it landed on a lying trunk. */
   strike(e, hiker) {
     const p = hiker.pos;
-    const t = this.#trunkNear(p.x, p.z, 2.6);
+    const t = this.trunkNear(p.x, p.z, 2.6);
     if (!t) return false;
     this.#sound('chop');
     if (t.intact) this.#limb(t);
@@ -359,7 +359,7 @@ export class Wood {
     if (dPile < 3.2 && this.carried > 0) near = `[U] stack your ${this.carried} log${this.carried > 1 ? 's' : ''} in the woodpile`;
     else if (dPile < 3.2 && this.campCount > 0) near = `[U] take firewood from the pile (${this.campCount})`;
     else if (dStack < 3.0) near = `[U] take firewood (carrying ${this.carried}/${PACK})`;
-    const nearTrunk = this.#trunkNear(view.pos.x, view.pos.z, 2.6);
+    const nearTrunk = this.trunkNear(view.pos.x, view.pos.z, 2.6);
     this.hint = near;
     if (!near && ctl.axe && nearTrunk) this.hint = nearTrunk.intact && nearTrunk.cutCount === 0 ? '[Click] chop the branches off, then cut it into firewood' : '[Click] cut a log';
     else if (!near && ctl.axe && this.trunkFar < 7) this.hint = 'Step along to the cut end of the trunk to keep cutting';

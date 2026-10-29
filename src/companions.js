@@ -157,8 +157,8 @@ export class Party {
     this.g = { x: 0, z: 0 };
     this.eye = new THREE.Vector3();
     this.ids = 1000;
-    this.actors = (crew && crew.length ? crew : Object.keys(CHARACTERS).filter((n) => n !== player).slice(0, 2))
-      .filter((n) => n !== player && CHARACTERS[n]).map((n) => new Actor(this, n));
+    const list = crew == null ? Object.keys(CHARACTERS).filter((n) => n !== player).slice(0, 2) : crew;   // [] means you picked nobody
+    this.actors = list.filter((n) => n !== player && CHARACTERS[n]).map((n) => new Actor(this, n));
     this.dir = 0;                 // the way the player last walked
     this.placed = false;
     this.mode = 'follow'; this.t = 0; this.next = between(18, 30);

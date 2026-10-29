@@ -270,6 +270,7 @@ for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
 for (const b of [hiker, party]) b.floorAt = (x, z) => camp.floorAt(x, z);
 party.onDrop = (x, y, z) => { dump.drop(x, y, z); crewTalk.smell('stink', x, z); };
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
+hiker.aimSwing = () => props.aimSwing();   // the axe swings sideways at a standing tree, overhead on a lying trunk
 const wood = new Wood(world, flora, scene, props);
 props.wood = wood;
 const coffee = new Coffee(world, scene);
@@ -717,10 +718,10 @@ $('set-depth').onchange = () => {
   if (state.started) save();
   location.reload();     // the depth buffer is chosen when the renderer is made
 };
-// who tryna come: a toggle chip for each friend you are not playing as; empty = the usual two
+// who tryna come: a toggle chip for each friend you are not playing as; null = the usual two, empty = nobody
 {
   const root = $('set-party');
-  const all = () => (settings.party && settings.party.length ? settings.party : Object.keys(CHARACTERS).filter((n) => n !== playerName).slice(0, 2));
+  const all = () => (settings.party == null ? Object.keys(CHARACTERS).filter((n) => n !== playerName).slice(0, 2) : settings.party);
   for (const name of Object.keys(CHARACTERS).filter((n) => n !== playerName)) {
     const b = document.createElement('button');
     b.className = 'togchip'; b.textContent = name[0].toUpperCase() + name.slice(1);
@@ -1550,7 +1551,7 @@ function tick(dt, draw = true) {
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
       else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); waves.drop(p.x, p.z, 0.65, 0.05); waterCells.stir(p.x, p.z, 0.05, onStream(p.x, p.z)); waterCells.foam(p.x, p.z, 0.18); }
       else if (e.type === 'grab') audio.step('rock', 2);
-      else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
+      else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'saw' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'fall') {
         if (e.severe) rescue(e.why);

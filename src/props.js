@@ -128,7 +128,13 @@ export class Props {
     this.hud.toast(this.tool === 'mind' ? 'Telekinesis · [Click] lift · [R] sink · [E] level · [Wheel] size' : this.tool === 'fireworks' ? 'Fireworks · [Click] set one down · [R] light · [I] style' : `${TOOL_NAME[this.tool]}${this.tool === 'fists' ? '' : ' · [Click] to swing'}`);
   }
 
-  /** A swing connected (the hiker's `strike` event with kind chop or slash). */
+  /** Which axe swing the click means: 'saw' when a lying trunk is in reach, else 'chop' (the sideways felling stroke). */
+  aimSwing() {
+    const p = this.hiker.pos;
+    return this.wood?.trunkNear(p.x, p.z, 2.6) ? 'saw' : 'chop';
+  }
+
+  /** A swing connected (the hiker's `strike` event with kind chop, saw or slash). */
   strike(e) {
     const p = this.hiker.pos, tool = this.tool;
     const rx = p.x + e.x * 0.7, rz = p.z + e.z * 0.7;
@@ -624,18 +630,21 @@ export class Props {
     this.vmRock.visible = first;
     if (!this.vm.visible) return;
     const a = this.hiker.action;
-    if (tool === 'axe' && a && a.kind === 'chop' && a.id !== this.vmAction) {
+    if (tool === 'axe' && a && (a.kind === 'chop' || a.kind === 'saw') && a.id !== this.vmAction) {
       // felling a standing tree swings sideways, from the right for the first three strokes and from the left for the rest;
       // sawing a lying trunk is the overhead chop
       this.vmAction = a.id;
-      const p = this.hiker.pos, rx = p.x - Math.sin(this.hiker.yaw) * 0.7, rz = p.z - Math.cos(this.hiker.yaw) * 0.7;
-      const cut = this.#cutNear(rx, rz, 1.35), tree = cut || this.flora.find(rx, rz, 1.35, TREES, (k, sc) => sc >= SAPLING);
-      const taken = cut ? cut.taken : tree ? this.damage.get(itemKey(tree.kind, tree.x, tree.z)) || 0 : 0;
-      this.vmSide = !tree ? 'axe' : taken >= TREE_HITS / 2 ? 'axeL' : 'axeR';
+      if (a.kind === 'saw') this.vmSide = 'axe';
+      else {
+        const p = this.hiker.pos, rx = p.x - Math.sin(this.hiker.yaw) * 0.7, rz = p.z - Math.cos(this.hiker.yaw) * 0.7;
+        const cut = this.#cutNear(rx, rz, 1.35), tree = cut || this.flora.find(rx, rz, 1.35, TREES, (k, sc) => sc >= SAPLING);
+        const taken = cut ? cut.taken : tree ? this.damage.get(itemKey(tree.kind, tree.x, tree.z)) || 0 : 0;
+        this.vmSide = !tree ? 'axe' : taken >= TREE_HITS / 2 ? 'axeL' : 'axeR';
+      }
     }
-    const set = VM[tool === 'axe' && a?.kind === 'chop' ? this.vmSide || 'axeR' : tool];
+    const set = VM[tool === 'axe' && (a?.kind === 'chop' || a?.kind === 'saw') ? this.vmSide || 'axeR' : tool];
     let from = set.rest, to = set.rest, u = 0;
-    if (a && (a.kind === 'chop' || a.kind === 'slash')) {
+    if (a && (a.kind === 'chop' || a.kind === 'saw' || a.kind === 'slash')) {
       const p = a.t / a.dur, hit = a.hits[0] / a.dur, back = hit * 0.62;
       if (p < back) { from = set.rest; to = set.back; u = sm(0, back, p); }
       else if (p < hit) { from = set.back; to = set.hit; u = sm(back, hit, p) ** 0.7; }

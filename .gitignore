@@ -1,8 +1,13 @@
 .DS_Store
 .vercel
 rawah-landmarks/
+rawah-lowpoly/
+rawah-unused/
+.claude/
+mesh.glb
+scene.blend
+conversation.atlas-context.json
 assets/characters/blaize/*.fbx
 assets/characters/grant/*.fbx
 assets/characters/corey/*.fbx
-rawah-unused/
 assets/characters/trey/*.fbx

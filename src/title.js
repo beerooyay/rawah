@@ -102,7 +102,7 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
   pick.trailhead = (trailheads.find((t) => t.name.includes('West Branch')) || trailheads[0]).name;   // always west branch
 
   // ---- who tryna come: chips for everyone you are not playing as; empty means the usual two
-  const crewAll = () => (pick.party && pick.party.length ? pick.party : names.filter((n) => n !== pick.character).slice(0, 2));
+  const crewAll = () => (pick.party == null ? names.filter((n) => n !== pick.character).slice(0, 2) : pick.party);
   const crewRow = el('div', 'crew-row');
   const card3 = document.querySelectorAll('.pick-card')[2];
   const buildCrew = () => {

@@ -107,15 +107,6 @@ export class Calendar {
   }
 }
 
-export const MONTH_DAYS = DAYS;
-
-/** Month index (0 = January) and day of month for a day-of-year (0 = 1 January). */
-export function monthDay(doy) {
-  let d = Math.floor(((doy % 365) + 365) % 365), m = 0;
-  while (d >= DAYS[m]) { d -= DAYS[m]; m++; }
-  return { m, d: d + 1 };
-}
-
 /** Day-of-year for a month index and day of month. */
 export function doyOf(m, d) {
   let n = 0;

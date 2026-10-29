@@ -28,7 +28,8 @@ export const ACTIONS = {
   combo: { dur: 1.15, hits: [0.22, 0.5, 0.85], slow: 0.2, cost: 8 },
   hook: { dur: 0.85, hits: [0.4], slow: 0.25, cost: 6 },
   stomp: { dur: 0.9, hits: [0.45], slow: 0.2, cost: 4 },
-  chop: { dur: 0.65, hits: [0.3], slow: 0.12, cost: 2 },      // an axe swing (0.65 s, landing at 46%); props.js decides what it hits
+  chop: { dur: 0.65, hits: [0.3], slow: 0, cost: 2 },      // the sideways felling stroke (0.65 s, landing at 46%); props.js decides what it hits
+  saw: { dur: 0.9, hits: [0.48], slow: 0, cost: 2 },       // the overhead chop for sawing a lying trunk (0.9 s)
   slash: { dur: 0.9, hits: [0.4], slow: 0.2, cost: 2.5 },      // a machete swing
   hitSide: { dur: 1.1, hits: [], slow: 0 },
   hitKidney: { dur: 0.9, hits: [], slow: 0 },
@@ -390,7 +391,8 @@ export class Hiker {
     const want = this.load || this.channel ? '' : inp.punch ? (this.tool === 'axe' ? 'chop' : this.tool === 'machete' ? 'slash' : 'punch') : inp.hook ? 'hook' : inp.stomp ? 'stomp' : '';
     if (!want || this.action || this.mode !== 'walk' || !this.grounded || this.stance !== 'stand' || this.stanceLock > 0 || this.stamina < 4) return;
     let kind = want;
-    if (want === 'punch') kind = this.chainT > 0 && this.lastKind === 'jab' ? 'cross' : this.chainT > 0 && this.lastKind === 'cross' ? 'combo' : 'jab';
+    if (want === 'chop') kind = this.aimSwing?.() || 'chop';
+    else if (want === 'punch') kind = this.chainT > 0 && this.lastKind === 'jab' ? 'cross' : this.chainT > 0 && this.lastKind === 'cross' ? 'combo' : 'jab';
     this.#startAction(kind);
   }
 

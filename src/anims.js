@@ -26,7 +26,7 @@ export const EXTRA = [
   'Punching', 'Punching (1)', 'Punch Combo', 'Hook', 'Stomp',
   'Big Side Hit', 'Kidney Hit', 'Light Hit To Head', 'Receiving An Uppercut', 'Receive Uppercut To The Face',
   'Carrying', 'Pushing', 'Stable Sword Outward Slash',
-  'Chop_Start_Fast', 'Chop_Loop_Fast',
+  'Chop_Start_Fast',
 ];
 
 // the chop clips come from chop.glb (a Sketchfab rig), whose bones carry their
