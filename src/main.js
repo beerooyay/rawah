@@ -661,7 +661,7 @@ $('btn-restart').onclick = () => {
 };
 
 // title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
-const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
+const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName, party: settings.party };
 const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
 buildTitle({
   trailheads: world.places.filter((p) => p.kind === 'trailhead'),
@@ -670,7 +670,7 @@ buildTitle({
   onTime: (h) => { state.hour = h; weather.settle(state.day, h); cloudSim.settle(weather, h); },
 });
 function startFresh() {
-  Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
+  Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character, party: pick.party });
   storeJSON('rawah-settings', settings);
   const changed = pick.doy !== booted.doy || pick.trailhead !== booted.trailhead || pick.character !== booted.character;
   if (!changed) { begin(true); return; }

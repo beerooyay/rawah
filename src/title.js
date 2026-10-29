@@ -93,6 +93,7 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     cur = (i + names.length) % names.length;
     pick.character = names[cur];
     markCast();
+    buildCrew?.();
   };
   document.addEventListener('keydown', (e) => {
     if ($('title').classList.contains('hidden')) return;
@@ -100,6 +101,24 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     else if (e.code === 'ArrowRight') show(cur + 1);
   });
   pick.trailhead = (trailheads.find((t) => t.name.includes('West Branch')) || trailheads[0]).name;   // always west branch
+
+  // ---- who tryna come: chips for everyone you are not playing as; empty means the usual two
+  const crewAll = () => (pick.party && pick.party.length ? pick.party : names.filter((n) => n !== pick.character).slice(0, 2));
+  const crewRow = el('div', 'crew-row');
+  const card3 = document.querySelectorAll('.pick-card')[2];
+  const buildCrew = () => {
+    if (!card3) return;
+    if (!crewRow.parentNode) { card3.appendChild(el('div', 'mc-div')); card3.appendChild(el('div', 'mc-sub', 'Who tryna come?')); card3.appendChild(crewRow); }
+    crewRow.innerHTML = '';
+    for (const n of names.filter((x) => x !== pick.character)) {
+      const b = el('button', 'togchip', cap(n));
+      b.dataset.name = n;
+      b.onclick = () => { const cur = crewAll(); pick.party = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n]; b.classList.toggle('on'); };
+      b.classList.toggle('on', crewAll().includes(n));
+      crewRow.appendChild(b);
+    }
+  };
+  buildCrew();
   show(Math.max(0, names.indexOf(pick.character)));
 
   // portraits render once their models arrive, so the menu opens without waiting for them;
