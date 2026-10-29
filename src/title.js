@@ -26,14 +26,34 @@ const TIMES = [['Dawn', 6], ['Morning', 9], ['Midday', 13], ['Golden hour', 18.5
  * `characters` maps each name to its model URL.
  */
 export function buildTitle({ trailheads, pick, characters, onTime }) {
+  // one icon language for every pick: 24px line-art, currentColor stroke
+  const IC = {
+    flower: '<circle cx="12" cy="11" r="2"/><path d="M12 8.5c-2.5 0-2.5-4 0-4s2.5 4 0 4Zm0 5c2.5 0 2.5 4 0 4s-2.5-4 0-4Zm-2.5-2.5c0 2.5-4 2.5-4 0s4-2.5 4 0Zm5 0c0-2.5 4-2.5 4 0s-4 2.5-4 0Z"/><path d="M12 15v6"/>',
+    sprout: '<path d="M12 21v-8"/><path d="M12 13c0-4 3-6 7-6 0 4-3 6-7 6Zm0-2c0-3-2.5-4.5-5.5-4.5C6.5 9.5 9 11 12 11"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.7m0 13.6v2.7M2.5 12h2.7m13.6 0h2.7M5.3 5.3l1.9 1.9m9.6 9.6 1.9 1.9m0-15.4-1.9 1.9M7.2 16.8l-1.9 1.9"/>',
+    heat: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.7m0 13.6v2.7M2.5 12h2.7m13.6 0h2.7M5.3 5.3l1.9 1.9m9.6 9.6 1.9 1.9m0-15.4-1.9 1.9M7.2 16.8l-1.9 1.9"/><path d="M3.5 21h4m3 0h4m3 0h3"/>',
+    leaf: '<path d="M6 19C6 10 12 4.5 20 4.5 20 12.5 14 19 6 19Z"/><path d="M6 19c2.5-5.5 6-9 10-11"/>',
+    snow: '<path d="M12 3v18m0-18-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M4.2 7.5l15.6 9M4.2 7.5l-.2 4m.2-4 3.9-.6M19.8 16.5l.2-4m-.2 4-3.9.6M19.8 7.5l-15.6 9m15.6-9 .2 4m-.2-4-3.9-.6M4.2 16.5l-.2-4m.2 4 3.9.6"/>',
+    sunrise: '<path d="M3.5 18.5h17M8 18.5a4 4 0 0 1 8 0"/><path d="M12 8v3.5M6.2 9.7l2.2 2.2M17.8 9.7l-2.2 2.2M12 4l-2 2.5M12 4l2 2.5"/>',
+    morning: '<circle cx="12" cy="14.5" r="3.5"/><path d="M12 5.5v3M6 9l2 2M18 9l-2 2M4 19h16"/>',
+    noon: '<circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v2.5m0 14v2.5M2.5 12H5m14 0h2.5M5.3 5.3 7 7m10 10 1.7 1.7m0-15.4L17 7M7 17l-1.7 1.7"/>',
+    golden: '<path d="M3.5 19.5h17M7 19.5a5 5 0 0 1 10 0"/><path d="M12 8.5V5M6.8 9.8 5 8M17.2 9.8 19 8"/>',
+    dusk: '<path d="M4 19h16"/><path d="M15 13.5a5 5 0 0 1-8.5-3.5 5 5 0 0 0 8.5 3.5Z"/><path d="M17 5.5l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5Z"/>',
+    moon: '<path d="M15.5 3a8 8 0 1 0 5.5 13.9A8 8 0 0 1 15.5 3Z"/><path d="M17.5 4.5l.5 1.4 1.4.5-1.4.5-.5 1.4-.5-1.4-1.4-.5 1.4-.5Z"/>',
+  };
+  const SEA_IC = { 'Spring thaw': 'sprout', 'Early summer': 'sun', 'Midsummer': 'heat', 'High fall': 'leaf', 'Deep winter': 'snow' };
+  const TIM_IC = { 'Dawn': 'sunrise', 'Morning': 'morning', 'Midday': 'noon', 'Golden hour': 'golden', 'Dusk': 'dusk', 'Night': 'moon' };
+
   // a row of circular icon buttons bound to a pick field; numbers mark the closest value, strings the exact one
   const chips = (rootId, items, get, set, iconOf) => {
     const root = $(rootId);
-    const btns = items.map(([label, v], i) => {
+    const btns = items.map(([label, v]) => {
       const b = el('button', 'ic');
       b.title = label;
       b.setAttribute('aria-label', label);
-      b.appendChild(el('span', `ic-dot ${iconOf ? iconOf(label, i) : ''}`));
+      const badge = el('span', 'ic-badge');
+      badge.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${IC[iconOf(label)] || ''}</svg>`;
+      b.appendChild(badge);
       b.appendChild(el('span', 'ic-name', label.replace(' hour', '').replace(' thaw', '').replace(' summer', '')));
       b.onclick = () => { set(v); mark(); };
       root.appendChild(b);
@@ -49,8 +69,6 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     return mark;
   };
 
-  const SEA_IC = { 'Spring thaw': 's1', 'Early summer': 's2', 'Midsummer': 's3', 'High fall': 's4', 'Deep winter': 's5' };
-  const TIM_IC = { 'Dawn': 't1', 'Morning': 't2', 'Midday': 't3', 'Golden hour': 't4', 'Dusk': 't5', 'Night': 't6' };
   chips('chips-season', SEASONS, () => pick.doy, (v) => { pick.doy = v; }, (l) => SEA_IC[l]);
   chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; onTime?.(v); }, (l) => TIM_IC[l]);
 
@@ -81,7 +99,7 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     if (e.code === 'ArrowLeft') show(cur - 1);
     else if (e.code === 'ArrowRight') show(cur + 1);
   });
-  chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; }, () => 'p1');
+  pick.trailhead = (trailheads.find((t) => t.name.includes('West Branch')) || trailheads[0]).name;   // always west branch
   show(Math.max(0, names.indexOf(pick.character)));
 
   // portraits render once their models arrive, so the menu opens without waiting for them;
