@@ -128,46 +128,32 @@
   <!-- ============================================================ title -->
   <div id="title" class="screen hidden">
     <div class="title-inner">
-      <div class="title-top">
-        <div class="kicker">Medicine Bow Mountains · Colorado</div>
-        <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
-        <p class="lede">Hike fifteen kilometres of the real Rawah Wilderness, from lidar, satellite imagery and OpenStreetMap.</p>
-      </div>
+      <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
 
-      <div class="tr-block">
-        <div class="field-label">Playing as</div>
-        <div class="caro">
-          <button id="cast-prev" class="caro-arrow" aria-label="Previous hiker"><svg viewBox="0 0 16 16"><path d="M10.5 2.5 5 8l5.5 5.5" /></svg></button>
-          <div id="cast" class="cast-card" aria-live="polite">
-            <div class="cast-art"><img class="portrait" alt="" draggable="false" /></div>
-            <div class="cast-name"></div>
-            <div class="cast-where"></div>
-          </div>
-          <button id="cast-next" class="caro-arrow" aria-label="Next hiker"><svg viewBox="0 0 16 16"><path d="M5.5 2.5 11 8l-5.5 5.5" /></svg></button>
+      <div class="menu-cards">
+        <div class="pick-card">
+          <div class="mc-label">Season</div>
+          <div id="chips-season" class="mc-icons" role="group" aria-label="Season"></div>
         </div>
-        <div id="cast-dots" class="cast-dots" role="group" aria-label="Choose hiker"></div>
-      </div>
-      <div class="trip">
-        <div class="trip-row">
-          <div class="field-label">When</div>
-          <div id="chips-season" class="chips" role="group" aria-label="When"></div>
+        <div class="pick-card">
+          <div class="mc-label">Time of day</div>
+          <div id="chips-time" class="mc-icons" role="group" aria-label="Time of day"></div>
         </div>
-        <div class="trip-row">
-          <div class="field-label">What time</div>
-          <div id="chips-time" class="chips" role="group" aria-label="What time"></div>
+        <div class="pick-card">
+          <div class="mc-label">Character</div>
+          <div id="chips-cast" class="mc-icons" role="group" aria-label="Character"></div>
         </div>
-        <div class="trip-row">
-          <div class="field-label">Where</div>
-          <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
+        <div class="pick-card">
+          <div class="mc-label">Trailhead</div>
+          <div id="chips-place" class="mc-icons" role="group" aria-label="Trailhead"></div>
         </div>
       </div>
 
       <div class="actions">
         <button id="btn-continue" class="primary hidden">Continue</button>
-        <button id="btn-start" class="primary">Start hiking</button>
+        <button id="btn-start" class="primary big">Begin journey</button>
         <button id="btn-controls" class="ghost">Controls</button>
       </div>
-      <div class="credit">USGS 3DEP lidar · Copernicus Sentinel-2 · © OpenStreetMap contributors via Overture Maps</div>
     </div>
   </div>
 

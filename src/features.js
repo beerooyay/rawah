@@ -545,8 +545,8 @@ export function buildSigns(world, models) {
     }
     if (th === main) {
       // the vault toilet stands on the island well inside the loop, door toward the mouth, or behind the cars elsewhere
-      const ox = spot.lot ? spot.lot.cx - spot.lot.ax * 19 : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
-      const oz = spot.lot ? spot.lot.cz - spot.lot.az * 19 : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
+      const ox = spot.lot ? spot.lot.cx - spot.lot.ax * 19 - spot.lot.px * 7 : spot.x - spot.rx * (CAR_SPACING * CAR_ORDER.length + 3);
+      const oz = spot.lot ? spot.lot.cz - spot.lot.az * 19 - spot.lot.pz * 7 : spot.z - spot.rz * (CAR_SPACING * CAR_ORDER.length + 3);
       place(landmark(models.outhouse, 2.5), ox, oz, spot.lot ? -spot.lot.ax : cars[0].start.x - ox, spot.lot ? -spot.lot.az : cars[0].start.z - oz);
       if (spot.lot) {   // the quad waits on the far arm, nose along the loop
         const L = spot.lot, qx = L.cx + L.px * 10.6 - spot.rx * 9, qz = L.cz + L.pz * 10.6 - spot.rz * 9;

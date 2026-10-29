@@ -26,11 +26,15 @@ const TIMES = [['Dawn', 6], ['Morning', 9], ['Midday', 13], ['Golden hour', 18.5
  * `characters` maps each name to its model URL.
  */
 export function buildTitle({ trailheads, pick, characters, onTime }) {
-  // a row of chips bound to a pick field; numbers mark the closest value, strings the exact one
-  const chips = (rootId, items, get, set) => {
+  // a row of circular icon buttons bound to a pick field; numbers mark the closest value, strings the exact one
+  const chips = (rootId, items, get, set, iconOf) => {
     const root = $(rootId);
-    const btns = items.map(([label, v]) => {
-      const b = el('button', 'chip', label);
+    const btns = items.map(([label, v], i) => {
+      const b = el('button', 'ic');
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.appendChild(el('span', `ic-dot ${iconOf ? iconOf(label, i) : ''}`));
+      b.appendChild(el('span', 'ic-name', label.replace(' hour', '').replace(' thaw', '').replace(' summer', '')));
       b.onclick = () => { set(v); mark(); };
       root.appendChild(b);
       return [b, v];
@@ -45,42 +49,39 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     return mark;
   };
 
-  chips('chips-season', SEASONS, () => pick.doy, (v) => { pick.doy = v; });
-  chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; onTime?.(v); });
+  const SEA_IC = { 'Spring thaw': 's1', 'Early summer': 's2', 'Midsummer': 's3', 'High fall': 's4', 'Deep winter': 's5' };
+  const TIM_IC = { 'Dawn': 't1', 'Morning': 't2', 'Midday': 't3', 'Golden hour': 't4', 'Dusk': 't5', 'Night': 't6' };
+  chips('chips-season', SEASONS, () => pick.doy, (v) => { pick.doy = v; }, (l) => SEA_IC[l]);
+  chips('chips-time', TIMES, () => pick.hour, (v) => { pick.hour = v; onTime?.(v); }, (l) => TIM_IC[l]);
 
-  // ---- who: one hiker at a time, cycled by arrows, dots or the arrow keys
+  // ---- who: a circle of faces, click to pick
   const names = Object.keys(characters);
-  const card = $('cast'), img = card.querySelector('img');
-  const nameEl = card.querySelector('.cast-name'), whereEl = card.querySelector('.cast-where');
-  const shots = {};
+  const castRoot = $('chips-cast'), shots = {};
   let cur = 0;
-  const show = (i, dir = 0) => {
+  const markCast = () => [...castRoot.children].forEach((b, i) => b.classList.toggle('on', i === cur));
+  const castBtns = names.map((n, i) => {
+    const b = el('button', 'ic cast-ic');
+    b.title = cap(n); b.setAttribute('aria-label', cap(n));
+    const img = document.createElement('img');
+    img.alt = ''; img.draggable = false; img.className = 'cast-face';
+    const wrap = el('span', 'face-wrap');
+    wrap.appendChild(img);
+    b.appendChild(wrap); b.appendChild(el('span', 'ic-name', cap(n)));
+    b.onclick = () => show(i);
+    castRoot.appendChild(b);
+    return b;
+  });
+  const show = (i) => {
     cur = (i + names.length) % names.length;
     pick.character = names[cur];
-    nameEl.textContent = cap(names[cur]);
-    whereEl.textContent = `Parked at ${pick.trailhead}`;
-    const shot = shots[names[cur]];
-    img.classList.toggle('on', !!shot);
-    if (shot) img.src = shot;
-    img.alt = names[cur];
-    for (const [j, d] of dotEls.entries()) d.classList.toggle('on', j === cur);
-    if (dir) card.animate([{ opacity: 0, transform: `translateX(${12 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 160, easing: 'ease-out' });
+    markCast();
   };
-  const dotEls = names.map((n, i) => {
-    const d = el('button', 'cast-dot');
-    d.setAttribute('aria-label', cap(n));
-    d.onclick = () => show(i, i > cur ? 1 : -1);
-    $('cast-dots').appendChild(d);
-    return d;
-  });
-  $('cast-prev').onclick = () => show(cur - 1, -1);
-  $('cast-next').onclick = () => show(cur + 1, 1);
   document.addEventListener('keydown', (e) => {
     if ($('title').classList.contains('hidden')) return;
-    if (e.code === 'ArrowLeft') show(cur - 1, -1);
-    else if (e.code === 'ArrowRight') show(cur + 1, 1);
+    if (e.code === 'ArrowLeft') show(cur - 1);
+    else if (e.code === 'ArrowRight') show(cur + 1);
   });
-  chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; show(cur); });
+  chips('chips-place', trailheads.map((p) => [p.name.replace(/ Trailhead$/, ''), p.name]), () => pick.trailhead, (v) => { pick.trailhead = v; }, () => 'p1');
   show(Math.max(0, names.indexOf(pick.character)));
 
   // portraits render once their models arrive, so the menu opens without waiting for them;
@@ -111,7 +112,8 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
         model.updateMatrixWorld(true);
       }
       shots[name] = renderThumb(model, { w: 460, h: 620, yaw: 0.45, lift: 0.2 });
-      if (names[cur] === name) { img.src = shots[name]; img.classList.add('on'); }
+      const img = castBtns[names.indexOf(name)]?.querySelector('img');
+      if (img) { img.src = shots[name]; img.classList.add('on'); }
     }).catch((err) => console.warn(`portrait for ${name} failed`, err));
   }
 }
