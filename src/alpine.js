@@ -3,7 +3,11 @@ import { withAtmosphere } from './atmosphere.js';
 
 /** True when this page was loaded with the alpine look. */
 export const ALPINE = (() => {
-  try { return JSON.parse(localStorage.getItem('rawah-settings') || '{}').look === 'alpine'; } catch { return false; }
+  try {
+    const s = JSON.parse(localStorage.getItem('rawah-settings') || '{}') || {};
+    const look = ['photo', 'alpine', 'lowpoly'].includes(s.look) ? s.look : s.lowPoly ? 'lowpoly' : 'alpine';
+    return look === 'alpine';
+  } catch { return true; }
 })();
 
 const KIT = {};

@@ -976,7 +976,7 @@ for (const [id, key] of [['set-crew-url', 'crewUrl'], ['set-crew-model', 'crewMo
 // the look (src/lowpoly.js): photo (satellite and textures), alpine (the painted Twin Crater palette) or lowpoly (cut facets).
 // two uniforms, so it flips instantly. [\\] steps through them in play for side-by-sides
 const LOOKS = { photo: 'Photographic world', alpine: 'Alpine world', lowpoly: 'Low poly world' };
-if (!LOOKS[settings.look]) settings.look = settings.lowPoly ? 'lowpoly' : 'photo';
+if (!LOOKS[settings.look]) settings.look = settings.lowPoly ? 'lowpoly' : 'alpine';
 const setLook = (look) => {
   settings.look = look;
   LOWPOLY.uLowPoly.value = look === 'photo' ? 0 : 1;
