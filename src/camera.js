@@ -55,9 +55,13 @@ export class CameraRig {
 
     // spring-follow the eye height: stiff enough to track slopes, soft over bumps
     if (this.eyeY === null || Math.abs(this._eye.y - this.eyeY) > 3 || h.mode === 'climb') { this.eyeY = this._eye.y; this.eyeVel = 0; }
-    const w = 22;
-    this.eyeVel += ((this._eye.y - this.eyeY) * w * w - 2 * w * this.eyeVel) * dt;
-    this.eyeY += this.eyeVel * dt;
+    // Integrate the critically damped spring directly. An Euler step can
+    // overshoot the hillside when a slow frame reaches the 50 ms tick cap.
+    const w = 22, offset = this.eyeY - this._eye.y;
+    const velocity = this.eyeVel + w * offset;
+    const decay = Math.exp(-w * dt);
+    this.eyeY = this._eye.y + (offset + velocity * dt) * decay;
+    this.eyeVel = (this.eyeVel - w * velocity * dt) * decay;
 
     // landing dip spring
     this.dipVel += (-this.dip * 140 - this.dipVel * 16) * dt;
@@ -81,7 +85,9 @@ export class CameraRig {
     const yaw = h.yaw, pitch = h.pitch;
     if (this.mode === 'first') {
       const rx = Math.cos(yaw), rz = -Math.sin(yaw);
-      cam.position.set(this._eye.x + rx * sway, this.eyeY + bobY + this.dip + breathe, this._eye.z + rz * sway);
+      const x = this._eye.x + rx * sway, z = this._eye.z + rz * sway;
+      const floor = this.world.height(x, z) + 0.2;
+      cam.position.set(x, Math.max(floor, this.eyeY + bobY + this.dip + breathe), z);
       cam.rotation.set(pitch - run * 0.03 * walkK + this.dip * 0.08, yaw, this.roll);
       return;
     }

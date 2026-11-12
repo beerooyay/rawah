@@ -12,6 +12,7 @@ export const TRAMPLE = 40;            // pressed patches remembered at once
 export const HOLD = 3, SPRING = 16;   // s a patch stays flat, and the time it's fully sprung back by
 
 export const atmosphere = {
+  uPlantSeason: { value: new THREE.Vector4() },
   uTime: { value: 0 },
   uTrA: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // x, z, direction x, z
   uTrB: { value: Array.from({ length: TRAMPLE }, () => new THREE.Vector4()) },   // length, radius, power, time pressed
@@ -29,7 +30,8 @@ export const atmosphere = {
   // surfaces
   uWet: { value: 0 },
   uSnow: { value: 0 },
-  uSnowLine: { value: 4500 },
+  uSnowLine: { value: 5000 },
+  uPackLine: { value: 4600 },
   uGreen: { value: 0 },     // how much greener the meadows are than the late-September satellite image
   uValley: { value: 0.00005 }, // extra haze per metre in low air, thinning with height (heaviest at dawn)
   // sky view (skyview.js): how much skylight reaches each spot
@@ -60,70 +62,57 @@ float pressAt(vec2 p) {
 }
 `;
 
-// Cloud density: where and how much comes from the live weather field (cloudsim.js, packed into the G and B
-// channels of the noise texture over 64 km around the map), the shapes from the tiling noise in R: four octaves
-// for the sky, two for shadows.
+// Twin Crater's three octave painted cloud field. CloudSim supplies local
+// cover in the green channel; the same footprint shades ground and sky.
 export const CLOUD_GLSL = /* glsl */ `
 uniform sampler2D uCloudTex;
 uniform vec2 uCloudOff;
 uniform float uCloudCover, uCloudAlt;
-// the weather field at a point: cover (0 clear to 1 solid) and how tall the cloud there grows
-vec2 cloudWx(vec2 p) { return texture2D(uCloudTex, clamp(p / 64000.0 + 0.5, 0.002, 0.998)).gb; }
-// each octave is turned by a different angle, and the whole field is domain-warped, so
-// no two octaves line up and the noise tile never shows as a grid
-vec2 cloudRot1(vec2 q) { return mat2(0.8, 0.6, -0.6, 0.8) * q; }
-vec2 cloudRot2(vec2 q) { return mat2(0.6, -0.8, 0.8, 0.6) * q; }
-vec2 cloudRot3(vec2 q) { return mat2(-0.68, 0.73, -0.73, -0.68) * q; }
-vec2 cloudWarp(vec2 q) {
-  vec2 w = vec2(texture2D(uCloudTex, q * 0.61 + vec2(0.23, 0.41)).r, texture2D(uCloudTex, q * 0.61 + vec2(0.71, 0.13)).r) - 0.5;
-  return q + w * 0.2;
+float cloudHash(ivec2 p) {
+  uint n = uint(p.x) * 1597334677u ^ uint(p.y) * 3812015801u;
+  n = (n ^ (n >> 16u)) * 2246822519u;
+  return float(n >> 8u) / 16777216.0;
 }
-float cloudFbm(vec2 p, int oct, float cover) {
-  vec2 q = cloudWarp((p + uCloudOff) / 20000.0);
-  q.y *= 1.05;    // a slight pull along the drift, so banks have a grain
-  float f = texture2D(uCloudTex, q).r * 0.56 + texture2D(uCloudTex, cloudRot1(q) * 2.73 + 0.31).r * 0.24;
-  if (oct > 2) f += texture2D(uCloudTex, cloudRot2(q) * 7.1 + 0.57).r * 0.12 + texture2D(uCloudTex, cloudRot3(q) * 11.3 + 0.11).r * 0.06;
-  else f += 0.1;
-  // clouds gather into banks: a low field decides where they mass, so the same cover
-  // reads as clumps with blue between, not an even spread. relaxes toward real overcast.
-  // the field drifts slower than the layer, so banks gather and dissolve as clouds pass — shapes live, not just slide
-  float bank = texture2D(uCloudTex, cloudRot3((p + uCloudOff * 0.37) / 5200.0)).r;
-  f *= mix(1.0, 0.5 + bank, 0.55 * (1.0 - cover * 0.6));
-  return f;
+float cloudNoise(vec2 p) {
+  ivec2 i = ivec2(floor(p));
+  vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(cloudHash(i), cloudHash(i + ivec2(1, 0)), f.x),
+    mix(cloudHash(i + ivec2(0, 1)), cloudHash(i + ivec2(1, 1)), f.x), f.y);
 }
-float cloudDensity(vec2 p, int oct) {
-  float cover = cloudWx(p).x;
-  float th = mix(0.74, 0.2, cover);
-  return smoothstep(th, th + 0.13, cloudFbm(p, oct, cover));
+float cloudDensity(vec2 p) {
+  // the live field places the clouds; the weather's own cover is a floor, so a cloudy day is never an empty sky while the field catches up
+  float cover = max(texture2D(uCloudTex, clamp(p / 64000.0 + 0.5, 0.002, 0.998)).g, uCloudCover * 0.85);
+  vec2 q = (p - uCloudOff) * 0.0017;
+  float f = cloudNoise(q) * 0.57 + cloudNoise(q * 2.03 + 17.3) * 0.28 + cloudNoise(q * 4.11 - 31.0) * 0.15;
+  float th = mix(0.93, 0.08, cover);
+  return smoothstep(th, th + 0.22, f);
 }
 `;
 
-/** CPU twin of cloudDensity (two octaves), for the light reaching the hiker. */
+const mix = (a, b, t) => a + (b - a) * t;
+const cubic = (t) => t * t * (3 - 2 * t);
+function cloudHash(x, y) {
+  const n = Math.imul(x, 1597334677) ^ Math.imul(y, 3812015801);
+  return (Math.imul(n ^ (n >>> 16), 2246822519) >>> 8) / 16777216;
+}
+function cloudNoise(x, y) {
+  const i = Math.floor(x), j = Math.floor(y), u = cubic(x - i), v = cubic(y - j);
+  return mix(mix(cloudHash(i, j), cloudHash(i + 1, j), u),
+    mix(cloudHash(i, j + 1), cloudHash(i + 1, j + 1), u), v);
+}
+
+/** CPU twin of cloudDensity for the light reaching the hiker. */
 export function cloudDensityAt(x, z) {
   const tex = atmosphere.uCloudTex.value;
   if (!tex) return 0;
   const { data, width: n } = tex.image;
-  const at = (u, v, ch = 0) => {
-    const fx = u * n - 0.5, fy = v * n - 0.5;
-    const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
-    const px = (i) => ((i % n) + n) % n;
-    const s = (i, j) => data[(px(j) * n + px(i)) * 4 + ch] / 255;
-    const a = s(x0, y0), b = s(x0 + 1, y0), c = s(x0, y0 + 1), d = s(x0 + 1, y0 + 1);
-    return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
-  };
-  const off = atmosphere.uCloudOff.value;
-  // the same warp and octave turns as CLOUD_GLSL
-  const ux = (x + off.x) / 20000, uy = (z + off.y) / 20000;
-  const wx = at(ux * 0.61 + 0.23, uy * 0.61 + 0.41) - 0.5, wy = at(ux * 0.61 + 0.71, uy * 0.61 + 0.13) - 0.5;
-  const u = ux + wx * 0.2, v = (uy + wy * 0.2) * 1.05;
-  const bx = (x + off.x * 0.37) / 5200, by = (z + off.y * 0.37) / 5200;
-  const bank = at(-0.68 * bx - 0.73 * by, 0.73 * bx - 0.68 * by);
-  const cover = at(Math.min(0.998, Math.max(0.002, x / 64000 + 0.5)), Math.min(0.998, Math.max(0.002, z / 64000 + 0.5)), 1);   // cloudWx
-  const f = (at(u, v) * 0.56 + at((0.8 * u - 0.6 * v) * 2.73 + 0.31, (0.6 * u + 0.8 * v) * 2.73 + 0.31) * 0.24 + 0.1)
-    * (1 + (0.5 + bank - 1) * 0.55 * (1 - cover * 0.6));
-  const th = 0.74 + (0.2 - 0.74) * cover;
-  const t = Math.min(1, Math.max(0, (f - th) / 0.13));
-  return t * t * (3 - 2 * t);
+  const uv = (p) => Math.min(0.998, Math.max(0.002, p / 64000 + 0.5)) * n - 0.5;
+  const fx = uv(x), fy = uv(z), i = Math.floor(fx), j = Math.floor(fy);
+  const at = (u, v) => data[(((v + n) % n) * n + (u + n) % n) * 4 + 1] / 255;
+  const cover = Math.max(mix(mix(at(i, j), at(i + 1, j), fx - i), mix(at(i, j + 1), at(i + 1, j + 1), fx - i), fy - j), atmosphere.uCloudCover.value * 0.85);   // same floor as the shader
+  const off = atmosphere.uCloudOff.value, u = (x - off.x) * 0.0017, v = (z - off.y) * 0.0017;
+  const f = cloudNoise(u, v) * 0.57 + cloudNoise(u * 2.03 + 17.3, v * 2.03 + 17.3) * 0.28 + cloudNoise(u * 4.11 - 31, v * 4.11 - 31) * 0.15;
+  return cubic(Math.min(1, Math.max(0, (f - mix(0.93, 0.08, cover)) / 0.22)));
 }
 
 const _v = new THREE.Vector3();
@@ -135,14 +124,23 @@ export function updateAtmosphere(sky, camera) {
   const day = Math.max(0, Math.min(1, (sky.sunDir.y + 0.04) / 0.2));
   atmosphere.uSunFog.value.copy(sky.uniforms.uGlow.value).lerp(sky.uniforms.uHorizon.value, 0.35).multiplyScalar((0.3 + 0.2 * day) * (1 - 0.7 * sky.overcast));
   atmosphere.uSunCol.value.copy(sky.sun.color).multiplyScalar(day * 0.9 * (1 - 0.8 * sky.overcast) * (1 - 0.85 * sky.sunBlock) * (1 - sky.terrainBlock));
-  atmosphere.uCloudShade.value = 0.85 * day;
+  atmosphere.uCloudShade.value = 0.38 * day;
 }
+
+export const SNOW_GLSL = /* glsl */ `
+uniform float uSnow, uSnowLine, uPackLine;
+float snowAt(float altitude) {
+  float pack = smoothstep(uPackLine - 60.0, uPackLine + 60.0, altitude);
+  float fresh = uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 60.0, altitude);
+  return max(pack, fresh);
+}
+`;
 
 /**
  * Inject the shared atmosphere into a material (call inside onBeforeCompile).
  * `translucency`: backlit glow; `weather`: how strongly rain and snow mark it (0 = not at all).
  */
-export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusion = 1 } = {}) {
+export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusion = 1, sharedNoise = false } = {}) {
   Object.assign(shader.uniforms, atmosphere);
   shader.vertexShader = shader.vertexShader
     .replace('#include <fog_pars_vertex>', '#include <fog_pars_vertex>\nvarying vec3 vFogView;')
@@ -152,16 +150,17 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
       varying vec3 vFogView;
       uniform vec3 uSunView, uSunFog, uSunCol, uSunWorld;
       uniform mat4 uViewInv;
-      uniform float uCloudShade, uWet, uSnow, uSnowLine, uSkyExtent, uGreen, uValley;
+      uniform float uCloudShade, uWet, uSkyExtent, uGreen, uValley;
+      ${SNOW_GLSL}
       uniform sampler2D uTerrShadow;
       uniform float uTSOn;
-      ${CLOUD_GLSL}
+      ${sharedNoise ? '#define uCloudTex uNoise\n' + CLOUD_GLSL.replace('uniform sampler2D uCloudTex;', '') : CLOUD_GLSL}
       ${PRESS_GLSL}`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
       {
         vec3 wp = (uViewInv * vec4(vFogView, 1.0)).xyz;
         vec2 cp = wp.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - wp.y);
-        float shade = 1.0 - uCloudShade * cloudDensity(cp, 2);
+        float shade = 1.0 - uCloudShade * cloudDensity(cp);
         vec4 tf = texture2D(uTerrShadow, wp.xz / uSkyExtent + 0.5);   // R sun shadow, GBA static (terrainbake.js); A the sky view
         // the mountains' shadows on whatever is far enough that the sun's own shadow map no longer covers it
         float tsh = mix(1.0, tf.r, smoothstep(150.0, 420.0, length(vFogView)) * uTSOn);
@@ -192,10 +191,10 @@ export function withAtmosphere(shader, { translucency = 0, weather = 0, occlusio
         vec3 wp = (uViewInv * vec4(vFogView, 1.0)).xyz;
         vec3 wn = normalize((uViewInv * vec4(normal, 0.0)).xyz);
         diffuseColor.rgb *= 1.0 - uWet * ${(0.32 * weather).toFixed(3)} * smoothstep(-0.2, 0.6, wn.y);
-        if (uSnow > 0.0) {
+        if (uSnow > 0.0 || wp.y > uPackLine - 120.0) {
           float drift = texture2D(uCloudTex, wp.xz / 340.0).r * 0.45 + texture2D(uCloudTex, wp.xz / 37.0).r * 0.35 + texture2D(uCloudTex, wp.xz / 4.1).r * 0.2;
-          float line = smoothstep(uSnowLine - 90.0, uSnowLine + 60.0, wp.y + (drift - 0.5) * 120.0);
-          float cover = clamp(uSnow * 1.6 - (1.0 - drift) * 0.7, 0.0, 1.0) * line * smoothstep(0.3, 0.75, wn.y);
+          float depth = snowAt(wp.y + (drift - 0.5) * 120.0);
+          float cover = clamp(depth * 1.6 - (1.0 - drift) * 0.7, 0.0, 1.0) * smoothstep(0.3, 0.75, wn.y);
           // thin packs patch, they don't tint: snow owns drifts and hollows, bare ribs show through
           cover = smoothstep(0.18, 0.8, cover);
           // where something has stood the snow is pushed off: the ground under it shows, pressed darker

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { hash2, clamp } from './noise.js';
+import { hash2, clamp, valueNoise, smoothstep } from './noise.js';
 import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial, loadBark, TONE } from './trees.js';
 import { rockGeometries, rockMaterial, graniteMaterial } from './rocks.js';
+import { ALPINE, alpineRocks, alpineStone } from './alpine.js';
 import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
 // Trees, burned snags, downed logs, krummholz, willows and rock around the
@@ -25,7 +26,8 @@ const REFILL_M = 14;       // move this far before refilling instances
 const TREES = ['spruce', 'fir', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
 const ROCKS = ['boulder', 'slab', 'tooth', 'granite'];
 const KINDS = [...TREES, ...ROCKS, 'log'];
-const CAP = { spruce: 4000, fir: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, granite: 4000, log: 4000 };
+const CAP_T = ALPINE ? 3 : 1;   // the alpine trees are dense and drawn whole further out
+const CAP = { spruce: 4000 * CAP_T, fir: 4000 * CAP_T, lodgepole: 3000 * CAP_T, aspen: 2000 * CAP_T, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, granite: 4000, log: 4000 };
 const SAPLING = 0.4;       // scale under this is an understory sapling: only drawn close up, never an impostor, no trunk to bump
 // per rock shape, in units of its scale: how far its base sits below the origin, how tall it stands, how wide its footprint
 const BOT = { boulder: 0.4, slab: 0.1, tooth: 1.5, granite: 0 };
@@ -58,6 +60,9 @@ export function rockPose(kind, s, r, q = new THREE.Quaternion(), scale = new THR
   return { q, scale };
 }
 const smoothstepFine = (v) => { const t = Math.min(1, Math.max(0, (v - 0.5) / 0.3)); return t * t * (3 - 2 * t); };
+const LAKE_REACH = 58;
+const LAKE_PROBES = [0.4, 0.75, 1].flatMap(k => Array.from({ length: 8 }, (_, i) =>
+  [Math.cos(i * 0.7854) * k, Math.sin(i * 0.7854) * k]));
 const rngFor = (i, j) => rng(Math.floor(hash2(i, j, 47) * 4294967295));
 const _g = { x: 0, z: 0 };
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
@@ -65,11 +70,20 @@ const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Eule
 export class Flora {
   constructor(world, scene, renderer, { card = 85, radius = 1250, thin = 700, impostor = 4096, cap = 240000 } = {}, leaves = 'autumn') {
     this.world = world;
+    this.lakeBounds = world.lakes.map(({ runs }) => {
+      let west = Infinity, east = -Infinity, north = Infinity, south = -Infinity;
+      for (const [row, lo, hi] of runs) {
+        west = Math.min(west, lo); east = Math.max(east, hi);
+        north = Math.min(north, row); south = Math.max(south, row);
+      }
+      return [west, east, north, south].map(v => v * world.cell - world.half);
+    });
     this.cardR = card;          // full trees inside this radius
     this.radius = radius;       // impostors out to here
     this.thin = thin;           // beyond this, every other impostor
     this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 }, uExt: { value: world.extent } };
     const atlas = paintAtlas(leaves);
+    // the alpine look keeps the game's own card trees (real Rawah shapes, cheap, impostors far out) and repaints their needles like the grass (trees.js)
     this.species = buildSpecies();
     const foliage = this.foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);
@@ -96,7 +110,7 @@ export class Flora {
         return m;
       });
     }
-    const rocks = rockGeometries(), stone = rockMaterial(this.world.extent);
+    const rocks = ALPINE ? alpineRocks(rockGeometries()) : rockGeometries(), stone = ALPINE ? alpineStone() : rockMaterial(this.world.extent);
     const log = new THREE.CylinderGeometry(0.16, 0.2, 6, 7, 1);
     log.rotateZ(Math.PI / 2);
     const wood = new THREE.MeshLambertMaterial({ color: 0x5d5650 });
@@ -246,6 +260,10 @@ export class Flora {
     const w = this.world, size = this.tile * w.cell;
     const x0 = ti * size - w.half, z0 = tj * size - w.half;
     const n = Math.floor(size / SPACING);
+    const shoreTile = this.lakeBounds.some(([west, east, north, south]) =>
+      x0 - LAKE_REACH < east && x0 + size + LAKE_REACH > west &&
+      z0 - LAKE_REACH < south && z0 + size + LAKE_REACH > north);
+
     const items = Object.fromEntries(KINDS.map((k) => [k, []]));
     const solids = []; // x, z, radius, top
     let minY = Infinity, maxY = -Infinity;
@@ -262,7 +280,7 @@ export class Flora {
     };
     // is there lake within `pad` metres (water cells only: nearWater also wants the lidar below the surface, which most banks are not)
     const lakeNear = (x, z, pad) => {
-      for (const k of [0.4, 0.75, 1]) for (let i = 0; i < 8; i++) if (w.lakeAt(x + Math.cos(i * 0.7854) * pad * k, z + Math.sin(i * 0.7854) * pad * k)) return true;
+      for (const [dx, dz] of LAKE_PROBES) if (w.lakeAt(x + dx * pad, z + dz * pad)) return true;
       return false;
     };
     const inside = (x, z) => x >= x0 && x < x0 + size && z >= z0 && z < z0 + size;
@@ -320,9 +338,9 @@ export class Flora {
         const h4 = hash2(fi, fj, 45);
         if (h4 < 0.8) {
           const RW = rng(Math.floor(hash2(fi, fj, 48) * 4294967295));
-          if (h4 < 0.55 && lakeNear(x, z, 26)) {
-            for (let c = 4 + Math.floor(RW() * 6); c > 0; c--) {
-              const a = RW() * Math.PI * 2, d = RW() * 30, px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d, s = 0.45 + RW() * RW() * 1.7, rr = RW();
+          if (shoreTile && h4 < 0.72 && lakeNear(x, z, 26)) {
+            for (let c = 7 + Math.floor(RW() * 8); c > 0; c--) {
+              const a = RW() * Math.PI * 2, d = RW() * 30, px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d, s = 0.12 + RW() * RW() * 1.7, rr = RW();
               if (!w.lakeAt(px, pz) && lakeNear(px, pz, 9)) addRock(s > 0.6 ? 'granite' : 'boulder', px, pz, s, rr);
             }
           } else if (h4 >= 0.55) {
@@ -333,6 +351,20 @@ export class Flora {
                 const b = w.nearestStream(px, pz);
                 if (b.stream && b.d > b.stream.width / 2 + 1.8 && b.d < b.stream.width / 2 + 8) addRock('granite', px, pz, s, rr);
               }
+            }
+          }
+        }
+        // Occasional glacial stones and short stacks on trail shoulders.
+        // Use the same formation grid as the natural outcrops.
+        if (h3 < 0.48 && cv.grade < 0.45 && !w.lakeAt(x, z)) {
+          const near = w.nearestTrail(x, z);
+          if (near.trail?.kind === 'trail' && near.d > 3.5 && near.d < 18 && free(x, z, e, 2.2)) {
+            const R = rng(Math.floor(hash2(fi, fj, 51) * 4294967295));
+            rubble(R, x, z, 2.8, 3 + Math.floor(R() * 4));
+            if (h3 < 0.13 && inside(x, z) && !this.#gone('granite', x, z)) {
+              // Granite is fixed in place, so removing loose stones cannot leave a floating stack.
+              const top = addRock('granite', x, z, 0.8 + R() * 0.25, R());
+              addRock('slab', x, z, 0.37 + R() * 0.12, R(), top - 0.04);
             }
           }
         }
@@ -390,9 +422,11 @@ export class Flora {
         const x = x0 + (a + r2) * SPACING, z = z0 + (b + r3) * SPACING;
         const e = w.height(x, z);
         const cv = w.cover(x, z, e);
+        // Broad, world-fixed openings filter mature and added trees without shifting surviving roots.
+        const opening = ALPINE ? smoothstep(0.28, 0.57, valueNoise(x / 82, z / 82, 117)) : 1;
         const dens = 0.45 + cv.fine * 1.1;     // thickets and openings, from a slow noise field
         let kind = null;
-        const pf = cv.forest * 0.5 * dens, pa = cv.aspen * 0.45 * dens, ps = cv.snag * 0.34, pk = cv.krumm * 0.24;
+        const pf = cv.forest * (ALPINE ? 0.78 : 0.5) * dens, pa = cv.aspen * (ALPINE ? 0.62 : 0.45) * dens, ps = cv.snag * 0.34, pk = cv.krumm * 0.24;
         const brook = w.nearestStream(x, z);
         const wet = brook.stream ? brook.d - brook.stream.width / 2 : Infinity;
         const forest = cv.forest, grade = cv.grade;
@@ -414,11 +448,12 @@ export class Flora {
           addRock(roll < 0.8 ? 'boulder' : roll < 0.93 ? 'slab' : 'tooth', x, z, 0.35 + Math.pow(hash2(gi, gj, 5), 2.2) * (1 + rock * 1.4), hash2(gi, gj, 6));
           continue;
         }
+        if (ALPINE && (kind === 'spruce' || kind === 'fir' || kind === 'lodgepole' || kind === 'aspen') && hash2(gi, gj, 118) > 0.18 + 0.82 * opening) kind = null;
         if (kind) {
           const lake = w.lakeAt(x, z);
           const near = w.nearestTrail(x, z);
           const bad = (lake && e < lake.level + 0.7)
-            || (near.trail && near.d < near.trail.width / 2 + (kind === 'log' ? 1.2 : 2.2))
+            || (near.trail && near.d < near.trail.width / 2 + (kind === 'log' ? 1.2 : ALPINE && near.trail.kind === 'trail' ? 3.5 : 2.2))
             || wet < 1.5
             || (kind !== 'log' && crowded(x, z, 0.8));
           if (!bad) {
@@ -432,8 +467,66 @@ export class Flora {
             }
           }
         }
+        // Add stable candidates between the original trees. Retain the original
+        // positions so previously felled trees keep their saved identities.
+        if (ALPINE && e < tl + 30 && grade < 0.67 && (forest + cv.aspen > 0.18 || cv.meadow > 0.44 || cv.krumm > 0.08)) {
+          for (let j = 0; j < 2; j++) {
+            const seed = 31 + j * 7;
+            const roll = hash2(gi, gj, seed);
+            const grove = clamp((forest + cv.aspen) * (0.62 + 0.65 * fine), 0, 1) * opening;
+            const willowK = !this.noWillow && e < 3500 && grade < 0.28 && cv.meadow > 0.44
+              ? (wet < 45 ? 0.38 : 0.13) * smoothstepFine(fine) : 0;
+            const scrubK = cv.krumm * (0.25 + 0.52 * fine);
+            if (roll > grove + willowK + scrubK) continue;
+            const u = 0.12 + hash2(gi, gj, seed + 1) * 0.23;
+            const v = 0.12 + hash2(gi, gj, seed + 2) * 0.23;
+            const sx = x0 + (a + (j ? 1 - u : u)) * SPACING;
+            const sz = z0 + (b + (j ? v : 1 - v)) * SPACING;
+            if (Math.hypot(sx - x, sz - z) < 1.25) continue;
+            const se = w.height(sx, sz);
+            const shrub = roll > grove;
+            if (!free(sx, sz, se, shrub ? 0.8 : 3.5) || crowded(sx, sz, 0.75)) continue;
+            const rand = hash2(gi, gj, seed + 3);
+            const lodge = 2920 + fine * 140 - (wet < 40 ? 135 : 0);
+            const species = shrub ? (roll < grove + willowK ? 'willow' : 'krumm') : rand < cv.aspen / Math.max(0.001, forest + cv.aspen)
+              ? 'aspen' : se < lodge ? 'lodgepole' : rand < 0.65 ? 'spruce' : 'fir';
+            const scale = shrub ? 0.42 + rand * 0.53 : 0.48 + rand * 0.56;
+            if (this.#gone(species, sx, sz)) continue;
+            items[species].push(sx, se, sz, scale, hash2(gi, gj, seed + 4));
+            minY = Math.min(minY, se);
+            maxY = Math.max(maxY, se);
+            if (!shrub) solids.push(sx, sz, scale * 0.3 + 0.1, Infinity);
+          }
+        }
+        // Fill sheltered lakeshore groves and gather some smaller trees on trail shoulders.
+        // Reuse one candidate slot so overlapping habitats never double the density.
+        const pocket = hash2(gi, gj, 93);
+        const shoreCandidate = shoreTile && e < tl + 40 && forest < 0.48 && pocket < 0.57 * smoothstepFine(fine) * opening;
+        const trailCandidate = e < tl + 12 && (forest + cv.aspen > 0.12 || cv.meadow > 0.35)
+          && pocket < 0.32 * smoothstepFine(fine + 0.18) * opening;
+        if (grade < 0.52 && cv.rock < 0.65 && (shoreCandidate || trailCandidate)) {
+          const lx = x0 + (a + 0.46 + 0.1 * r2) * SPACING;
+          const lz = z0 + (b + 0.45 + 0.12 * r3) * SPACING;
+          if (Math.hypot(lx - x, lz - z) > 0.95 && !crowded(lx, lz, 0.72)) {
+            const near = w.nearestTrail(lx, lz);
+            const shoulder = trailCandidate && near.trail?.kind === 'trail' && near.d > 3.8 && near.d < 18;
+            const shore = shoreCandidate && (lakeNear(lx, lz, 48) || lakeNear(lx, lz, LAKE_REACH));
+            if (shore || shoulder) {
+              const le = w.height(lx, lz), roll = hash2(gi, gj, 94);
+              const species = le > tl + 12 ? 'krumm' : !shore && le < 2910 && wet > 40 ? 'lodgepole'
+                : roll < 0.64 ? 'spruce' : 'fir';
+              const scale = 0.48 + roll * 0.38;
+              if (free(lx, lz, le, shore ? 1.1 : 2.2) && !this.#gone(species, lx, lz)) {
+                items[species].push(lx, le, lz, scale, hash2(gi, gj, 95));
+                minY = Math.min(minY, le);
+                maxY = Math.max(maxY, le);
+                if (species !== 'krumm') solids.push(lx, lz, scale * 0.3 + 0.1, Infinity);
+              }
+            }
+          }
+        }
         // understory: saplings among the live forest, drawn only up close
-        if (forest > 0.15 && hash2(gi, gj, 9) < Math.min(0.9, forest * dens * 0.8)) {
+        if (forest > 0.15 && hash2(gi, gj, 9) < Math.min(0.9, forest * dens * 0.8 * (ALPINE ? opening : 1))) {
           const sx = x0 + (a + r3) * SPACING, sz = z0 + (b + r2) * SPACING, se = w.height(sx, sz);
           if (free(sx, sz, se, 1) && !crowded(sx, sz, 0.5)) {
             const q = hash2(gi, gj, 10), sk = se < 3040 - fine * 80 ? 'lodgepole' : q < 0.55 ? 'fir' : 'spruce';
@@ -564,13 +657,13 @@ export class Flora {
           }
           const vi = Math.floor(fract(r * 7.31) * variants.length);
           if (s < SAPLING) { if (d < 55) put(variants[vi], x, e - 0.1, z, s, s, s, rot, v); continue; }
-          if (d < this.cardR) {
+          if (d < (kind === 'willow' ? this.cardR * 0.7 : this.cardR)) {
             if (casterSeen(x, e, z, dh * s * 0.5, dr * s)) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); stats.kept++; }
             else stats.outside++;
             continue;
           }
           // far forest thins out progressively; the fog hides the difference
-          const keep = d < this.thin * 0.5 ? 1 : d < this.thin ? 0.7 : 0.4;
+          const keep = ALPINE ? (d < this.thin ? 1 : 0.76) : (d < this.thin * 0.5 ? 1 : d < this.thin ? 0.7 : 0.4);
           if (d > this.radius || fract(r * 3.77) > keep || ni >= this.impCap) continue;
           const c = cells[kind][vi];
           if (planes && !sphereInView(planes, x, e + c.h * s * 0.5, z, c.h * s * 0.5 + REFILL_M)) { stats.outside++; continue; }

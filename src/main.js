@@ -4,7 +4,8 @@ import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTextu
 import { TerrainShadow, bakeStatic } from './terrainbake.js';
 import { CDLODTerrain } from './cdlod.js';
 import { CloudSim } from './cloudsim.js';
-import { CloudPass } from './clouds.js';
+import { LOWPOLY } from './lowpoly.js';
+import { ALPINE, loadAlpineKit } from './alpine.js';
 import { Flora } from './flora.js';
 import { loadFoliage, TONE } from './trees.js';
 import { LeafFall } from './leaffall.js';
@@ -191,14 +192,13 @@ scene.add(terrain.group);
 scene.add(farTerrain(world, farMat));
 const sky = new Sky(scene, renderer);
 const cloudSim = new CloudSim(world, noiseTex);   // where clouds form: humidity and lift on the wind over the terrain (src/cloudsim.js)
-const clouds = new CloudPass(sky, Q.clouds);      // the cumulus themselves, drawn low-res with frames reused (src/clouds.js)
 sky.moon = MOONS[settings.moon] || MOONS.new;
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const waves = new WaveField(renderer);   // wading, rain, fish and wakes ripple the lakes and streams (src/waves.js)
 const lightning = new Lightning(scene, world);   // voxel-grown bolts (src/lightning.js)
 const waterCells = new WaterCells(world);   // silt and foam the water remembers (src/waterbox.js)
 const mirror = new LakeMirror(renderer, world);   // the lakes reflect the shore, trees and skyline (src/mirror.js)
-const lakes = buildLakes(world, mirror.uniforms);
+const lakes = buildLakes(world, mirror.uniforms, terrain.uniforms);
 const _flow = { x: 0, z: 0 };
 /** The stream's current at a point (m/s, world x, z), or nothing. */
 function currentAt(x, z) {
@@ -236,15 +236,13 @@ const models = Object.fromEntries(await Promise.all(Object.entries(modelFiles).m
 scene.add(buildSigns(world, models));
 const streams = buildStreams(world);
 scene.add(streams.group);
-await loadFoliage();     // the cut-out needles, aspen leaves and cones
-await loadAxe();         // the axe model (assets/tools/axe.fbx)
-await loadBoulders();    // the boulder pack (assets/rocks/)
-const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
+await Promise.all([loadFoliage(), loadAxe(), ALPINE ? loadAlpineKit() : loadBoulders()]);
+const flora = new Flora(world, scene, renderer, ALPINE ? { ...Q.flora, card: Q.flora.card * 0.86, cap: Q.flora.cap } : Q.flora, calendar.leaves);   // denser forests shift to impostors earlier
 const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
-const veg = new URLSearchParams(location.search).has('veg') ? await loadVegetation() : null;     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py): off for now, `?veg` turns them on     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
+const veg = !ALPINE && new URLSearchParams(location.search).has('veg') ? await loadVegetation() : null;     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py): off for now, `?veg` turns them on     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
 flora.noWillow = !!veg && Q.grass.radius >= 30;                  // the willow thickets are the shrub layer's now
 const grass = new Grass(terrain, { ...Q.grass, veg: veg && veg.grass }, flora.uniforms);
 const VEGQ = Q.grass.radius >= 50 ? { f: [26, 1.0], s: [64, 3.0] } : Q.grass.radius >= 30 ? { f: [18, 1.2], s: [44, 3.2] } : null;   // wildflower and shrub layers by preset; off on low
@@ -259,6 +257,9 @@ const fishing = new Fishing(world, scene);
 fishing.onRipple = (x, z, size) => { waves.drop(x, z, 0.2 + 0.16 * size, 0.006 + 0.012 * size); waterCells.stir(x, z, 0.008 + 0.012 * size, onStream(x, z)); if (size > 1.1) waterCells.foam(x, z, 0.06 * size); };
 const roast = new Roast(scene);
 scene.add(grass.mesh);
+// the alpine look: a sparser ring of the same grass beyond the near field, out to about three times as far
+const farGrass = ALPINE && Q.grass.radius >= 30 ? new Grass(terrain, { radius: Q.grass.radius * 4, spacing: Q.grass.spacing * 1.75, inner: Q.grass.radius, shared: grass }, flora.uniforms) : null;
+if (farGrass) scene.add(farGrass.mesh);
 if (forbs) scene.add(forbs.mesh, shrubs.mesh);
 // hand-placed assets (data/placements.json, made with the world editor) and, on a local host, the editor itself (F2)
 const placements = new Placements(world, flora, scene, { models });
@@ -558,6 +559,7 @@ input.onPress = (code) => {
   if (code === 'KeyT' && !state.paused && !map.open && !invOpen) { if (props.carry) hud.toast('Put the stone down first.'); else { inventory.next(); applySelection(); } }
   if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
   if (code === 'KeyP' && !map.open) swapPlayer();
+  if (code === 'Backslash' && !map.open) cycleLook();
   if (code === 'Escape' && (input.mode !== 'kbm' || state.paused)) pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
@@ -786,7 +788,13 @@ function introEnd() {
   const doors = intro.doors();
   spawnAtCar();                                                      // you, exactly at the car's start spot, facing the trail
   showChar(avatar, true);
-  party.actors.forEach((a, k) => { const d = doors[k + 1]; party.pins.delete(a); a.place(d.tx, d.tz, a.b.yaw); showChar(a.char, true); });
+  party.actors.forEach((a, k) => {
+    const d = doors[k + 1];
+    party.pins.delete(a);
+    if (d) a.place(d.tx, d.tz, a.b.yaw);
+    else party.rejoin(a, hiker, k);
+    showChar(a.char, true);
+  });
   if (I.view === 'first' && rig.mode === 'third') { rig.toggle(); avatar.setFirstPerson(true); }
   state.intro = null;
   rig.eyeY = null;
@@ -850,7 +858,7 @@ function startFresh() {
   Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character, party: pick.party });
   storeJSON('rawah-settings', settings);
   const changed = pick.doy !== booted.doy || pick.trailhead !== booted.trailhead || pick.character !== booted.character;
-  if (!changed) { begin(true); return; }
+  if (!changed) { party.setCrew(settings.party); syncCrewChips(); begin(true); return; }
   // the date, trailhead and character are built at boot, so a new choice reloads and starts itself
   try { sessionStorage.setItem('rawah-autostart', '1'); } catch { /* private mode */ }
   $('loading').classList.remove('hidden');
@@ -902,21 +910,29 @@ $('set-depth').onchange = () => {
   location.reload();     // the depth buffer is chosen when the renderer is made
 };
 // who tryna come: a toggle chip for each friend you are not playing as; null = the usual two, empty = nobody
+const crewChips = new Map();
+function syncCrewChips() {
+  for (const [name, mark] of crewChips) mark(party.actors.some((a) => a.name === name));
+}
 {
   const root = $('set-party');
-  const all = () => (settings.party == null ? Object.keys(CHARACTERS).filter((n) => n !== playerName).slice(0, 2) : settings.party);
   for (const name of Object.keys(CHARACTERS).filter((n) => n !== playerName)) {
     const b = document.createElement('button');
-    b.className = 'togchip'; b.textContent = name[0].toUpperCase() + name.slice(1);
+    b.type = 'button';
+    b.className = 'togchip'; b.textContent = cap(name);
+    const mark = (on) => { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); };
     b.onclick = () => {
-      const cur = all();
-      settings.party = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
-      b.classList.toggle('on');
+      const cur = party.actors.map((a) => a.name);
+      const on = !cur.includes(name);
+      settings.party = on ? [...cur, name] : cur.filter((n) => n !== name);
+      party.setCrew(settings.party, state.started ? hiker : null);
+      mark(on);
       storeJSON('rawah-settings', settings);
     };
-    b.classList.toggle('on', all().includes(name));
+    crewChips.set(name, mark);
     root.appendChild(b);
   }
+  syncCrewChips();
 }
 $('set-quality').value = settings.quality || 'auto';
 $('set-quality').onchange = () => {
@@ -943,8 +959,10 @@ $('set-hour').onchange = () => { const v = parseFloat($('set-hour').value); if (
   sel.value = Object.keys(SEASONS).find((k) => SEASONS[k].doy === settings.doy) || 'autumn';
   sel.onchange = () => { settings.doy = SEASONS[sel.value].doy; storeJSON('rawah-settings', settings); location.reload(); };
 }
-loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
-loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });   // the mountain terrain pack (src/mountain.js)   // the soil pack: the close ground (src/soil.js)
+if (!ALPINE && QUALITY !== 'low') {
+  loadSoil().then(() => { if (!settings.soil) SOIL.uSoilOn.value = 0; });
+  loadMountain().then(() => { if (!settings.mountain) MTN.uMtnOn.value = 0; });
+}
 $('set-soil').checked = settings.soil;
 $('set-soil').onchange = () => { settings.soil = $('set-soil').checked; if (SOIL.uSoilA.value) SOIL.uSoilOn.value = settings.soil ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-intro').checked = settings.intro;
@@ -955,6 +973,21 @@ for (const [id, key] of [['set-crew-url', 'crewUrl'], ['set-crew-model', 'crewMo
   $(id).value = settings[key] || '';
   $(id).onchange = () => { settings[key] = $(id).value.trim(); storeJSON('rawah-settings', settings); };
 }
+// the look (src/lowpoly.js): photo (satellite and textures), alpine (the painted Twin Crater palette) or lowpoly (cut facets).
+// two uniforms, so it flips instantly. [\\] steps through them in play for side-by-sides
+const LOOKS = { photo: 'Photographic world', alpine: 'Alpine world', lowpoly: 'Low poly world' };
+if (!LOOKS[settings.look]) settings.look = settings.lowPoly ? 'lowpoly' : 'photo';
+const setLook = (look) => {
+  settings.look = look;
+  LOWPOLY.uLowPoly.value = look === 'photo' ? 0 : 1;
+  LOWPOLY.uAlpine.value = look === 'alpine' ? 1 : 0;
+  $('set-look').value = look;
+  storeJSON('rawah-settings', settings);
+  if ((look === 'alpine') !== ALPINE) location.reload();   // the alpine trees, stone and grass are built at load (alpine.js)
+};
+const cycleLook = () => { const k = Object.keys(LOOKS); setLook(k[(k.indexOf(settings.look) + 1) % k.length]); hud.toast(LOOKS[settings.look]); };
+setLook(settings.look);
+$('set-look').onchange = () => setLook($('set-look').value);
 $('set-relief').checked = settings.relief;
 $('set-relief').onchange = () => { settings.relief = $('set-relief').checked; atmosphere.uTSOn.value = settings.relief ? 1 : 0; storeJSON('rawah-settings', settings); };
 $('set-mirror').checked = settings.mirror;
@@ -1431,6 +1464,9 @@ function cullView() {
   horizon.update(camera.position, !state.travel);
   flora.setView(camera, horizon, sky.sunDir);
   trails.chunks?.cull(horizon);
+  if (trails.stones) {
+    for (const mesh of trails.stones.meshes) mesh.visible = mesh.geometry.boundingBox.distanceToPoint(camera.position) < 62;
+  }
   streams.chunks?.cull(horizon);
 }
 
@@ -1603,7 +1639,7 @@ function flyStep(dt, focus) {
     state.travel = null;
     camera.rotation.order = 'YXZ';
     rig.eyeY = null;
-    while (flora.update(hiker.pos, 8) > 0) { /* finish the trees around you */ }
+    flora.update(hiker.pos, Infinity);
     if (T.name) hud.toast(`${T.name} · ${ft(hiker.pos.y)} ft`);
     save();
   }
@@ -1625,7 +1661,8 @@ function freezingLevel(hour) {
 
 /** How much snow lies at an altitude right now: the weather's fresh cover plus the seasonal pack, smoothed over the line. */
 function onSnowAt(y) {
-  return atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, y);
+  const line = atmosphere.uSnowLine.value, pack = atmosphere.uPackLine.value;
+  return Math.max(smoothstep(pack - 60, pack + 60, y), atmosphere.uSnow.value * smoothstep(line - 60, line + 60, y));
 }
 
 function locate(p, cv) {
@@ -1726,14 +1763,14 @@ function raceGoal() {
 
 let togetherGoal = null;
 function toggleTogether(open = !togetherOpen) {
-  if (open && (!state.started || state.paused || map.open || state.travel || invOpen)) return;
+  if (open && (!state.started || state.paused || map.open || state.travel || invOpen || !party.actors.length)) return;
   togetherOpen = open;
   $('together').classList.toggle('hidden', !open);
   document.body.classList.toggle('together-open', open);
   if (open) {
     keys.clear();
     togetherGoal = raceGoal();
-    $('tog-who').textContent = `${cap(party.actors[0]?.name || '')} & ${cap(party.actors[1]?.name || '')}`;
+    $('tog-who').textContent = party.actors.map((a) => cap(a.name)).join(' & ');
     const race = $('tog-race');
     race.textContent = togetherGoal ? `Race to ${togetherGoal.name}` : 'Race (no summit or lake close enough)';
     race.disabled = !togetherGoal;
@@ -1821,7 +1858,7 @@ const eye = new THREE.Vector3(), flyFocus = new THREE.Vector3(), precipLight = n
 const ctl = { move: new THREE.Vector2(), sprint: false, jump: false, grab: false, crouch: false, punch: false, hook: false, stomp: false, lookX: 0, lookY: 0 };
 let last = performance.now(), saveTimer = 0, floraTimer = 0, t = 0;
 
-while (flora.update(hiker.pos, 8) > 0) { /* fill the first ring of trees */ }
+flora.update(hiker.pos, Infinity);
 setLoad(1, 'Ready');
 $('loading').classList.add('hidden');
 $('title').classList.remove('hidden');
@@ -2027,7 +2064,7 @@ function tick(dt, draw = true) {
         const f = e.fish;
         hud.discovery(f.name, `${f.cm} cm · ${f.kg} kg · fish ${f.n}${f.record ? ' · your biggest yet' : ''}`, 'Caught');
         party.event('fish');
-        boxels.wear(hiker.pos.x, hiker.pos.z, 0.3);   // the bank remembers where you stood
+        if (!ALPINE) boxels.wear(hiker.pos.x, hiker.pos.z, 0.3);
         save();
       }
     }
@@ -2081,7 +2118,6 @@ function tick(dt, draw = true) {
   // weather: eases toward the day's schedule; lightning, rain on you, warnings
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
   cloudSim.update(state.paused ? 0 : dt, state.paused ? 0 : gameMin * 60, weather, sky.sunDir.y);
-  clouds.slab = 1200 + 3000 * cloudSim.maxTall;
   for (const e of weather.events) if (e.type === 'bolt') {
     // most flashes are somewhere you are looking, a few behind you
     const fwd = Math.atan2(-Math.cos(hiker.yaw), -Math.sin(hiker.yaw));
@@ -2105,11 +2141,13 @@ function tick(dt, draw = true) {
   atmosphere.uWet.value = weather.wet;
   atmosphere.uTime.value = flora.uniforms.uTime.value;   // the clock the footprints spring back on
   // fresh snow from the weather on top of the season's snowpack
-  const packLine = calendar.snowLine, fresh = weather.snowCover > 0.02;
-  atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
-  atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
+  atmosphere.uSnow.value = weather.snowCover;
+  atmosphere.uSnowLine.value = weather.snowLine;
+  atmosphere.uPackLine.value = calendar.snowLine;
   atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
-  { const f = calendar.foliage; TONE.uFresh.value = f.fresh; TONE.uAutumn.value = f.autumn; TONE.uDrop.value = f.drop; TONE.uCold.value = f.cold; }
+  { const f = calendar.foliage; TONE.uFresh.value = f.fresh; TONE.uAutumn.value = f.autumn; TONE.uDrop.value = f.drop; TONE.uCold.value = f.cold;
+    atmosphere.uPlantSeason.value.set(f.fresh, f.autumn, f.cold, smoothstep(0.48, 0.04, sky.sunDir.y));
+  }
   // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
   const damp = boxels.sample(p.x, p.z).u;
   atmosphere.uValley.value = 0.00004 * (1 + 1.6 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
@@ -2141,14 +2179,18 @@ function tick(dt, draw = true) {
   grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
   const frost = clamp(-tC / 3.5, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0);
   grass.update(camera, hiker, frost, calendar.cure, avatar.heading, renderer);
+  farGrass?.follow(camera, hiker, frost, calendar.cure);
   if (forbs) { forbs.follow(camera, hiker, frost, calendar.cure); shrubs.follow(camera, hiker, frost, calendar.cure); }
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
   if (live) {
-    if (!bxLast) bxLast = { x: p.x, z: p.z };
-    bxAcc += Math.hypot(p.x - bxLast.x, p.z - bxLast.z);
-    bxLast = { x: p.x, z: p.z };
-    if (bxAcc > 1.4 && hiker.grounded) { bxAcc = 0; boxels.wear(p.x, p.z, 0.3); }
+    // Alpine footfalls already have sub-metre marks in the grass press map.
+    // The coarse field is reserved for stronger wear like tires and fire.
+    if (!ALPINE) {
+      if (bxLast) bxAcc += Math.hypot(p.x - bxLast.x, p.z - bxLast.z);
+      bxLast = { x: p.x, z: p.z };
+      if (bxAcc > 1.4 && hiker.grounded) { bxAcc = 0; boxels.wear(p.x, p.z, 0.3); }
+    }
     if (weather.precip > 0.25 && t - bxRain > 2.5) { bxRain = t; boxels.wet(p.x + (Math.random() - 0.5) * 170, p.z + (Math.random() - 0.5) * 170, 0.5, 5); }
   }
   // rain pocks the open water around you; the field sleeps itself when nothing is left to see
@@ -2168,7 +2210,6 @@ function tick(dt, draw = true) {
   boxels.update(dt, live ? (0.35 + 0.65 * (1 - weather.cloud)) * (state.resting ? 4 : 1) : 0);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
-  lakes.uniforms.uRain.value = weather.precip;
   WATER.uWT.value = t; WATER.uWind.value = clamp(0.1 + Math.max(0, weather.wind) * 0.95, 0, 1); WATER.uRainAmt.value = weather.precip * (1 - weather.snowK);
   lakes.update(t);
   streams.update(t);
@@ -2243,9 +2284,7 @@ function tick(dt, draw = true) {
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
     perfhud?.mark('hud');
-    clouds.render(renderer, camera);
-    perfhud?.mark('clouds');
-    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(forbs ? [forbs.mesh, shrubs.mesh] : []), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
+    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(farGrass ? [farGrass.mesh] : []), ...(forbs ? [forbs.mesh, shrubs.mesh] : []), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
     perfhud?.mark('mirror');
     renderer.render(scene, camera);
     perfhud?.mark('render');
@@ -2300,11 +2339,11 @@ if (DEV) {
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, recorder, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
-    teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
+    teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); flora.update(hiker.pos, Infinity); },
     goto(name) { const pl = world.places.find((q) => q.name === name); if (pl) this.teleport(pl.x, pl.z); return pl; },
     setHour(h) { state.hour = h; weather.settle(state.day, h); cloudSim.settle(weather, h); },
     weather(name) { weather.override = name || null; weather.settle(state.day, state.hour); cloudSim.settle(weather, state.hour); return weather; },
-    cloudSim, clouds,
+    cloudSim,
     wx: weather,
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
     press(code) { pressed.add(code); },

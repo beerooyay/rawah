@@ -1,9 +1,11 @@
+import { VEGETATION_GLSL } from './vegetation-grade.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { NOISE_GLSL } from './detail.js';
 import { WIND_GLSL } from './wind.js';
 import { withAtmosphere } from './atmosphere.js';
 import { BOXEL } from './terrain.js';
+import { ALPINE } from './alpine.js';
 
 // Procedural trees. Everything is generated at startup: an atlas of painted
 // foliage sprays and bark strips, card-based tree meshes built from them
@@ -170,7 +172,56 @@ function paintAtlas(season = 'autumn') {
     // the cut-out aspen composites are always green (the shader turns them gold or lime); a leafless season paints twigs over them
     if (!ASPEN[season]) { g.clearRect(0, 5 * CELL, ATLAS, CELL); for (let c = 0; c < 4; c++) bareTwigs('aspenLeaf', [c * CELL, 5 * CELL]); }
   } else if (ASPEN[season]) leaves('aspenLeaf', ASPEN[season]); else bareTwigs('aspenLeaf');
-  if (WILLOW[season]) leaves('willowLeaf', WILLOW[season]); else bareTwigs('willowLeaf');
+  if (ALPINE && WILLOW[season]) {
+    // Narrow leaves on individual arching shoots, with gaps between the sprays.
+    // Bake the palette into the atlas so the same foliage reads in impostors.
+    const [ox, oy] = cell('willowLeaf');
+    const rand = rng(619);
+    g.save(); g.translate(ox, oy);
+    g.beginPath(); g.rect(0, 0, CELL, CELL); g.clip();
+    const hue = season === 'autumn' ? 62 : season === 'spring' ? 88 : 100;
+    for (let j = 0; j < 13; j++) {
+      const fan = (j - 6) / 6;
+      const angle = -Math.PI / 2 + fan * 0.85 + (rand() - 0.5) * 0.16;
+      const len = (280 + rand() * 155) * (1 - Math.abs(fan) * 0.23);
+      const x0 = 256 + (rand() - 0.5) * 29;
+      const bend = fan * (22 + rand() * 42);
+      const at = (t) => [x0 + Math.cos(angle) * len * t + bend * t * t,
+        508 + Math.sin(angle) * len * t + Math.abs(fan) * 92 * t * t];
+      const [tx, ty] = at(1), [cx, cy] = at(0.5);
+      g.strokeStyle = hsl(53 + rand() * 15, 28, 25 + rand() * 12, 1);
+      g.lineWidth = 2.6;
+      g.beginPath(); g.moveTo(x0, 508);
+      g.quadraticCurveTo(cx * 2 - (x0 + tx) * 0.5, cy * 2 - (508 + ty) * 0.5, tx, ty);
+      g.stroke();
+      const count = 17 + Math.floor(rand() * 9);
+      for (let k = 0; k < count; k++) {
+        const t = 0.24 + (k + rand() * 0.65) / count * 0.75;
+        const [x, y] = at(t);
+        const r = (20 + rand() * 36) * (1.19 - 0.53 * t);
+        const side = k % 2 ? 1 : -1, width = r * (0.17 + rand() * 0.15);
+        const h = hue + rand() * 25 - 10, l = 32 + rand() * 17 + 10 * t;
+        g.save(); g.translate(x, y);
+        g.rotate(angle + fan * t * 0.28 + side * (0.39 + rand() * 0.86));
+        const color = g.createLinearGradient(0, -width, r * 0.75, width);
+        color.addColorStop(0, hsl(h + 8, 48, l - 12, 1));
+        color.addColorStop(0.46, hsl(h + 1, 52, l - 7, 1));
+        color.addColorStop(0.52, hsl(h - 3, 62, l + 12, 1));
+        color.addColorStop(1, hsl(h - 5, 46, l + 12, 1));
+        g.fillStyle = color;
+        g.beginPath(); g.moveTo(0, 0);
+        g.quadraticCurveTo(r * 0.38, width, r, -width * 0.32);
+        g.quadraticCurveTo(r * 0.44, -width * 0.82, 0, 0); g.fill();
+        if (r > 22) {
+          g.strokeStyle = hsl(h - 2, 55, l + 24, 0.82); g.lineWidth = 1.35;
+          g.beginPath(); g.moveTo(1, 0);
+          g.quadraticCurveTo(r * 0.46, width * 0.16, r * 0.84, -width * 0.18); g.stroke();
+        }
+        g.restore();
+      }
+    }
+    g.restore();
+  } else if (WILLOW[season]) leaves('willowLeaf', WILLOW[season]); else bareTwigs('willowLeaf');
 
   // fire-killed twigs: bare grey forks
   {
@@ -306,6 +357,25 @@ class Builder {
     }
   }
 
+  /** Two crossed, tapered strips give a spray a woody limb back to its trunk. */
+  limb(base, tip, radius, bark, shade = 0.86) {
+    const [u, v, w, h] = barkUV(bark);
+    const direction = tip.clone().sub(base).normalize();
+    const lateral = V(-direction.z, 0, direction.x).normalize();
+    const upright = direction.clone().cross(lateral).normalize();
+    for (const axis of [lateral, upright]) {
+      const i = this.pos.length / 3;
+      const normal = axis.clone().cross(direction).normalize();
+      for (const [point, t] of [[base, 0], [tip, 1]]) {
+        for (const side of [-1, 1]) {
+          const q = point.clone().addScaledVector(axis, side * radius * (1 - t * 0.88));
+          this.vert(q, normal, u + w * (0.48 + side * 0.17), v + h * (0.1 + t * 0.72), shade);
+        }
+      }
+      this.idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
+    }
+  }
+
   trunk(h, r0, r1, bark, seg = 7, lean = null) {
     const [u0, v0, du, dv] = barkUV(bark);
     const rows = 4, base = this.pos.length / 3;
@@ -351,6 +421,10 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
   // shaded-out lower branches: bare dead stubs, so the crown never just starts on a clean trunk
   for (let y = 1.2; y < clear - 0.2 && stubs; y += 0.7 + R() * 0.8) {
     const a = R() * Math.PI * 2;
+    if (ALPINE) {
+      const l = 0.34 + 0.58 * y / clear;
+      b.limb(V(0, y, 0), V(Math.cos(a) * l, y + 0.19, Math.sin(a) * l), 0.044, bark);
+    }
     b.card(V(0, y, 0), V(Math.cos(a), -0.15 + R() * 0.3, Math.sin(a)), 0.5 + R() * 0.7, 0.4, (R() - 0.5) * 2, 0.1, 'deadTwig', centre, 0.9);
   }
   for (let y = clear; y < height - 0.4; y += whorl * (0.85 + R() * 0.3)) {
@@ -364,7 +438,11 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
       b.card(V(0, y, 0), dir, L * 1.08, L * 0.9, (R() - 0.5) * 0.9, droop * (1 - t * 0.6), slot, V(0, y + 0.3, 0), 0.85 + t * 0.2);
       tips.push({ t, p: V(dir.x * L * 0.8, y + dir.y * L * 0.8 - droop * (1 - t * 0.6) * L * 0.7, dir.z * L * 0.8), a });
       // a second, steeper spray fills the silhouette seen from the side
-      if (density > 1) b.card(V(0, y + 0.15, 0), V(dir.x, dir.y - 0.35, dir.z), L * 0.8, L * 0.6, Math.PI / 2 + (R() - 0.5) * 0.6, droop * 0.5, slot, V(0, y, 0), 0.8 + t * 0.2);
+      if (ALPINE && t < 0.65 && k % 2 === 0) {
+        const end = V(dir.x * L * 0.72, y + (dir.y - droop * 0.45) * L * 0.72, dir.z * L * 0.72);
+        b.limb(V(0, y - 0.025, 0), end, Math.max(0.019, L * 0.037), bark);
+      }
+      if (density > 1 && (!ALPINE || k % 2 === 1)) b.card(V(0, y + 0.15, 0), V(dir.x, dir.y - 0.35, dir.z), L * 0.8, L * 0.6, Math.PI / 2 + (R() - 0.5) * 0.6, droop * 0.5, slot, V(0, y, 0), 0.8 + t * 0.2);
     }
   }
   // cones: Engelmann spruce hangs them from the upper crown, subalpine fir holds them upright on the top branches
@@ -393,9 +471,13 @@ function conifer(seed, { height, radius, clear, whorl, branches, droop, slot, ba
 function lodgepole(seed, { H, crown, spread, trunk = 0.26, cones = 12 }) {
   const R = rng(seed), b = new Builder(), tips = [];
   b.trunk(H, trunk, 0.04, 'pine');
-  const centre = V(0, H * (0.5 + crown * 0.4), 0), y0 = H * crown;
+  const centre = V(0, H * (0.5 + crown * 0.4), 0), y0 = H * (ALPINE ? Math.min(crown * 0.85, 0.38) : crown);
   for (let y = 1.0; y < y0 - 0.3; y += 0.8 + R() * 0.9) {
     const a = R() * 6.28;
+    if (ALPINE) {
+      const l = 0.34 + 0.58 * y / y0;
+      b.limb(V(0, y, 0), V(Math.cos(a) * l, y + 0.19, Math.sin(a) * l), 0.044, 'pine');
+    }
     b.card(V(0, y, 0), V(Math.cos(a), -0.1 + R() * 0.25, Math.sin(a)), 0.5 + R() * 0.6, 0.35, (R() - 0.5) * 2, 0.1, 'deadTwig', centre, 0.9);
   }
   for (let y = y0; y < H - 0.5; y += 0.5 * (0.8 + R() * 0.4)) {
@@ -407,6 +489,9 @@ function lodgepole(seed, { H, crown, spread, trunk = 0.26, cones = 12 }) {
       const a = off + k * (6.283 / n) + (R() - 0.5) * 0.7;
       const dir = V(Math.cos(a), 0.1 + R() * 0.3, Math.sin(a));
       b.card(V(0, y, 0), dir, L * 1.12, L * 1.1, (R() - 0.5) * 1.4, 0.12, 'pine', centre, 0.9 + t * 0.15);
+      if (ALPINE && t < 0.64 && k % 2 === 0) {
+        b.limb(V(0, y, 0), V(dir.x * L * 0.77, y + (dir.y - 0.095) * L * 0.77, dir.z * L * 0.77), 0.033 + L * 0.017, 'pine');
+      }
       tips.push({ t, y, dir, L });
     }
   }
@@ -434,6 +519,11 @@ function aspen(seed, { H, crownLow, lowLeaves = 0 }) {
     const a = R() * 6.28, y = low ? H * (0.22 + R() * (crownLow - 0.2)) : H * (crownLow + R() * (0.97 - crownLow));
     const rr = Math.sqrt(R()) * (low ? 1.1 : 2.2), shrink = low ? 1 : 1 - Math.abs(y / H - (crownLow + 0.28)) * 1.4;
     const c = V(lean.x + Math.cos(a) * rr * shrink, y, lean.z + Math.sin(a) * rr * shrink);
+    if (ALPINE && k % 4 === 0 && rr > 0.3) {
+      const originY = Math.min(H * 0.82, y - 0.8);
+      const t = (originY / (H * 0.85)) ** 2;
+      b.limb(V(lean.x * t, originY, lean.z * t), c, 0.052, 'aspen');
+    }
     const sz = low ? 1.45 : 1.8;
     b.flat(c, sz, sz, R() * 3.14, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
     b.flat(c, sz, sz, R() * 3.14 + 1.57, 'aspenLeaf', centre, 0.85 + (y / H) * 0.25);
@@ -474,6 +564,15 @@ export function buildSpecies() {
   const willow = (s) => {
     const R = rng(s), b = new Builder();
     const centre = V(0, 0.9, 0);
+    if (ALPINE) {
+      for (let k = 0; k < 13; k++) {
+        const a = k * 2.39996 + R() * 0.35, r = 0.14 + Math.sqrt(R()) * 1.04;
+        const h = 1.25 + R() * 0.92 + (1 - r) * 0.47;
+        const c = V(Math.cos(a) * r, h * 0.5 - 0.03 + R() * 0.12, Math.sin(a) * r);
+        b.flat(c, 0.66 + R() * 0.66, h, a + 0.45 + R() * 0.8, 'willowLeaf', centre, 0.8 + R() * 0.26);
+      }
+      return b.geometry();
+    }
     for (let k = 0; k < 30; k++) {
       const a = R() * 6.28, rr = R() * 1.15;
       const c = V(Math.cos(a) * rr, 0.6 + R() * 1.0, Math.sin(a) * rr);
@@ -560,16 +659,21 @@ export const BARK_TEX = { uBarkA: { value: null }, uBarkN: { value: null }, uBar
 
 export async function loadBark(base = './assets/bark/') {
   try {
+    const images = await Promise.all(BARK_FILES.flatMap((name) => ['albedo.jpg', 'nh.webp'].map(async (file) => {
+      const url = `${base}${name}_${file}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(url);
+      return createImageBitmap(await response.blob());
+    })));
     const S = 1024, A = new Uint8Array(S * S * 4 * 4), N = new Uint8Array(S * S * 4 * 4);
     const cv = document.createElement('canvas'); cv.width = cv.height = S;
     const g = cv.getContext('2d', { willReadFrequently: true });
-    const load = (url) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error(url)); im.src = url; });
-    for (let i = 0; i < 4; i++) {
-      for (const [file, arr] of [['albedo.jpg', A], ['nh.webp', N]]) {
-        const im = await load(`${base}${BARK_FILES[i]}_${file}`);
-        g.clearRect(0, 0, S, S); g.drawImage(im, 0, 0, S, S);
-        arr.set(g.getImageData(0, 0, S, S).data, i * S * S * 4);
-      }
+    for (let i = 0; i < images.length; i++) {
+      const im = images[i];
+      g.clearRect(0, 0, S, S);
+      g.drawImage(im, 0, 0, S, S);
+      im.close();
+      (i % 2 === 0 ? A : N).set(g.getImageData(0, 0, S, S).data, Math.floor(i / 2) * S * S * 4);
     }
     const make = (data, srgb) => {
       const t = new THREE.DataArrayTexture(data, S, S, 4);
@@ -616,7 +720,8 @@ function barked(shader, uniforms) {
       }`)
     .replace('#include <map_fragment>', `#include <map_fragment>
       float isBark = 0.0, bLayer = 0.0, bWet = 0.0, bFade = 0.0, bHeight = 0.5;
-      vec3 bW = vec3(0.0); vec2 bUx = vec2(0.0), bUz = vec2(0.0);
+      vec3 bW = vec3(0.0);
+      vec2 bUx = vec2(0.0), bUz = vec2(0.0), bNx = vec2(0.0), bNz = vec2(0.0);
       if (uBarkOn > 0.5 && vMapUv.y < 0.25 && vColor.r - vColor.b < 0.05) {
         float dist = length(vFogView);
         bFade = 1.0 - smoothstep(60.0, 150.0, dist);
@@ -625,12 +730,22 @@ function barked(shader, uniforms) {
           bLayer = floor(vMapUv.x * 4.0);
           vec3 w = pow(abs(normalize(vBN)), vec3(4.0));
           bW = vec3(w.x, 0.0, w.z); bW /= max(bW.x + bW.z, 1e-3);
-          bUx = vBL.zy / 0.9; bUz = vBL.xy / 0.9;
+          float seed = fract(dot(vBW, vec2(0.1747, 0.2339)));
+          float y = vBL.y, phase = seed * 6.2832;
+          // Continuous warp breaks the repeating horizontal bands without a second albedo lookup.
+          float lift = y * (0.69 + seed * 0.24) + 0.23 * sin(y * 1.8 + phase) + seed * 5.0;
+          float lean = 0.15 * sin(y * 0.81 + phase) + 0.08 * sin(y * 3.1 - phase);
+          bUx = vec2(vBL.z * 1.65 + lean + seed, lift);
+          bUz = vec2(vBL.x * 1.65 - lean - seed, lift + 0.41);
           vec3 ax = texture(uBarkA, vec3(bUx, bLayer)).rgb, az = texture(uBarkA, vec3(bUz, bLayer)).rgb;
-          float hx = texture(uBarkN, vec3(bUx, bLayer)).b, hz = texture(uBarkN, vec3(bUz, bLayer)).b;
-          bHeight = hx * bW.x + hz * bW.z;
+          vec3 detailX = texture(uBarkN, vec3(bUx, bLayer)).rgb;
+          vec3 detailZ = texture(uBarkN, vec3(bUz, bLayer)).rgb;
+          bNx = detailX.rg * 2.0 - 1.0;
+          bNz = detailZ.rg * 2.0 - 1.0;
+          bHeight = detailX.b * bW.x + detailZ.b * bW.z;
           vec3 alb = ax * bW.x + az * bW.z;
-          alb *= 0.55 + 0.6 * bHeight;                                   // crevices are darker
+          float patches = sin(y * 0.64 + phase + vBL.x * 6.0) * sin(y * 1.43 - phase + vBL.z * 8.0);
+          alb *= (0.73 + 0.49 * bHeight) * (0.93 + 0.18 * patches);
           // the boxel field: moisture at the foot of the tree wets the bark, crevices first
           float moist = texture2D(uBoxel, vBW / uExt + 0.5).r;
           bWet = clamp(smoothstep(0.02, 0.35, moist) + uWet * 0.45, 0.0, 1.0) * (0.55 + 0.45 * (1.0 - bHeight));
@@ -640,9 +755,8 @@ function barked(shader, uniforms) {
       }`)
     .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       if (isBark > 0.5) {
-        vec2 nxy = texture(uBarkN, vec3(bUx, bLayer)).xy * 2.0 - 1.0, nzy = texture(uBarkN, vec3(bUz, bLayer)).xy * 2.0 - 1.0;
         float k = 1.1 * bFade * (1.0 - 0.3 * bWet);
-        vec3 mx = vec3(nxy * k, sqrt(max(0.05, 1.0 - dot(nxy * k, nxy * k)))), mz = vec3(nzy * k, sqrt(max(0.05, 1.0 - dot(nzy * k, nzy * k))));
+        vec3 mx = vec3(bNx * k, sqrt(max(0.05, 1.0 - dot(bNx * k, bNx * k)))), mz = vec3(bNz * k, sqrt(max(0.05, 1.0 - dot(bNz * k, bNz * k))));
         vec3 Nx = barkPerturb(-vFogView, normal, mx, bUx, faceDirection), Nz = barkPerturb(-vFogView, normal, mz, bUz, faceDirection);
         normal = normalize(Nx * bW.x + Nz * bW.z);
       }`)
@@ -676,12 +790,14 @@ function toned(shader, uniforms, impostor) {
         vTW = vec2(0.0);
       #endif
       ${impostor ? `// atlas cell order: spruce 0-3, fir 4-7, lodgepole 8-12 (conifers), aspen 13-15, the rest are snags and shrubs
-      vKind = aCell.y > 0.6 ? 0.0 : (aCell.y > 0.4 ? (aCell.x > 0.6 ? 2.0 : 0.0) : 1.0);` : ''}`);
+      float ix = (3.0 - aCell.y * 4.0) * 8.0 + aCell.x * 8.0;
+      vKind = ix < 12.5 ? 0.0 : (ix < 15.5 ? 2.0 : (ix < 18.5 ? 1.0 : (ix < 20.5 ? 0.0 : 4.0)));` : ''}`);
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
       uniform float uToneOn, uFresh, uAutumn, uDrop, uCold, uLeafOn, uFoliGain;
       ${impostor ? 'uniform sampler2D uBoxel;\n      uniform float uExt;\n      varying float vKind;' : ''}
       varying vec2 vTW;
+      ${ALPINE ? VEGETATION_GLSL : ''}
       float toneHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float toneNoise(vec2 p) {
         vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -713,15 +829,29 @@ function toned(shader, uniforms, impostor) {
       }`)
     .replace('#include <map_fragment>', `#include <map_fragment>
       if (uToneOn > 0.5) {
-        ${impostor ? 'float tk = vKind > 1.5 ? 2.0 : (vKind > 0.5 ? 3.0 : 0.0);' : `float frow = floor((1.0 - vMapUv.y) * 8.0);
+        ${impostor ? 'float tk = vKind == 1.0 ? 3.0 : vKind;' : `float frow = floor((1.0 - vMapUv.y) * 8.0);
         float tk = frow < 2.5 ? 0.0 : (frow < 3.5 ? 1.0 : (frow < 4.5 ? (vMapUv.x < 0.125 ? 1.0 : 3.0) : (frow < 5.5 ? 2.0 : 3.0)));
         if (vMapUv.y < 0.25) tk = 3.0;`}
+        ${!impostor && ALPINE ? 'if (frow == 4.0 && vMapUv.x >= 0.25 && vMapUv.x < 0.5) tk = 4.0;' : ''}
+        float moist = 0.0;
+        if (tk < 2.5 ${ALPINE ? '|| tk > 3.5' : ''}) moist = texture2D(uBoxel, vTW / uExt + 0.5).r;
         if (tk < 2.5) {
-          float moist = texture2D(uBoxel, vTW / uExt + 0.5).r;
           float tw = clamp(smoothstep(0.02, 0.4, moist) + uWet * 0.5, 0.0, 1.0);
           diffuseColor.rgb = foliageTone(diffuseColor.rgb, tk, vMapUv, moist, tw);
           if (tk > 1.5 && uDrop > 0.0 && toneHash(floor(vMapUv * 170.0) + vTW) < uDrop * (0.55 + 0.9 * toneNoise(vTW / 90.0 + 3.7))) discard;
         }
+        ${ALPINE ? `
+        // the alpine look: needles painted like the grass, deep shade inside the crown to a light yellow-green on the lit sprays,
+        // with each tree its own green (blue-green spruce, dark fir, olive lodgepole all fall inside this spread)
+        if (tk < 0.5) {
+          float al = clamp(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) * ${impostor ? '2.3' : '4.5'}, 0.0, 1.0);
+          float th = fract(sin(dot(vTW, vec2(41.3, 17.9))) * 43758.5453);
+          vec3 lo = mix(vec3(0.008, 0.05, 0.035), vec3(0.018, 0.06, 0.02), th), hi = mix(vec3(0.09, 0.27, 0.17), vec3(0.18, 0.34, 0.07), th);
+          diffuseColor.rgb = mix(lo, hi, pow(al, 1.1)) * 1.25;   // brighter than the grass: the crowns stand in their own shade
+        }
+        if (tk < 0.5 || tk == 2.0 || tk > 3.5) {
+          diffuseColor.rgb = plantGrade(diffuseColor.rgb, moist, tk < 0.5 ? 0.36 : 0.65);
+        }` : ''}
       }`);
 }
 
@@ -806,7 +936,11 @@ export function impostorGeometry(max) {
     g.translate(0, 0.5, 0);
     g.rotateY(rot);
     const n = g.attributes.normal;
-    for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);
+    const p = g.attributes.position, x = Math.cos(rot), z = -Math.sin(rot);
+    for (let i = 0; i < n.count; i++) {
+      const side = ALPINE ? (p.getX(i) * x + p.getZ(i) * z) * 0.82 : 0;
+      n.setXYZ(i, side * x, Math.sqrt(1 - side * side), side * z);
+    }
     q.push(g);
   }
   const geo = mergeGeometries(q);
@@ -820,7 +954,7 @@ export function impostorMaterial(texture, uniforms) {
     windy(shader, uniforms);
     tinted(shader);
     toned(shader, uniforms, true);
-    withAtmosphere(shader, { translucency: 0.35, weather: 0.6, occlusion: 0.7 });
+    withAtmosphere(shader, { translucency: 0.12, weather: 0.6, occlusion: 0.7 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec2 aCell;')
       .replace('#include <uv_vertex>', `#include <uv_vertex>
@@ -828,11 +962,11 @@ export function impostorMaterial(texture, uniforms) {
       // impostors aren't in the leaf atlas: keep the quake off them
       .replace('float aspen = step(0.26, uv.y) * (1.0 - step(0.375, uv.y));', 'float aspen = 0.0;');
     // a flat card has no idea which way its crown faces: light it like a rounded crown,
-    // half toward you and half toward the sun, so low sun doesn't turn far forests black
+    // facing the viewer with an upward tilt; never rotate it toward the sun.
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `
       float faceDirection = 1.0;
       vec3 viewUp = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-      vec3 normal = normalize(normalize(-vViewPosition) * 0.55 + uSunView * 0.45 + viewUp * 0.35);
+      vec3 normal = normalize(normalize(vViewPosition) * 0.8 + viewUp * 0.6);
       vec3 nonPerturbedNormal = normal;`);
   };
   mat.customProgramCacheKey = () => 'rawah-impostor-tone';

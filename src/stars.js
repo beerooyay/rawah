@@ -115,9 +115,9 @@ void main() {
   // cloud in front of it
   float cloud = 0.0;
   if (h > 0.0 && uCloudCover > 0.005) {
-    float dh = max(uCloudAlt - cameraPosition.y, 350.0);
-    float tt = dh / max(h, 0.015);
-    cloud = cloudDensity(cameraPosition.xz + d.xz * tt, 2) * smoothstep(0.0, 0.07, h);
+    float dh = uCloudAlt - cameraPosition.y;
+    float tt = dh / max(h, 0.02);
+    cloud = cloudDensity(cameraPosition.xz + d.xz * tt) * smoothstep(0.01, 0.12, h);
   }
   vI = I * uNight * (1.0 - cloud);
   vCol = aCol;

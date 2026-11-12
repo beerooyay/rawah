@@ -151,8 +151,8 @@ export class World {
     for (const st of this.streams) for (const [x, z] of st.pts) stamp(x, z, st.width / 2 + 1, st.width / 2 + 5);
     for (const lake of this.lakes) {
       for (const [r, c0, c1] of lake.runs) {
-        for (let c = c0; c <= c1; c += 2) stamp((c - N / 2) * cell, (r - N / 2) * cell, 2, 9);
-        stamp((c1 - N / 2) * cell, (r - N / 2) * cell, 2, 9);
+        for (let c = c0; c <= c1; c += 2) stamp((c - N / 2) * cell, (r - N / 2) * cell, 1, 4.5);
+        stamp((c1 - N / 2) * cell, (r - N / 2) * cell, 1, 4.5);
       }
     }
   }

@@ -1,3 +1,4 @@
+import { ALPINE } from './alpine.js';
 import * as THREE from 'three';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { atmosphere, CLOUD_GLSL, cloudDensityAt } from './atmosphere.js';
@@ -55,15 +56,8 @@ uniform vec4 uBoltDir[3];   // direction (xyz) and strength (w) of the bolts lig
 uniform vec3 uBoltCol[3];
 uniform samplerCube uMW;
 uniform mat3 uGal;
-// the cirrus and the fallback sheet pick their noise mip from distance (see clouds.js for why)
-float cloudLod = 0.0;
-#undef texture2D
-#define texture2D(s, uv) textureLod(s, uv, cloudLod)
 ${CLOUD_GLSL}
 float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
-uniform sampler2D uCloudRT;   // the cumulus, drawn by clouds.js at a fraction of the resolution
-uniform mat4 uCloudVP;        // the view it was drawn from, rotation only
-uniform float uCloudOn;
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -71,20 +65,20 @@ void main() {
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
   col += uGlow * (pow(sd, 36.0) * (0.04 + 0.08 * uSunVis) + pow(sd, 260.0) * 0.8 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
-  // clouds: rendered by clouds.js (nubis 3d volume march at half resolution)
   float cloud = 0.0;
-  if (h > 0.0 && uCloudOn > 0.5) {
-    vec4 pc = uCloudVP * vec4(d, 1.0);
-    if (pc.w > 0.0) {
-      vec2 uv = pc.xy / pc.w * 0.5 + 0.5;
-      if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
-        vec4 c = textureLod(uCloudRT, uv, 0.0);
-        col = col * c.a + c.rgb;
-        cloud = 1.0 - c.a;
-      }
-    }
+  if (h > 0.0) {
+    vec2 hit = cameraPosition.xz + d.xz * (uCloudAlt - cameraPosition.y) / max(0.02, h);
+    float c = cloudDensity(hit);
+    vec2 light = mix(uMoon.xz, uSun.xz, smoothstep(-0.045, 0.03, uSun.y));
+    float edge = cloudDensity(hit + light * 50.0);
+    vec3 paint = mix(uCloudDark, uCloudLit, clamp(0.76 + (edge - c) * 0.55, 0.0, 1.0));
+    cloud = c * smoothstep(0.01, 0.12, h);
+    col = mix(col, paint, cloud);
   }
-  for (int q = 0; q < 3; q++) { float bw = uBoltDir[q].w; if (bw > 0.0) col += uBoltCol[q] * bw * pow(max(dot(d, uBoltDir[q].xyz), 0.0), 14.0) * 0.1 * (1.0 - cloud); }
+  for (int q = 0; q < 3; q++) {
+    float bw = uBoltDir[q].w;
+    if (bw > 0.0) col += uBoltCol[q] * bw * pow(max(dot(d, uBoltDir[q].xyz), 0.0), 14.0) * mix(0.1, 0.55, cloud);
+  }
   col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 4.5 * (1.0 - cloud);
   if (uNight > 0.0) {
     // the Milky Way, baked in galactic coordinates and turned to the sky overhead (dimmer toward the horizon, where the air is thick)
@@ -174,6 +168,12 @@ export class Sky {
     u.uZenith.value.copy(this.#palette(s, 0));
     u.uHorizon.value.copy(this.#palette(s, 1));
     u.uGlow.value.copy(this.#palette(s, 2));
+    // the alpine look: by day the sky is the Twin Crater scene's clear saturated blue; dawn, dusk and night keep the game's own colours
+    const alpDay = ALPINE ? smoothstep(0.02, 0.38, s) : 0;
+    if (ALPINE) {
+      u.uZenith.value.lerp(this._b.setRGB(0.035, 0.24, 0.58), alpDay * 0.8);
+      u.uHorizon.value.lerp(this._b.setRGB(0.34, 0.6, 0.8), alpDay * 0.8);
+    }
     // weather: grey the sky under a thick deck; the light through it goes flat and cool
     const A = atmosphere;
     A.uCloudCover.value = wx.cloud;
@@ -192,6 +192,11 @@ export class Sky {
     else u.uCloudLit.value.copy(this.#palette(s, 2)).lerp(this._b.setRGB(1, 0.97, 0.93), smoothstep(0.04, 0.4, s)).multiplyScalar(1.3 * smoothstep(-0.045, 0.03, s) * (1 - wx.thick * 0.35) * (1 - overcast * 0.35));
     u.uCloudDark.value.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.4);
     grey(u.uCloudDark.value, 0.6).multiplyScalar(lerp(0.4, 0.62, overcast) * (1 - wx.thick * 0.45) + nightL * 0.4);
+    const dayPaint = smoothstep(0.02, 0.38, s);
+    {   // painted clouds: clean white tops over a pale blue-grey underside, not a dark physical base
+      u.uCloudLit.value.multiplyScalar(1 + 0.2 * dayPaint);
+      u.uCloudDark.value.lerp(this._b.setRGB(0.48, 0.56, 0.63), dayPaint * 0.75 * (1 - wx.thick * 0.6));
+    }
     this.sunBlock += ((s > 0 ? cloudDensityAt(focus.x + (this.sunDir.x / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y), focus.z + (this.sunDir.z / Math.max(this.sunDir.y, 0.15)) * (A.uCloudAlt.value - focus.y)) : 0) - this.sunBlock) * 0.1;
     u.uNight.value = smoothstep(0.02, -0.16, s);
     u.uTime.value = t;
@@ -224,6 +229,11 @@ export class Sky {
     this.hemi.color.lerp(this._a.setRGB(0.42, 0.52, 0.95), u.uNight.value * 0.85);
     this.hemi.groundColor.lerp(this._a.setRGB(0.1, 0.12, 0.2), u.uNight.value * 0.8);
     this.hemi.intensity = lerp(0.42, 1.25, day) * (1 + overcast * 0.3) * (1 - wx.precip * 0.12) * (1 - 0.22 * u.uNight.value) + wx.flash * 4;   // flat light comes from everywhere, so the sky does more of the work
+    if (ALPINE) {
+      // a fuller, softer fill, as the scene's flat analytic light has: shade is never murky, least of all while the sun is still behind a ridge
+      this.hemi.intensity *= 1.4 + 0.5 * this.terrainBlock * day;
+      this.hemi.groundColor.lerp(this._a.setRGB(0.4, 0.5, 0.3), 0.5 * day);
+    }
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
     // haze, valley fog, and the grey wall of a squall
     this.fog.density = 0.00008 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;

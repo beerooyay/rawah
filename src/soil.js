@@ -53,7 +53,7 @@ export const SOIL_NORMAL = /* glsl */ `
         vec2 sq2x = dFdx(sq2), sq2y = dFdy(sq2);
         float soilK = 0.0, sId0 = 0.0, sId1 = 1.0, sMix = 0.0, sWet = 0.0, sTrail = 0.0;
         if (uSoilOn > 0.5 && camD < uSoilRange) {
-          soilK = (1.0 - smoothstep(uSoilRange * 0.4, uSoilRange, camD)) * (1.0 - uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 40.0, vWPos.y));
+          soilK = (1.0 - smoothstep(uSoilRange * 0.4, uSoilRange, camD)) * (1.0 - snowAt(vWPos.y));
           vec4 sc = texture2D(uCover, p / uExtent + 0.5);
           float steepS = 1.0 - smoothstep(0.55, 0.9, wn.y);
           float wR = clamp(sc.a * 1.5 + steepS * 0.9 + smoothstep(3330.0, 3480.0, vWPos.y), 0.0, 1.0);

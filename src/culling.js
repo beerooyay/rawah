@@ -85,7 +85,10 @@ export class HorizonMap {
       if (this.active) { this.active = false; this.pending = null; this.version++; }
       return;
     }
-    if (!this.active) {
+    // A teleport can leave the certified eye region in a single frame.
+    // Rebuild before anything can be culled using the old viewpoint.
+    if (!this.active || Math.hypot(eye.x - this.ox, eye.y - this.oy, eye.z - this.oz) >= EYE_SLACK) {
+      this.pending = null;
       this.#sample(eye.x, eye.y, eye.z, 0, AZ);
       this.#finish(eye.x, eye.y, eye.z);
       this.active = true;

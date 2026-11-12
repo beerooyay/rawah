@@ -1,3 +1,4 @@
+import { ALPINE } from './alpine.js';
 import * as THREE from 'three';
 
 // Stream channels: the lidar grid is 3.6 m, far too coarse for a creek 1.6 to 2.4 m wide, so the water used to hover over the
@@ -22,19 +23,20 @@ const SMIN = 0.3;                                // softness of the lip where th
 const DEPTH = 0.38;                              // bed below the water surface at the edge of the bed
 const SCOOP = 0.12;                              // extra depth at the very middle
 const SLOPE = 0.85, FLARE = 0.1;
-const TREAD_REACH = 2.4;                         // trails: metres past the tread's edge that the bank is written
-const TREAD_SCOOP = 0.012, TREAD_DROP = 0.015;                       // the middle of a tread is a touch lower than its sides (the soft lip adds the rest)                 // bank slope and how it steepens with distance
+const TREAD_SCOOP = 0.012, TREAD_DROP = 0.015;   // the middle sits below the shoulders
 
 export const CHANNEL_GLSL = /* glsl */ `
 uniform highp sampler2D uChTex;
 uniform vec2 uChOrg;
 uniform float uChOn;
 uniform sampler2D uTrTex;   // metres from the edge of the nearest trail, 0..3 in 8 bits (255 = clear of any)
-float trailEdge(vec2 xz) {
+vec2 trailDistances(vec2 xz) {
   vec2 u = (xz - uChOrg) / 512.0;
-  if (uChOn < 0.5 || u.x < 0.0 || u.y < 0.0 || u.x > 1.0 || u.y > 1.0) return 3.0;
-  return texture2D(uTrTex, u).r * 3.0;
+  if (uChOn < 0.5 || u.x < 0.0 || u.y < 0.0 || u.x > 1.0 || u.y > 1.0) return vec2(3.0, 2.0);
+  vec2 field = texture2D(uTrTex, u).rg;
+  return vec2(field.r * 3.0, field.g * 4.0 - 2.0);
 }
+float trailEdge(vec2 xz) { return trailDistances(xz).x; }
 float chCell(ivec2 c) {
   if (c.x < 0 || c.y < 0 || c.x >= 1024 || c.y >= 1024) return 1e4;
   return texelFetch(uChTex, c, 0).r;
@@ -70,8 +72,8 @@ export class Channels {
     this.tex.generateMipmaps = false;
     this.tex.needsUpdate = true;
     // how far each texel is from the edge of the nearest trail or road (kept for the grass, which must never grow on a tread)
-    this.tr = new Uint8Array(CH_N * CH_N).fill(255);
-    this.trTex = new THREE.DataTexture(this.tr, CH_N, CH_N, THREE.RedFormat, THREE.UnsignedByteType);
+    this.tr = new Uint8Array(CH_N * CH_N * 2).fill(255);
+    this.trTex = new THREE.DataTexture(this.tr, CH_N, CH_N, THREE.RGFormat, THREE.UnsignedByteType);
     this.trTex.magFilter = this.trTex.minFilter = THREE.LinearFilter;
     this.trTex.generateMipmaps = false;
     this.trTex.needsUpdate = true;
@@ -156,8 +158,10 @@ export class Channels {
         c[i] = sum / cnt;
       }
       id++;
+      let along = 0;
       for (let i = 0; i < n - 1; i++) {
-        this.segs.push({ ax: p[i][0], az: p[i][1], ay: c[i], bx: p[i + 1][0], bz: p[i + 1][1], by: c[i + 1], wb: tw, id, along: 0, tr: half });
+        this.segs.push({ ax: p[i][0], az: p[i][1], ay: c[i], bx: p[i + 1][0], bz: p[i + 1][1], by: c[i + 1], wb: tw, id, along, tr: half });
+        along += Math.hypot(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
       }
     }
   }
@@ -210,13 +214,23 @@ export class Channels {
         if (dist > reach) continue;
         const wy = s.ay + (s.by - s.ay) * t;
         if (s.tr) {
-          const k3 = r * CH_N + c, q = Math.min(255, Math.max(0, Math.round((dist - s.tr * 1.2) / 3 * 255)));   // the ribbon's ragged edge reaches about 1.2 half widths
+          const k3 = (r * CH_N + c) * 2, q = Math.min(255, Math.max(0, Math.round((dist - s.tr * 1.2) / 3 * 255)));   // the ribbon's ragged edge reaches about 1.2 half widths
           if (q < this.tr[k3]) this.tr[k3] = q;
           if (s.flat) continue;
           const tv = wb * (1 + 0.12 * Math.sin((i * 0.9 + t) * 1.3 + s.id));
-          const ptr = dist < tv ? wy - TREAD_DROP - TREAD_SCOOP * (1 - (dist / tv) * (dist / tv)) : wy + 0.7 * (dist - tv) + 0.35 * (dist - tv) * (dist - tv);
+          const along = s.along + t * L;
+          const rut = ALPINE ? 0.075 + 0.038 * Math.sin(along * 0.7 + s.id) + 0.022 * Math.sin(along * 1.9) : TREAD_SCOOP;
+          const edge = dist - tv;
+          const ptr = edge < 0 ? wy - TREAD_DROP - rut * (1 - (dist / tv) ** 2) : wy - TREAD_DROP + 0.7 * edge + 0.35 * edge * edge;
+          if (ALPINE) {
+            const signed = dist - s.tr * (0.92 + 0.07 * Math.sin(along * 1.15 + s.id));
+            const encoded = Math.max(0, Math.min(255, Math.round((signed + 2) / 4 * 255)));
+            if (encoded < this.tr[k3 + 1]) this.tr[k3 + 1] = encoded;
+          }
           const k2 = r * CH_N + c;
-          if (ptr < d[k2]) d[k2] = ptr;
+          // Keep the smoothed grade from carving a deep notch into a local hump.
+          const floor = ALPINE && ptr < d[k2] ? Math.max(ptr, this.world.baseHeight(px, pz) - 0.20) : ptr;
+          if (floor < d[k2]) d[k2] = floor;
           continue;
         }
         // the bed and the banks wander a little along the stream so no two reaches are the same ditch

@@ -197,7 +197,7 @@
           <label class="row"><span>Season</span><select id="set-season"></select></label>
           <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="severe">Severe thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
           <label class="row"><span>Time of day</span><select id="set-hour"><option value="">Jump to…</option><option value="5.7">Dawn</option><option value="9">Morning</option><option value="12.9">Midday</option><option value="16.5">Afternoon</option><option value="19.2">Dusk</option><option value="22.2">Night</option><option value="1">Deep night</option></select></label>
-          <label class="row"><span>Who tryna come?</span><span id="set-party" class="pickrow"></span></label>
+          <div class="row"><span id="set-party-label">Who tryna come?</span><span id="set-party" class="pickrow" role="group" aria-labelledby="set-party-label"></span></div>
           <label class="row"><span>Tent</span><select id="set-tent"><option value="solo">Backpacking tent</option><option value="family">Family tent · sleeps 6</option></select></label>
           <label class="row"><span>Moon</span><select id="set-moon"><option value="new">New moon (darkest)</option><option value="quarter">Quarter moon</option><option value="full">Full moon</option></select></label>
           <label class="row"><span>Thirst pace</span><input type="range" id="set-hydro" min="1" max="8" step="1" /><b class="val" id="val-hydro"></b></label>
@@ -210,6 +210,7 @@
           <label class="row switch"><span>Shadows</span><input type="checkbox" id="set-shadows" /></label>
           <label class="row switch"><span>Light shafts</span><input type="checkbox" id="set-shafts" /></label>
           <label class="row switch"><span>Lens flare</span><input type="checkbox" id="set-flare" /></label>
+          <label class="row"><span>World look · [\]</span><select id="set-look"><option value="photo">Photographic</option><option value="alpine">Alpine</option><option value="lowpoly">Low poly</option></select></label>
           <label class="row switch"><span>Mountain textures</span><input type="checkbox" id="set-mtn" /></label>
           <label class="row switch"><span>Lake reflections</span><input type="checkbox" id="set-mirror" /></label>
           <label class="row switch"><span>Far mountain detail</span><input type="checkbox" id="set-relief" /></label>

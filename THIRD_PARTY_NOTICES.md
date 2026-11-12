@@ -26,3 +26,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Alpine look kit (assets/alpine)
+
+The conifer, snag, dwarf pine, willow and granite meshes are reduced runtime buffers derived from the locally owned PolyOne Studio Free Pack - Tree and Free Pack - Rocks Stylized (Fab), by way of the Twin Crater scene. Their original Fab licenses continue to apply. They are included solely as part of this playable game, not offered as a reusable model collection.

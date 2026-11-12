@@ -1,10 +1,12 @@
+import { VEGETATION_GLSL } from './vegetation-grade.js';
 import * as THREE from 'three';
 import { WIND_GLSL } from './wind.js';
 import { HEIGHT_GLSL } from './cdlod.js';
-import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING } from './atmosphere.js';
+import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING, SNOW_GLSL } from './atmosphere.js';
 import { CULL } from './culling.js';
 import { BOXEL } from './terrain.js';
 import { MEADOW_GLSL } from './meadow.js';
+import { ALPINE } from './alpine.js';
 
 // Grass, as clumps rather than blades. A canvas atlas holds four painted
 // clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
@@ -40,7 +42,9 @@ function rng(seed) {
   return () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x6d2b79f5 >>> 0) / 4294967296);
 }
 
-function paintGrass() {
+let paintedAtlas;
+function paintGrass(alpine = false) {
+  if (paintedAtlas) return paintedAtlas;
   const cv = document.createElement('canvas');
   cv.width = CW * CELLS; cv.height = CH;
   const g = cv.getContext('2d');
@@ -52,6 +56,13 @@ function paintGrass() {
     { n: 560, hMin: 0.16, hMax: 0.52, spread: 0.36, w: [1.2, 2.7], lean: 0.62, seeds: 0.03 }, // alpine turf and wiry sedge: many fine blades
     { n: 170, hMin: 0.4, hMax: 0.92, spread: 0.24, w: [4, 8], lean: 0.3, seeds: 0 },       // lush sedge by water
   ];
+  // Keep the tapered blades and seed heads of the original meadow atlas.
+  if (alpine) kinds.forEach((k, i) => Object.assign(k, {
+    n: [144, 224, 332, 164][i], w: [[3, 8], [2.7, 6], [1.8, 4.5], [4, 8]][i],
+    lean: k.lean * 0.72, spread: k.spread * 1.09,
+    hMin: i === 2 ? 0.22 : k.hMin, hMax: i === 2 ? 0.59 : k.hMax,
+    seeds: [0.13, 0.05, 0.012, 0][i],
+  }));
   kinds.forEach((k, ci) => {
     g.save();
     g.translate(ci * CW, 0);
@@ -59,26 +70,28 @@ function paintGrass() {
     for (let i = 0; i < k.n; i++) {
       const x0 = CW / 2 + gauss() * CW * k.spread;
       const h = CH * (k.hMin + (k.hMax - k.hMin) * Math.pow(R(), 0.8));
+      // Sink each blade to a slightly different depth so the clump never ends in a straight cut.
+      const base = CH - (alpine ? 16 * (0.5 + 0.5 * gauss()) : 0);
       const a = gauss() * k.lean + (x0 - CW / 2) / CW * 0.6;   // outer blades splay out
-      const tipX = x0 + Math.sin(a) * h, tipY = CH - Math.cos(a) * h;
-      const cx = x0 + Math.sin(a * 0.35) * h * 0.55, cy = CH - h * 0.62;
+      const tipX = Math.max(8, Math.min(CW - 8, x0 + Math.sin(a) * h)), tipY = Math.max(6, base - Math.cos(a) * h);
+      const cx = x0 + Math.sin(a * 0.35) * h * 0.55, cy = base - h * 0.62;
       const w = k.w[0] + R() * (k.w[1] - k.w[0]);
       const bright = 120 + R() * 135, cure = R() * 255;
-      const grad = g.createLinearGradient(x0, CH, tipX, tipY);
+      const grad = g.createLinearGradient(x0, base, tipX, tipY);
       grad.addColorStop(0, `rgb(${bright | 0},${cure | 0},0)`);
       grad.addColorStop(1, `rgb(${bright | 0},${cure | 0},255)`);
       g.fillStyle = grad;
       g.beginPath();
-      g.moveTo(x0 - w / 2, CH);
+      g.moveTo(x0 - w * (alpine ? 0.24 : 0.5), base);
       g.quadraticCurveTo(cx - w * 0.3, cy, tipX, tipY);
-      g.quadraticCurveTo(cx + w * 0.3, cy, x0 + w / 2, CH);
+      g.quadraticCurveTo(cx + w * 0.3, cy, x0 + w * (alpine ? 0.24 : 0.5), base);
       g.fill();
       if (R() < k.seeds) {
         // a seed head along the top of the stem: always cured
         for (let s = 0; s < 7; s++) {
           const t = 0.84 + s * 0.022;
           const px = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * tipX;
-          const py = (1 - t) * (1 - t) * CH + 2 * (1 - t) * t * cy + t * t * tipY;
+          const py = (1 - t) * (1 - t) * base + 2 * (1 - t) * t * cy + t * t * tipY;
           g.fillStyle = `rgb(${(bright * 0.85) | 0},0,${(215 + s * 5) | 0})`;
           g.beginPath(); g.ellipse(px + (R() - 0.5) * 3, py, 2.2, 4.5, a, 0, Math.PI * 2); g.fill();
         }
@@ -89,7 +102,7 @@ function paintGrass() {
   const tex = new THREE.CanvasTexture(cv);
   tex.anisotropy = 4;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
-  return tex;
+  return (paintedAtlas = tex);
 }
 
 function clumpGeometry(cards = 3) {
@@ -212,7 +225,8 @@ const LAYERS = {
 const BLOCKS = 6;   // the clump grid is drawn as BLOCKS x BLOCKS pieces so the ones off screen can be skipped
 
 export class Grass {
-  constructor(terrain, { radius = 30, spacing = 0.5, layer = 'grass', veg = null, shared = null } = {}, uniforms) {
+  constructor(terrain, { radius = 30, spacing = 0.5, layer = 'grass', veg = null, shared = null, inner = 0 } = {}, uniforms) {
+    if (ALPINE) veg = null;   // the alpine look paints its own blades
     this.terrain = terrain;
     this.layer = layer;
     const L = LAYERS[layer];
@@ -222,7 +236,7 @@ export class Grass {
     this.uniforms = {
       ...terrain.uniforms,
       uCenter: { value: new THREE.Vector2() }, uPlayer: { value: new THREE.Vector3() },
-      uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
+      uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius }, uInner: { value: inner },
       uTrA: atmosphere.uTrA, uTrB: atmosphere.uTrB,   // the shared ring of pressings (atmosphere.js)
       uRing: { value: new THREE.Vector2(radius * RING_A, radius * RING_B) },
       uPressC: shared ? shared.uniforms.uPressC : { value: new THREE.Vector2() }, uPressS: { value: PRESS_SIZE },
@@ -237,7 +251,7 @@ export class Grass {
       this.pad0 = Math.max(2.2, ...pl.map((p) => p.cardW)) * (layer === 'grass' ? 1.4 : 1.1);
     }
     const clumps = { 3: clumpGeometry(3), 2: clumpGeometry(2) };
-    const mat = new THREE.MeshLambertMaterial({ map: veg ? veg.tex : paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
+    const mat = new THREE.MeshLambertMaterial({ map: veg ? veg.tex : paintGrass(ALPINE), alphaTest: ALPINE ? 0.35 : 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       shader.uniforms.uColorMap = { value: terrain.colorMap };
@@ -249,7 +263,7 @@ export class Grass {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           uniform sampler2D uColorMap, uCover, uBoxel;
-          uniform float uExtent, uSpacing, uW, uRadius;
+          uniform float uExtent, uSpacing, uW, uRadius, uInner;
           uniform vec2 uCenter;
           uniform vec3 uPlayer;
           uniform sampler2D uPress;
@@ -257,12 +271,13 @@ export class Grass {
           uniform float uPressS;
           attribute vec4 aBlock;   // this piece's first cell in the grid, and its width and height in cells
           attribute float aStride; // 1, 2 or 4: it draws every Nth cell
-          uniform float uSnow, uSnowLine;
+          ${SNOW_GLSL}
           uniform vec4 uClearA[6];
           uniform float uClearR[6];
           varying vec3 vSat, vTone;
-          varying float vLush, vTurf;
-          ${MEADOW_GLSL}
+          varying float vLush, vTurf, vAlpFar;
+          ${ALPINE ? 'varying float vGrassFade;' : ''}
+          ${ALPINE ? VEGETATION_GLSL : MEADOW_GLSL}
           ${veg ? 'uniform vec4 uPlants[64]; uniform vec4 uCats[4]; uniform vec2 uAtlas; uniform float uCure; varying float vT, vR, vK;' : ''}
           ${HEIGHT_GLSL}
           ${WIND_GLSL}`)
@@ -272,52 +287,64 @@ export class Grass {
           int W = int(uW), S = int(aStride), BW = int(aBlock.z), BH = int(aBlock.w);
           ivec2 org = ivec2(floor(uCenter / uSpacing)) - W / 2 + ivec2(aBlock.xy);
           ivec2 al = ivec2(mod(float(S) - mod(vec2(org), float(S)), float(S)));
-          int NX = (BW + S - 1) / S + 1;
+          int NX = (BW + S - 1) / S;
           ivec2 cell = org + al + S * ivec2(gl_InstanceID % NX, gl_InstanceID / NX);
           vec3 transformed = vec3(0.0);
           // leave at once, off screen, for the clumps that will not be drawn: the block's other cells,
           // the corners outside the circle, the ones the detail ring has thinned out, the ones that cannot grow
           if (cell.x >= org.x + BW || cell.y >= org.y + BH) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           float h1 = ihash(cell), h2 = ihash(cell + ivec2(7919, 104729)), h3 = ihash(cell * 3 + ivec2(17, 3));
-          // jitter the root inside its cell, rotated per cell, so the lattice's rows stop reading at a grazing angle
-          vec2 jit = vec2(h1, h2) - 0.5;
-          float ja = h3 * 6.2832;
-          vec2 root = (vec2(cell) + 0.5 + vec2(jit.x * cos(ja) - jit.y * sin(ja), jit.x * sin(ja) + jit.y * cos(ja))) * uSpacing;
-          float r = distance(root, uCenter);
+          // The surviving cells keep their roots through every stride.
           vec2 c2 = mod(vec2(cell), 2.0), c4 = mod(vec2(cell), 4.0);
           float align = (c4.x + c4.y == 0.0) ? 4.0 : ((c2.x + c2.y == 0.0) ? 2.0 : 1.0);
+          ${ALPINE ? `
+          // Independent offsets keep sparse patches from revealing rows when low growth rejects a tuft.
+          vec2 jitter = vec2(ihash(cell + ivec2(1193, 6053)), ihash(cell + ivec2(2377, 3217))) - 0.5;
+          jitter *= mix(1.52, 2.55, (align - 1.0) / 3.0);` : `
+          vec2 jit = vec2(h1, h2) - 0.5;
+          float ja = h3 * 6.2832, jc = cos(ja), js = sin(ja);
+          vec2 jitter = vec2(jit.x * jc - jit.y * js, jit.x * js + jit.y * jc);`}
+          vec2 root = (vec2(cell) + 0.5 + jitter) * uSpacing;
+          float r = distance(root, uCenter);
           // stagger the boundary per clump: without it the whole ring resizes in one visible wave
           float rr = r + (h3 - 0.5) * 6.0;
           float f1 = smoothstep(uRing.x - 7.0, uRing.x + 2.0, rr), f2 = smoothstep(uRing.y - 7.0, uRing.y + 2.0, rr);
           float lodW = align > 3.5 ? 1.0 : (align > 1.5 ? 1.0 - f2 : 1.0 - f1);
-          float wm = 1.0 + 0.87 * f1 + 1.63 * f2;      // the thinner the field, the wider each clump, so it still covers
-          float fade = 1.0 - smoothstep(uRadius * 0.72, uRadius, r);
-          if (fade * lodW < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          float wm = ${ALPINE ? '1.0 + 0.3 * f1 + 0.5 * f2' : '1.0 + 0.87 * f1 + 1.63 * f2'};      // the thinner the field, the wider each clump, so it still covers
+          float fade = 1.0 - smoothstep(uRadius * ${ALPINE ? '0.45' : '0.72'}, uRadius, r);   // the alpine field fades over a longer ring
+          vAlpFar = smoothstep(uRadius * 0.35, uRadius * 0.9, r);
+          if (uInner > 0.0) {   // a far ring (alpine): empty inside the near field, fading in as the near field fades out, and its clumps as wide as its cells
+            fade *= smoothstep(uInner * 0.5, uInner, r);
+            vAlpFar = smoothstep(uInner * 0.55, mix(uInner, uRadius, 0.45), r);
+          }
+          ${ALPINE ? 'vGrassFade = smoothstep(0.04, 0.82, fade * lodW);' : ''}
+          // A faded card below alphaTest cannot contribute any pixels.
+          if (${ALPINE ? `vGrassFade < ${mat.alphaTest.toFixed(2)}` : 'fade * lodW < 0.01'}) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vec4 cov = texture2D(uCover, root / uExtent + 0.5);   // live, burned, aspen, rock
           float mask = maskAt(root);
-          float grow = ${L.grow};
-          grow *= 1.0 - smoothstep(0.025, 0.06, -chanCut(root));   // nothing grows in a worn tread (channels.js digs it)
+          float grow = ${ALPINE ? 'smoothstep(0.028, 0.19, turfPotential(cov)) * (1.0 - mask * mask * mask)' : L.grow};
+          ${ALPINE ? 'grow *= 1.0 - smoothstep(0.35, 0.82, -chanCut(root));' : 'grow *= 1.0 - smoothstep(0.025, 0.06, -chanCut(root));'}   // nothing grows in a worn tread (channels.js digs it)
           // metres from the edge of the nearest trail or road: nothing roots on or beside the tread, and tufts shrink toward it so no blade lies across it
-          float trE = trailEdge(root);
-          grow *= smoothstep(0.5, 0.8, trE);
-          float trK = 0.45 + 0.55 * smoothstep(0.8, 2.0, trE);
+          ${ALPINE ? 'vec2 trail = trailDistances(root); float trE = trail.y < 1.8 ? max(0.0, trail.y) : trail.x;' : 'float trE = trailEdge(root);'}
+          grow *= ${ALPINE ? 'smoothstep(0.13, 0.31, trE)' : 'smoothstep(0.5, 0.8, trE)'};
+          float trK = ${ALPINE ? 'mix(0.29, 1.0, smoothstep(0.16, 1.15, trE))' : '0.45 + 0.55 * smoothstep(0.8, 2.0, trE)'};
           if (step(h1 * 0.8 + h3 * 0.2, grow * 2.0) < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // the height below can only lower this
           float y0 = groundH(root, 0.0);
           // open montane and alpine meadow is short wiry turf in tufts with patches of bare sand between (meadow.js; the terrain paints the sand)
-          float openM = meadowOpen(cov);
-          float turf = openM * smoothstep(2500.0, 2900.0, y0);
-          grow *= 1.0 - meadowBare(root, y0) * openM;
+          ${ALPINE ? '' : 'float openM = meadowOpen(cov);'}
+          float turf = ${ALPINE ? '0.0' : 'openM * smoothstep(2500.0, 2900.0, y0)'};   // the alpine look is one full field: no wiry turf, no bare sand
+          ${ALPINE ? '' : 'grow *= 1.0 - meadowBare(root, y0) * openM;'}
           vTurf = turf;
-          grow *= smoothstep(3960.0, 3700.0, y0);
+          grow *= 1.0 - smoothstep(3700.0, 3960.0, y0);
           float alpine = smoothstep(3330.0, 3560.0, y0);
-          vSat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
+          vSat = ${ALPINE ? 'vec3(0.0)' : 'texture2D(uColorMap, root / uExtent + 0.5).rgb'};
           vec4 bx = texture2D(uBoxel, root / uExtent + 0.5);
-          vLush = clamp((vSat.g - vSat.r) * 8.0 + bx.r * 0.35, 0.0, 1.0);
+          vLush = ${ALPINE ? 'bx.r' : 'clamp((vSat.g - vSat.r) * 8.0 + bx.r * 0.35, 0.0, 1.0)'};
           float live = step(h1 * 0.8 + h3 * 0.2, grow * 2.0);
           // each clump its own shade: some straw-pale, some russet, some dun
           vTone = mix(vec3(1.08, 0.98, 0.86), vec3(0.88, 0.78, 0.7), h3) * (0.85 + h1 * 0.3);
           // snow buries the tufts gradually: they shrink under it, and only the deepest vanish
-          float buried = uSnow * smoothstep(uSnowLine - 40.0, uSnowLine + 40.0, y0) * (1.3 - h3 * 0.5);
+          float buried = snowAt(y0) * (1.3 - h3 * 0.5);
           live *= 1.0 - step(1.25, buried);
           for (int ci = 0; ci < 6; ci++) {
             vec2 ca = uClearA[ci].xy, cab = uClearA[ci].zw - ca;
@@ -337,45 +364,69 @@ export class Grass {
           vMapUv = vec2((pl.x + uv.x) / uAtlas.x, 1.0 - (pl.y + 1.0 - uv.y) / uAtlas.y);
           vT = uv.y; vR = h1; vK = cat;
           float wk = min(cardH, 1.5) * ${L.wind}, nk = cardH * ${L.near};` : `
-          float size = mix(1.0, 0.6, alpine) * mix(1.0, 0.85, turf) * trK * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
+          float size = mix(1.0, 0.6, alpine) * mix(1.0, 0.85, turf) * trK * (0.75 + h3 * 0.6) * ${ALPINE ? '1.0' : 'fade * lodW'} * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
           kind = turf > 0.5 && kind != 3.0 ? (h3 > 0.28 ? 2.0 : 1.0) : kind;
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
-          float cardW = mix(1.6, 0.85, turf), cardH = mix(mix(0.72, 0.42, alpine), kind > 2.5 ? 0.45 : 0.34, turf), wk = 1.0, nk = 1.0;`}
+          float wk = ${ALPINE ? '0.64' : '1.0'}, nk = 1.0;
+          ${ALPINE ? `
+          float heightK = mix(0.53, 1.38, h2 * h2);
+          float habitatH = kind == 3.0 ? 1.16 : (kind == 2.0 ? 0.82 : 1.0);
+          float cardH = mix(0.91, 0.53, alpine) * habitatH * heightK * mix(1.0, 1.28, step(0.5, uInner));
+          float cardW = mix(1.34, 1.86, h1) * mix(1.0, 1.19, step(0.5, uInner));
+          // Short tufts still spread sideways, with an upper bound on overhang into the tread.
+          cardW *= mix(1.31, 1.0, h2);
+          cardW = min(cardW, (0.09 + trE * 1.15) / max(size * wm, 0.01));` : `
+          float cardW = mix(1.6, 0.85, turf), cardH = mix(mix(0.72, 0.42, alpine), kind > 2.5 ? 0.45 : 0.34, turf);`}`}
           float cv = float(gl_VertexID / 4) * 0.5 - 0.5;   // each card leans a little differently, never one flat sprite
           float ang = h2 * 6.2832 + cv * (h1 - 0.5) * 0.7, ca = cos(ang), sa = sin(ang);
           vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
           float t = position.y;
+          ${ALPINE ? 'lp.xz *= mix(0.62, 0.93 + 0.23 * h2, t);' : ''}
           // pressed down by what has walked or lain here, read from the press map around the camera
-          vec4 pm = texture2D(uPress, (root - uPressC) / uPressS + 0.5);
+          vec4 pm = ${inner ? 'vec4(0.0, 0.5, 0.5, 0.0)' : 'texture2D(uPress, (root - uPressC) / uPressS + 0.5)'};
           // the boxel's ~30 m wear blob reads as a walked path only at range; near, only real prints press
-          float press = max(pm.a, bx.g * 0.7 * smoothstep(50.0, 140.0, r));
+          float press = ${ALPINE ? 'pm.a' : 'max(pm.a, bx.g * 0.7 * smoothstep(50.0, 140.0, r))'};
           ${L.press ? '' : 'press = 0.0;'}
           vec2 lean = (pm.gb - 0.5) * 4.0;
-          vec3 p = vec3(root.x + lp.x * cardW * size * wm, y0 - 0.03 + t * cardH * size * (1.0 - press * 0.8), root.y + lp.z * cardW * size * wm);
+          float bendDown = ${ALPINE ? 'press * mix(0.18, 0.8, smoothstep(0.4, 0.88, press))' : 'press * 0.8'};
+          vec3 p = vec3(root.x + lp.x * cardW * size * wm, y0 - 0.03 + t * cardH * size * (1.0 - bendDown), root.y + lp.z * cardW * size * wm);
+          ${ALPINE ? `
+          // Bury the ends of a wide card on sloping ground. The upper edge stays at blade height.
+          p.y -= (1.0 - t) * (0.045 + abs(position.x) * cardW * size * wm * 0.38);
+          ` : ''}
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared.
           // and even when the air is still the blades are not frozen: a small shimmer rides under the gusts
-          float g = gustAt(root);
+          float g = ${inner ? '0.35 + 0.25 * sin(dot(root, vec2(0.07, 0.04)) - uTime * 1.2)' : 'gustAt(root)'};
           float flut = sin(uTime * 3.7 + root.x * 2.3 + root.y * 1.7) * sin(uTime * 2.9 + root.y * 3.1 - root.x * 1.3);
           float bend = (0.1 + g * 0.8 + flut * 0.06 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size * wk;
           bend *= 1.0 + cv * (h2 - 0.5) * 0.9;
           vec2 wdir = WIND_DIR;
           p.xz += wdir * bend + vec2(-wdir.y, wdir.x) * flut * 0.07 * t * t * size * wk;
           p.y -= bend * bend * 0.5;
-          // part around the hiker
+          ${inner ? '' : `// part around the hiker
           vec2 away = root - uPlayer.xz;
           float near = 1.0 - smoothstep(0.2, 1.0, length(away));
-          p.xz += normalize(away + 1e-4) * near * t * size * 0.7 * nk;
-          p.y -= near * t * size * 0.3 * nk;
-          p.xz += normalize(lean + vec2(1e-4)) * press * t * size * 0.9 * nk;
+          p.xz += away / max(length(away), 0.35) * near * t * size * 0.18 * nk;
+          p.y -= near * t * size * 0.09 * nk;
+          p.xz += lean * press * t * size * 0.32 * nk;
+`}
+          ${ALPINE ? `
+          if (trE < 1.5) {
+            vec2 spread = p.xz - root;
+            p.xz = root + spread * min(1.0, max(0.0, trE - 0.025) / max(length(spread), 0.001));
+          }` : ''}
           transformed = p;`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uFrost, uCure;
           varying vec3 vSat, vTone;
-          varying float vLush, vTurf;
+          varying float vLush, vTurf, vAlpFar;
+          ${ALPINE ? 'varying float vGrassFade;' : ''}
+          ${ALPINE ? VEGETATION_GLSL : ''}
+          #define uAlpFar vAlpFar
           ${veg ? 'varying float vT, vR, vK;' : ''}`)
         .replace('#include <map_fragment>', veg ? `
           vec4 gs = texture2D(map, vMapUv);
@@ -413,12 +464,22 @@ export class Grass {
           vec3 col = mix(cured, green, alive) * (0.45 + gs.r * 0.6);
           col *= mix(0.38, 1.05, smoothstep(0.0, 0.75, gs.b));   // shade at the root
           col = mix(col, vec3(0.82, 0.85, 0.9), uFrost * smoothstep(0.3, 1.0, gs.b) * 0.62);
+          ${ALPINE ? `
+          // Turf-coloured roots and a light yellow-green tip.
+          col = mix(turfBase(), vec3(0.108, 0.236, 0.061), smoothstep(0.0, 0.92, gs.b));
+          float seedHead = (1.0 - smoothstep(0.0, 0.045, gs.g)) * smoothstep(0.63, 0.86, gs.b);
+          col = mix(col, vec3(0.31, 0.27, 0.087), max(seedHead * 0.72, smoothstep(0.55, 1.0, gs.b) * uCure * 0.35));
+          col *= (0.75 + gs.r * 0.35) * mix(vec3(1.0), vTone, 0.35);
+          // Blend the foot of a card into turf early; preserve some blade contrast even at range.
+          col = mix(col, turfBase(), uAlpFar * mix(0.96, 0.68, gs.b));
+          col = plantGrade(col, vLush, 0.65);
+          col = mix(col, vec3(0.82, 0.85, 0.9), uFrost * smoothstep(0.5, 1.0, gs.b) * 0.3);` : ''}
           diffuseColor.rgb = col;
-          diffuseColor.a *= gs.a;`)
+          diffuseColor.a *= gs.a ${ALPINE ? '* smoothstep(0.015, 0.15, vMapUv.y) * vGrassFade' : ''};`)
         // both faces of a card catch the sky the same way
         .replace('#include <normal_fragment_begin>', 'float faceDirection = 1.0;\nvec3 normal = normalize(vNormal);\nvec3 nonPerturbedNormal = normal;');
     };
-    mat.customProgramCacheKey = () => `rawah-grass-clumps-${layer}-${veg ? 'photo' : 'painted'}`;
+    mat.customProgramCacheKey = () => `rawah-grass-clumps-${layer}-${veg ? 'photo' : ALPINE ? 'alpine' : 'painted'}-${inner ? 'far' : 'near'}`;
     this.mesh = new THREE.Group();
     this.blocks = [];
     const step = Math.ceil(this.W / BLOCKS);
@@ -429,12 +490,17 @@ export class Grass {
         const lo = [(i - this.W / 2) * spacing, (j - this.W / 2) * spacing], hi = [lo[0] + bw * spacing, lo[1] + bh * spacing];
         const gap = (a, b) => (a > 0 ? a : b < 0 ? -b : 0);
         const dmin = Math.hypot(gap(lo[0], hi[0]), gap(lo[1], hi[1]));
-        const stride = dmin < radius * RING_A + 1 ? 1 : dmin < radius * RING_B + 1 ? 2 : 4;
-        const geo = clumps[stride === 1 && layer === 'grass' ? 3 : 2].clone();
+        const dmax = Math.hypot(Math.max(Math.abs(lo[0]), Math.abs(hi[0])), Math.max(Math.abs(lo[1]), Math.abs(hi[1])));
+        const jitterMargin = spacing * 8;
+        if (dmin > radius + jitterMargin || dmax < inner * 0.5 - jitterMargin) continue;
+        // A block stays dense until every root in it is beyond the finer fade.
+        const lodMargin = 6 + spacing * 2;
+        const stride = dmin < radius * RING_A + lodMargin ? 1 : dmin < radius * RING_B + lodMargin ? 2 : 4;
+        const geo = clumps[!inner && layer === 'grass' ? 3 : 2].clone();
         const nv = geo.attributes.position.count;
         geo.setAttribute('aBlock', new THREE.BufferAttribute(new Float32Array(nv * 4).map((_, n) => [i, j, bw, bh][n % 4]), 4));
         geo.setAttribute('aStride', new THREE.BufferAttribute(new Float32Array(nv).fill(stride), 1));
-        geo.instanceCount = (Math.ceil(bw / stride) + 1) * (Math.ceil(bh / stride) + 1);
+        geo.instanceCount = Math.ceil(bw / stride) * Math.ceil(bh / stride);
         const m = new THREE.Mesh(geo, mat);
         m.frustumCulled = false;
         m.receiveShadow = true;

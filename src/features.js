@@ -1,3 +1,6 @@
+import { ALPINE } from './alpine.js';
+import { treadDetail } from './tread.js';
+import { LOWPOLY } from './lowpoly.js';
 import * as THREE from 'three';
 import { WAVE, WAVE_GLSL, WATER, AMBIENT_GLSL } from './waves.js';
 import { WATERBOX, WATERBOX_GLSL } from './waterbox.js';
@@ -5,9 +8,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from './noise.js';
 import { withAtmosphere } from './atmosphere.js';
 import { NOISE_GLSL } from './detail.js';
-import { WORLEY_GLSL } from './terrain.js';
 import { ChunkSet } from './culling.js';
-import { HEIGHT_GLSL } from './cdlod.js';
+import { BASE_HEIGHT_GLSL, HEIGHT_GLSL } from './cdlod.js';
 
 // Lakes, trail ribbons, cairns, trail signs and the car at the trailhead.
 
@@ -27,9 +29,9 @@ function waterNormals(size = 256) {
         const c = Math.cos(t) * amp;
         dx += c * Math.round(kx); dy += c * Math.round(ky);
       }
-      const n = new THREE.Vector3(-dx * 0.05, -dy * 0.05, 1).normalize();
+      const nx = -dx * 0.05, ny = -dy * 0.05, inv = 1 / Math.hypot(nx, ny, 1);
       const i = (y * size + x) * 4;
-      data[i] = (n.x * 0.5 + 0.5) * 255; data[i + 1] = (n.y * 0.5 + 0.5) * 255; data[i + 2] = (n.z * 0.5 + 0.5) * 255; data[i + 3] = 255;
+      data[i] = (nx * inv * 0.5 + 0.5) * 255; data[i + 1] = (ny * inv * 0.5 + 0.5) * 255; data[i + 2] = (inv * 0.5 + 0.5) * 255; data[i + 3] = 255;
     }
   }
   const tex = new THREE.DataTexture(data, size, size);
@@ -40,7 +42,7 @@ function waterNormals(size = 256) {
   return tex;
 }
 
-export function buildLakes(world, mirrorU = null) {
+export function buildLakes(world, mirrorU = null, terrainU = {}) {
   const normalMap = waterNormals();
   normalMap.repeat.set(1 / 9, 1 / 9);
   const mat = new THREE.MeshPhongMaterial({
@@ -49,15 +51,15 @@ export function buildLakes(world, mirrorU = null) {
   });
   // uIceLine: lakes whose surface is above it are frozen over (the calendar moves it)
   const uniforms = { uSky: { value: new THREE.Color(0x9cc0e0) }, uDeep: { value: new THREE.Color(0x0d2a36) }, uIceLine: { value: 9999 },
-    uRain: { value: 0 }, uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
+    uT: { value: 0 }, uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -99, 0)) } };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms, WAVE, WATER, WATERBOX, mirrorU || {});
+    Object.assign(shader.uniforms, uniforms, WAVE, WATER, WATERBOX, terrainU, mirrorU || {}, { uAlpine: LOWPOLY.uAlpine });
     withAtmosphere(shader, { occlusion: 0.5 });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vLevel;\nvarying vec2 vIceUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLevel = position.y;\nvIceUv = position.xz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uRain;\nuniform float uT;\nuniform vec4 uRings[10];\nuniform sampler2D uMirror;\nuniform mat4 uMirrorVP;\nuniform float uMirrorY, uMirrorOn;\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
+      .replace('#include <common>', '#include <common>\nuniform float uAlpine;\nuniform vec3 uSky;\nuniform vec3 uDeep;\nuniform float uIceLine;\nuniform float uT;\nuniform vec4 uRings[10];\nuniform sampler2D uMirror;\nuniform mat4 uMirrorVP;\nuniform float uMirrorY, uMirrorOn;\nvarying float vLevel;\nvarying vec2 vIceUv;\n' + BASE_HEIGHT_GLSL + WAVE_GLSL + AMBIENT_GLSL + WATERBOX_GLSL)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         float ice = step(uIceLine, vLevel);
         vec2 mPush = vec2(0.0);
@@ -94,9 +96,18 @@ export function buildLakes(world, mirrorU = null) {
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
         float facing = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
         float fres = pow(1.0 - facing, 3.0);
+        float depth = max(0.0, vLevel - baseH(vIceUv));
+        float opticalDepth = depth / max(facing, 0.22);
+        float absorption = 1.0 - exp(-opticalDepth * 0.32);
         float mirK = uMirrorOn * (1.0 - smoothstep(1.0, 2.5, abs(vLevel - uMirrorY))) * (1.0 - ice);
         gl_FragColor.rgb = mix(mix(uDeep, gl_FragColor.rgb, 0.75), uSky, 0.12 + fres * 0.7 * (1.0 - 0.85 * mirK));
         gl_FragColor.a = mix(0.82, 0.98, fres);
+        if (uAlpine > 0.5 && ice < 0.5) {
+          // Shallow water exposes the bed; depth absorbs light before reflection.
+          vec3 body = mix(vec3(0.055, 0.145, 0.12), uDeep, absorption);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, body, 0.56);
+          gl_FragColor.a = mix(0.12, 0.96, absorption);
+        }
         vec4 silt = waterTint(vIceUv, gl_FragColor.rgb, uWT, waterState(vIceUv));   // what the water remembers: silt and foam
         if (ice < 0.5) { gl_FragColor.rgb = silt.rgb; gl_FragColor.a = max(gl_FragColor.a, silt.a); }
         if (mirK > 0.0) {
@@ -116,8 +127,9 @@ export function buildLakes(world, mirrorU = null) {
           float F = clamp(0.03 + 0.97 * pow(1.0 - facing, 5.0), 0.0, 1.0);
           F = clamp(F * 1.8 + 0.06, 0.0, 0.92) * (1.0 - 0.4 * rough) * edge.x * edge.y * step(0.0, mc.w);
           gl_FragColor.rgb = mix(gl_FragColor.rgb, refl, F * mirK);
-          gl_FragColor.a = max(gl_FragColor.a, F * mirK);
+          gl_FragColor.a = mix(gl_FragColor.a, 1.0, F * mirK);
         }
+
         if (ice > 0.5) gl_FragColor = vec4(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular * 0.12, 1.0);`);
   };
   // every lake in one mesh: one draw call for all the water
@@ -165,7 +177,9 @@ function draped(params, terrain) {
   mat.polygonOffset = true;
   mat.polygonOffsetFactor = -2;
   mat.polygonOffsetUnits = -4;
+  const detail = { value: treadDetail() };
   mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTreadDetail = detail;
     if (terrain) {
       Object.assign(shader.uniforms, terrain.uniforms);
       shader.uniforms.uCover = { value: terrain.coverMap };
@@ -192,7 +206,7 @@ function draped(params, terrain) {
         objectNormal = normalize(vec3(hx0 - hx1, 2.0 * e, hz0 - hz1));
       }` : '#include <beginnormal_vertex>')
       .replace('#include <begin_vertex>', terrain ? `
-      vec3 transformed = vec3(position.x, groundH(position.xz, 1.0) + 0.02, position.z);` : '#include <begin_vertex>')
+      vec3 transformed = vec3(position.x, groundH(position.xz, 1.0) + mix(0.06, 0.22, 1.0 - abs(aSide.x * 2.0 - 1.0)), position.z);` : '#include <begin_vertex>')
       // the tread lies in a dip below the coarser terrain triangles, which would shade it in stripes: look the shadow up 12 cm higher
       .replace('#include <shadowmap_vertex>', terrain ? `{
         vec4 wp0 = worldPosition;
@@ -214,53 +228,41 @@ function draped(params, terrain) {
         varying vec2 vLat;
         varying vec3 vTW;
         ${NOISE_GLSL}
-        ${WORLEY_GLSL}
-        // the tread's own fine relief, in metres: soil grain, clods and small stones (shading only: it tilts the normal)
-        float treadBump(vec2 p) {
-          return vnoise(p * 130.0) * 0.004 + vnoise(p * 55.0) * 0.004 + vnoise(p * 14.0) * 0.004;
-        }`)
+        uniform sampler2D uTreadDetail;`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
           // bump from the screen-space slope of treadBump (the usual derivative trick), fading out with distance
-          float nk = 1.0 - smoothstep(6.0, 30.0, distance(vTW, cameraPosition));
+          float nk = treadNear;
           vec3 sp = -vViewPosition, sdx = dFdx(sp), sdy = dFdy(sp);
           vec3 r1 = cross(sdy, normal), r2 = cross(normal, sdx);
           float det = dot(sdx, r1);
-          float bh = treadBump(vTW.xz);
+          float bh = tread.r * 0.017;
           vec3 grad = sign(det) * (dFdx(bh) * r1 + dFdy(bh) * r2);
           normal = normalize(abs(det) * normal - grad * nk);
         }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        {
-          vec2 p = vTW.xz;
-          float camD = distance(vTW, cameraPosition);
-          float e = abs(vSide.x - 0.5) * 2.0;
-          float n = vnoise(p * 1.7) * 0.6 + vnoise(p * 6.0) * 0.4;
-          if (e > 0.72 + n * 0.32) discard;                     // ragged edges
-          float road = vSide.y;
-          vec2 ld = normalize(vLat + 1e-5), ad = vec2(-ld.y, ld.x);
-          float uA = dot(p, ad), vL = dot(p, ld);
-          // scuffs and footfall streaks lie along the way, finer across it
-          float streak = vnoise(vec2(uA * 0.55, vL * 8.0)) * 0.55 + vnoise(vec2(uA * 2.1, vL * 21.0)) * 0.45;
-          float mid = 1.0 - smoothstep(0.0, 0.85, e);
-          // worn tread: packed, paler soil down the middle of a trail (two ruts on a road), darker duff and moss at the edges
-          float worn = road > 0.5 ? smoothstep(0.16, 0.0, abs(e - 0.5)) : mid;
-          float grain = vnoise(p * 150.0) * 0.6 + vnoise(p * 70.0) * 0.4, clod = vnoise(p * 9.0);
-          diffuseColor.rgb *= (mix(road > 0.5 ? 0.72 : 0.86, 1.0 + 0.12 * worn, road > 0.5 ? 1.0 : mid) * (0.9 + streak * 0.16) + (n - 0.5) * 0.2) * (0.74 + grain * 0.52) * (0.88 + clod * 0.24);
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.9, 0.95, 0.8), smoothstep(0.6, 0.95, e) * 0.45);
-          float nearK = 1.0 - smoothstep(10.0, 45.0, camD);
-          if (nearK > 0.0) {
-            // grit and scattered gravel, sizes all over the place, low contrast like real tread
-            vec4 w = worley(p / 0.025);
-            vec4 v = worley(p / 0.07 + 3.3);
-            float grit = smoothstep(0.45 * w.y + 0.1, 0.05, w.x) * step(w.y, 0.6);
-            float peb = smoothstep(0.32 * v.y + 0.08, 0.04, v.x) * step(v.y, mix(0.22, 0.4, road));
-            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 1.0 + peb * (v.y - 0.15) * 1.4) * nearK;
-            // fallen needles and flecks of bark lying across the tread, darker in the dip's edges
-            float fleck = smoothstep(0.86, 0.95, vnoise(vec2(uA * 52.0, vL * 38.0))) * smoothstep(0.1, 0.8, e);
-            diffuseColor.rgb *= 1.0 - fleck * 0.12 * nearK;
-          }
-        }`);
+        vec2 p = vTW.xz;
+        float camD = distance(vTW, cameraPosition);
+        float e = abs(vSide.x - 0.5) * 2.0;
+        float edge = vnoise(p * 2.6);
+        if (e > 0.75 + edge * 0.25) discard;
+        float road = vSide.y;
+        ${ALPINE && terrain ? 'if (road < 0.5 && camD < 175.0) discard;' : ''}
+        vec2 across = normalize(vLat + 1e-5), along = vec2(-across.y, across.x);
+        float streak = vnoise(vec2(dot(p, along) * 0.68, dot(p, across) * 9.0));
+        float mid = 1.0 - smoothstep(0.0, 0.85, e);
+        float worn = road > 0.5 ? 1.0 - smoothstep(0.0, 0.16, abs(e - 0.5)) : mid;
+        float patches = vnoise(p * 0.86 + 23.1);
+        float treadNear = 1.0 - smoothstep(9.0, 34.0, camD);
+        // Rotate the tile out of the world axes. Patch colour hides its boundaries and mipmaps soften grit at range.
+        vec2 gritUV = mat2(0.8, 0.6, -0.6, 0.8) * p * 1.2;
+        vec2 tread = texture2D(uTreadDetail, gritUV).rg;
+        float grit = (tread.r - 0.45) * 0.44 + (tread.g - 0.5) * 0.82;
+        float shade = 0.79 + 0.28 * patches + 0.18 * worn + 0.18 * (streak - 0.5);
+        diffuseColor.rgb *= shade + grit * treadNear;
+        vec3 edgeTint = mix(vec3(0.82, 0.87, 0.68), vec3(0.97, 0.96, 0.91), road);
+        diffuseColor.rgb *= mix(vec3(1.0), edgeTint, smoothstep(0.55, 0.96, e));
+      `);
   };
   mat.customProgramCacheKey = () => (terrain ? 'rawah-draped2' : 'rawah-draped-flat');
   return mat;
@@ -321,8 +323,77 @@ export function buildTrails(world, terrain) {
   const chunks = new ChunkSet(mergeGeometries(geos), mat, CHUNK_M, (m) => { m.receiveShadow = true; });
   group.add(chunks.group);
   group.add(buildCairns(world));
+  if (ALPINE) {
+    group.stones = buildTrailStones(world, terrain);
+    group.add(group.stones.group);
+  }
   group.chunks = chunks;
   return group;
+}
+
+function buildTrailStones(world, terrain) {
+  const rock = new THREE.OctahedronGeometry(1, 0);
+  const pos = [], centers = [], colors = [];
+  const source = rock.attributes.position;
+  for (const [id, t] of world.trails.entries()) {
+    if (t.kind !== 'trail' || !t.width) continue;
+    let next = 5 + hash2(id, 1) * 10, distance = 0;
+    for (let i = 1; i < t.dense.length; i++) {
+      const [ax, az] = t.dense[i - 1], [bx, bz] = t.dense[i];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 1e-4) continue;
+      const dx = (bx - ax) / len, dz = (bz - az) / len;
+      while (next < distance + len) {
+        const d = next - distance;
+        const side = (hash2(i, id, 72) < 0.5 ? -1 : 1) * t.width * 0.32;
+        const x = ax + dx * d - dz * side, z = az + dz * d + dx * side;
+        const count = hash2(i, id, 73) < 0.52 ? 1 : 3 + Math.floor(hash2(i, id, 74) * 3);
+        for (let j = 0; j < count; j++) {
+          const cx = x + dx * (hash2(i, id, 81 + j) - 0.5) * 0.62;
+          const cz = z + dz * (hash2(i, id, 89 + j) - 0.5) * 0.62;
+          const radius = 0.032 + 0.115 * hash2(i, id, 97 + j) ** 2;
+          const angle = hash2(i, id, 105 + j) * Math.PI * 2;
+          const c = Math.cos(angle), q = Math.sin(angle);
+          const y = world.height(cx, cz);
+          const tint = 0.83 + 0.34 * hash2(i, id, 114 + j);
+          for (let k = 0; k < source.count; k++) {
+            const u = source.getX(k) * radius, v = source.getZ(k) * radius * 0.72;
+            pos.push(cx + c * u - q * v, y + source.getY(k) * radius * 0.52 + radius * 0.15, cz + q * u + c * v);
+            centers.push(cx, y, cz);
+            colors.push(0.37 * tint, 0.305 * tint, 0.23 * tint);
+          }
+        }
+        next += 9 + hash2(i, id, 77) * 14;
+      }
+      distance += len;
+    }
+  }
+  rock.dispose();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aStoneRoot', new THREE.Float32BufferAttribute(centers, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(Array.from({ length: pos.length / 3 }, (_, i) => i));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, terrain.uniforms, {
+      uCover: { value: terrain.coverMap }, uExtent: { value: terrain.extent },
+    });
+    withAtmosphere(shader, { weather: 0.7 });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute vec3 aStoneRoot;
+        uniform sampler2D uCover;
+        uniform float uExtent;
+        ${HEIGHT_GLSL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        transformed.y += groundH(aStoneRoot.xz, 1.0) - aStoneRoot.y + 0.025;`);
+  };
+  mat.customProgramCacheKey = () => 'rawah-trail-stones';
+  const chunks = new ChunkSet(geo, mat, 48, (mesh) => { mesh.receiveShadow = true; });
+  geo.dispose();
+  return chunks;
 }
 
 function buildCairns(world) {
@@ -627,12 +698,20 @@ export function buildSigns(world, models) {
       for (const off of [2.6, -2.6, 4, -4, 6, 8]) {
         const gx = sx - (fz / fl) * off, gz = sz + (fx / fl) * off;
         const bk = world.nearestStream(gx, gz);
-        if ((bk.stream && bk.d < bk.stream.width / 2 + 1.2) || world.lakeAt(gx, gz)) continue;
+        const near = world.nearestTrail(gx, gz);
+        if ((bk.stream && bk.d < bk.stream.width / 2 + 1.2) || world.lakeAt(gx, gz) ||
+            (near.trail && near.d < near.trail.width / 2 + 1.35)) continue;
         place(landmark(models.wildernessSign, 2.4), gx, gz, -fx / fl, -fz / fl);
         break;
       }
       // the trailhead sign stands at the lot, on the car side
-      place(landmark(models.trailheadSign, 2.2), th.x + (fz / fl) * 6, th.z - (fx / fl) * 6, -fx / fl, -fz / fl);
+      for (const off of [6, 8, -6, -8]) {
+        const gx = th.x + (fz / fl) * off, gz = th.z - (fx / fl) * off;
+        const near = world.nearestTrail(gx, gz);
+        if (world.lakeAt(gx, gz) || (near.trail && near.d < near.trail.width / 2 + 1.25)) continue;
+        place(landmark(models.trailheadSign, 2.2), gx, gz, -fx / fl, -fz / fl);
+        break;
+      }
     }
   }
   mergeWood(group);

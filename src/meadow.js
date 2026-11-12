@@ -31,7 +31,7 @@ float meadowOpen(vec4 cov) { return (1.0 - cov.r) * (1.0 - cov.a) * (1.0 - cov.g
 /** After the near colour: the bare sandy patches, in the soil the trails use. Needs gx, gz (the ground's slope), p, camD, vWPos, uCover, uHasCover, uNoise, uExtent, uSnow, uSnowLine. */
 export const MEADOW_COLOR = /* glsl */ `
         {
-          float mdK = (1.0 - smoothstep(60.0, 240.0, camD)) * (1.0 - uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 40.0, vWPos.y));
+          float mdK = (1.0 - smoothstep(60.0, 240.0, camD)) * (1.0 - snowAt(vWPos.y));
           if (mdK > 0.0 && uHasCover > 0.5) {
             float open = meadowOpen(texture2D(uCover, p / uExtent + 0.5)) * smoothstep(0.62, 0.86, inversesqrt(gx * gx + gz * gz + 1.0));   // the lidar's own slope: wn has the pebble and photo normals in it by now
             float bare = meadowBare(p, vWPos.y) * open;
@@ -41,12 +41,12 @@ export const MEADOW_COLOR = /* glsl */ `
             float turfW = open * (1.0 - smoothstep(0.0, 0.5, bare)) * mdK * smoothstep(2500.0, 2900.0, vWPos.y);
             if (turfW > 0.002) {
               float lumT = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
-              vec3 tcol = mix(vec3(0.12, 0.14, 0.055), vec3(0.28, 0.23, 0.1), smoothstep(0.3, 0.65, n4));
+              vec3 tcol = mix(vec3(0.12, 0.18, 0.064), vec3(0.26, 0.229, 0.099), smoothstep(0.3, 0.65, n4));
               tcol = mix(tcol, vec3(0.28, 0.16, 0.08), smoothstep(0.7, 0.85, n1) * 0.6);
               diffuseColor.rgb = mix(diffuseColor.rgb, tcol * (0.55 + lumT * 1.5), turfW * 0.7);
             }
             if (bare > 0.002) {
-              vec3 sand = vec3(0.45, 0.31, 0.185) * (0.74 + n1 * 0.4) * (0.8 + n2 * 0.4);
+              vec3 sand = vec3(0.42, 0.302, 0.168) * (0.74 + n1 * 0.4) * (0.8 + n2 * 0.4);
               sand = mix(sand, sand * 1.45 + 0.02, smoothstep(0.74, 0.84, n3) * 0.75);   // a pebble here and there
               sand = mix(sand, sand * 0.62, smoothstep(0.8, 0.9, texture2D(uNoise, p * 41.0).r) * 0.7);   // and dark grit
               float rim = smoothstep(0.0, 0.5, bare) * (1.0 - smoothstep(0.5, 1.0, bare));

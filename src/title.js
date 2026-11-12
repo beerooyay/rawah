@@ -101,7 +101,7 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
   });
   pick.trailhead = (trailheads.find((t) => t.name.includes('West Branch')) || trailheads[0]).name;   // always west branch
 
-  // ---- who tryna come: chips for everyone you are not playing as; empty means the usual two
+  // ---- who tryna come: chips for everyone you are not playing as; empty means solo
   const crewAll = () => (pick.party == null ? names.filter((n) => n !== pick.character).slice(0, 2) : pick.party);
   const crewRow = el('div', 'crew-row');
   const card3 = document.querySelectorAll('.pick-card')[2];
@@ -112,8 +112,9 @@ export function buildTitle({ trailheads, pick, characters, onTime }) {
     for (const n of names.filter((x) => x !== pick.character)) {
       const b = el('button', 'togchip', cap(n));
       b.dataset.name = n;
-      b.onclick = () => { const cur = crewAll(); pick.party = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n]; b.classList.toggle('on'); };
-      b.classList.toggle('on', crewAll().includes(n));
+      const mark = (on) => { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); };
+      b.onclick = () => { const cur = crewAll(); const on = !cur.includes(n); pick.party = on ? [...cur, n] : cur.filter((x) => x !== n); mark(on); };
+      mark(crewAll().includes(n));
       crewRow.appendChild(b);
     }
   };

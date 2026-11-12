@@ -84,7 +84,9 @@ class Actor {
   constructor(party, name) {
     this.party = party; this.name = name;
     this.b = new Body();
-    this.char = new Character(party.scene, name, { lib: party.lib, placeholder: false, firstPerson: false });
+    this.group = new THREE.Group();
+    party.scene.add(this.group);
+    this.char = new Character(this.group, name, { lib: party.lib, placeholder: false, firstPerson: false });
     this.speed = 0; this.kick = new THREE.Vector3(); this.tmp = new THREE.Vector3();
     this.eye = new THREE.Vector3(); this.stuck = 0;
   }
@@ -159,8 +161,9 @@ export class Party {
     this.g = { x: 0, z: 0 };
     this.eye = new THREE.Vector3();
     this.ids = 1000;
-    const list = crew == null ? Object.keys(CHARACTERS).filter((n) => n !== player).slice(0, 2) : crew;   // [] means you picked nobody
-    this.actors = list.filter((n) => n !== player && CHARACTERS[n]).map((n) => new Actor(this, n));
+    this.cast = new Map();
+    this.actors = [];
+    this.player = player;
     this.dir = 0;                 // the way the player last walked
     this.placed = false;
     this.mode = 'follow'; this.t = 0; this.next = between(18, 30);
@@ -188,13 +191,50 @@ export class Party {
     this.onDrop = null;              // called with (x, y, z) for each dropping
     this.pins = new Map();           // actor -> { x, z }: walk there now (the opening cinematic steps them out of the cars)
     this.onEvent = null;             // called with (kind, vars) for everything main.js reports (the crew's scene log reads it)
+    this.setCrew(crew);
   }
+
+  setCrew(crew, pl = null) {
+    const available = Object.keys(CHARACTERS).filter((name) => name !== this.player);
+    const names = Array.isArray(crew) ? available.filter((name) => crew.includes(name)) : available.slice(0, 2);
+    if (names.length === this.actors.length && names.every((name, i) => name === this.actors[i].name)) return;
+    this.endDuo();
+    this.#endBusiness();
+    this.race = this.roam = this.go = this.hold = this._pin = null;
+    this.stance = 'together';
+    this.pins.clear();
+    this.talk.who = null; this.talk.until = 0;
+    this.talk.el?.classList.add('hidden');
+    for (const [name, a] of this.cast) {
+      a.group.visible = names.includes(name);
+      if (!a.group.visible) { a.boarding = a.riding = false; a.seat = null; }
+    }
+    this.actors = names.map((name) => {
+      let a = this.cast.get(name);
+      if (!a) {
+        a = new Actor(this, name);
+        a.char.ground = (x, z) => this.world.height(x, z);
+        this.cast.set(name, a);
+      }
+      if (pl && !a.active) {
+        a.place(pl.pos.x, pl.pos.z, pl.yaw);
+        this.rejoin(a, pl, names.indexOf(name));
+        a.char.update(0, a.b);
+      }
+      a.active = true;
+      return a;
+    });
+    for (const [name, a] of this.cast) a.active = names.includes(name);
+    if (!this.boarding && !this.riding) this.atv = null;
+  }
+
 
   // ------------------------------------------------------------ speech
   /** Show one of `kind`'s lines over whoever says it. Returns false when it is too soon to speak. */
   say(kind, vars = {}, who = null, { force = false, cool = 45 } = {}) {
     const now = performance.now() / 1000;
     if (!force && (now < this.talk.until - 0.5 || now - (this.lastSaid.any || -99) < 6 || (this.lastSaid[kind] || -999) + cool > now)) return false;
+    if (!this.actors.length) return false;
     const pool = LINES[kind];
     if (!pool) return false;
     const line = pick(pool).replace('{place}', vars.place || 'there');
@@ -247,6 +287,7 @@ export class Party {
 
   /** Say exactly this, now, over `who` (or the nearer friend). */
   tell(text, who = null, cool = 0) {
+    if (!this.actors.length) return;
     const now = performance.now() / 1000;
     this.talk.who = who || this.near(this.ctx.player?.pos || this.actors[0].b.pos);
     this.talk.text = text;
@@ -317,6 +358,7 @@ export class Party {
   // ------------------------------------------------------------ the together menu
   /** What you asked for from the menu. `goal` is { x, z, name } for a race. */
   command(what, goal = null) {
+    if (!this.actors.length) return;
     this.#endBusiness();
     this.roam = null;
     this.race = null;
@@ -417,6 +459,7 @@ export class Party {
   }
 
   update(dt, pl) {
+    if (!this.actors.length) return;
     if (!this.placed) this.gather(pl);
     const speed = Math.hypot(pl.vel.x, pl.vel.z);
     if (speed > 0.6 && !pl.action) this.dir += Math.atan2(Math.sin(yawTo(pl.vel.x, pl.vel.z) - this.dir), Math.cos(yawTo(pl.vel.x, pl.vel.z) - this.dir)) * Math.min(1, dt * 1.5);
@@ -666,6 +709,7 @@ export class Party {
 
   // ------------------------------------------------------------ doing something together
   startDuo(pl, forced = null, longer = false, dur = null) {
+    if (this.actors.length < 2) { this.next = between(30, 70); return; }
     const kind = forced || pick(['chat', 'chat', 'spar', 'spar', 'sit']);
     const sep = kind === 'sit' ? 1.1 : 1.8;
     // a spot a few metres out to one side of where you are looking, so you can watch
@@ -687,6 +731,7 @@ export class Party {
     this.t += dt;
     let left = 0;
     this.actors.forEach((a, i) => {
+      if (i >= this.duo.spots.length) { this.#trail(a, pl, dt); return; }
       const [x, z] = this.duo.spots[i];
       left = Math.max(left, a.goto(x, z, MEET_SPEED, 0.15, dt));
       a.b.face = false;
@@ -699,10 +744,11 @@ export class Party {
     const d = this.duo, [a, b] = this.actors;
     this.t += dt;
     if (Math.hypot(d.x - pl.pos.x, d.z - pl.pos.z) > 60 || pl.mode === 'swim') { this.endDuo(); return; }
-    for (const x of this.actors) x.stop();
+    a.stop(); b.stop();
+    for (const x of this.actors.slice(2)) this.#trail(x, pl, dt);
     if (d.kind === 'sit') {
       // side by side, looking out toward where you are
-      for (const x of this.actors) { x.face(pl.pos.x, pl.pos.z); x.b.resting = true; x.b.lookAt = null; }
+      for (const x of [a, b]) { x.face(pl.pos.x, pl.pos.z); x.b.resting = true; x.b.lookAt = null; }
     } else {
       a.face(b.x, b.z); b.face(a.x, a.z);
       a.b.lookAt = b.head; b.b.lookAt = a.head;

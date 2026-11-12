@@ -1,3 +1,4 @@
+import { treadDetail } from './tread.js';
 import * as THREE from 'three';
 import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
 import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR, BOXEL_COLOR } from './terrain.js';
@@ -6,6 +7,8 @@ import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
 import { Channels, CHANNEL_GLSL } from './channels.js';
 import { MEADOW_COLOR } from './meadow.js';
 import { CULL } from './culling.js';
+import { LOWPOLY, LOWPOLY_PARS, LOWPOLY_FACET, ALPINE_GLSL } from './lowpoly.js';
+import { ALPINE } from './alpine.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
 // A quadtree over the whole map picks, every frame, which nodes to draw and
@@ -53,7 +56,7 @@ function quadrantGeometries() {
   });
 }
 
-export const HEIGHT_GLSL = /* glsl */ `
+export const BASE_HEIGHT_GLSL = /* glsl */ `
 uniform highp usampler2D uHeight;
 uniform sampler2D uMask;
 uniform float uN, uCell, uHScale, uHOffset;
@@ -70,6 +73,10 @@ float baseH(vec2 xz) {
   float hb = gridH(i + ivec2(0, 1));
   return ha + f.y * (hb - ha) + f.x * (hc - hb);
 }
+`;
+
+export const HEIGHT_GLSL = /* glsl */ `
+${BASE_HEIGHT_GLSL}
 ${SCULPT_GLSL}
 ${CHANNEL_GLSL}
 float maskAt(vec2 xz) { return texture2D(uMask, (xz / uCell + uN * 0.5 + 0.5) / uN).r; }
@@ -106,17 +113,19 @@ export class CDLODTerrain {
     this.sculpt = world.sculpt = new Sculpt(world);
     this.channels = world.channels = new Channels(world);
     this.uniforms = {
-      ...this.sculpt.uniforms, ...this.channels.uniforms,
+      ...this.sculpt.uniforms, ...this.channels.uniforms, ...LOWPOLY,
       uHeight: { value: heightTex }, uMask: { value: maskTex },
       uN: { value: N }, uCell: { value: world.cell }, uHScale: { value: world.hScale }, uHOffset: { value: world.hOffset },
       uRanges: { value: this.ranges }, uGrid: { value: GRID }, uCam: { value: new THREE.Vector3() },
     };
     const mat = this.material = new THREE.MeshLambertMaterial();
-    if (detail) mat.defines = { NEAR_DETAIL: '' };
+    // the alpine look draws its own ground detail (lowpoly.js): leaving out the photographic soil and mountain sets keeps the shader under the GPU's 16 textures
+    if (detail && !ALPINE) mat.defines = { NEAR_DETAIL: '' };
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
+      if (ALPINE) shader.uniforms.uTreadDetail = { value: treadDetail() };
       albedoUniforms(shader, colorMap, world.extent, noise, coverMap);
-      withAtmosphere(shader, { weather: 1 });
+      withAtmosphere(shader, { weather: 1, sharedNoise: true });
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           attribute vec4 nodeA;
@@ -155,13 +164,21 @@ export class CDLODTerrain {
           varying vec2 vChG;
           ${ALBEDO_UNIFORMS}
           ${HEIGHT_GLSL}
-          ${WORLEY_GLSL}`)
+          ${ALPINE ? 'uniform sampler2D uTreadDetail;\n' + ALPINE_GLSL : WORLEY_GLSL + LOWPOLY_PARS + LOWPOLY_FACET}`)
         .replace('#include <normal_fragment_begin>', `
           float camD = length(vWPos - cameraPosition);
-          float e = max(uCell * 0.55, camD * 0.0025);
+          float e = ${ALPINE ? 'uCell * 0.55' : 'max(uCell * 0.55, camD * 0.0025)'};
           vec2 p = vWPos.xz;
           float gx = (baseH(p + vec2(e, 0.0)) - baseH(p - vec2(e, 0.0))) / (2.0 * e);
           float gz = (baseH(p + vec2(0.0, e)) - baseH(p - vec2(0.0, e))) / (2.0 * e);
+          ${ALPINE ? `float turfY = inversesqrt(1.0 + gx * gx + gz * gz);
+          if (camD > 350.0) {
+            float se = max(e, camD * 0.006);
+            vec2 broad = vec2(baseH(p + vec2(se, 0.0)) - baseH(p - vec2(se, 0.0)),
+                              baseH(p + vec2(0.0, se)) - baseH(p - vec2(0.0, se))) / (2.0 * se);
+            float blend = smoothstep(350.0, 1000.0, camD);
+            gx = mix(gx, broad.x, blend); gz = mix(gz, broad.y, blend);
+          }` : ''}
           if (camD < 160.0) {
             float rock = rockAt(p), amp = reliefAmp(rock, maskAt(p)), sp = camD * 0.004, de = 0.35;
             float k = 1.0 - smoothstep(90.0, 160.0, camD);
@@ -178,14 +195,51 @@ export class CDLODTerrain {
           }
           gx += vChG.x; gz += vChG.y;   // the bank you are standing on (from the vertex shader: no sampler of its own here)
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
+          ${ALPINE ? '' : `
           float mtnW = 0.0;
           #ifdef NEAR_DETAIL
           ${NEAR_NORMAL}
           #endif
+          vec2 lpA = p, lpAN = p, lpB = p;
+          float lpW = 0.0, lpF = 1.0, lpT = 0.0;
+          if (uLowPoly > 0.5) {
+            wn = lpNormal(p, camD, lpA, lpAN, lpW, lpB, lpF, lpT);
+            mtnW = 0.0;
+            #ifdef NEAR_DETAIL
+            nearK = 0.0;
+            #endif
+          }`}
           float faceDirection = 1.0;
           vec3 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
           vec3 nonPerturbedNormal = normal;
+          ${ALPINE ? `vec2 groundBoxel = texture2D(uBoxel, p / uExtent + 0.5).rg;
+          diffuseColor.rgb = alColor(vWPos, wn, turfY, camD, groundBoxel);
+          float trailDistance = trailDistances(p).y;
+          float tread = (1.0 - smoothstep(-0.12, 0.30, trailDistance)) * (1.0 - smoothstep(165.0, 178.0, camD));
+          if (tread > 0.001) {
+            vec2 uv = mat2(0.8, 0.6, -0.6, 0.8) * p * 1.2;
+            vec2 gravel = texture2D(uTreadDetail, uv).rg;
+            float soilVariation = texture2D(uNoise, p / 6.2).r;
+            float grit = (gravel.r - 0.45) * 0.37 + (gravel.g - 0.5) * 0.63;
+            vec3 dirt = mix(vec3(0.32, 0.232, 0.137), vec3(0.46, 0.35, 0.215), soilVariation);
+            diffuseColor.rgb = mix(diffuseColor.rgb, dirt * (1.0 + grit), tread);
+            vec3 pos = -vViewPosition;
+            vec3 r1 = cross(dFdy(pos), normal), r2 = cross(normal, dFdx(pos));
+            float det = dot(dFdx(pos), r1);
+            float bump = gravel.r * 0.012;
+            vec3 grad = sign(det) * (r1 * dFdx(bump) + r2 * dFdy(bump));
+            float relief = tread * (1.0 - smoothstep(7.0, 32.0, camD));
+            normal = normalize(normal - grad * relief / max(abs(det), 0.000001));
+            nonPerturbedNormal = normal;
+          }` : `
           ${ALBEDO}
+          if (uLowPoly > 0.5) {
+            vec3 lpc = lpColor(lpA, lpF, wn, uGreen);
+            if (lpW > 0.0) lpc = mix(lpc, lpColor(lpAN, lpF, wn, uGreen), lpW);
+            if (lpT > 0.0) lpc = mix(lpc, lpColor(lpB, lpF * 4.0, wn, uGreen), lpT);
+            lpc *= 0.78 + 0.34 * max(dot(wn, vec3(0.32, 0.87, 0.37)), 0.0);
+            diffuseColor.rgb = lpc;
+          }`}
           // a face you carved: the satellite image is stretched straight down it, so lay bare earth with bedding lines instead
           if (editSlope > 0.2) {
             float ek = smoothstep(0.2, 0.8, editSlope) * (1.0 - smoothstep(200.0, 900.0, camD));
@@ -194,11 +248,12 @@ export class CDLODTerrain {
             vec3 earth = mix(vec3(0.33, 0.26, 0.2), vec3(0.5, 0.41, 0.31), bed) * (0.85 + grit * 0.3);
             diffuseColor.rgb = mix(diffuseColor.rgb, earth, ek * 0.85);
           }
+          ${ALPINE ? '' : `
           #ifdef NEAR_DETAIL
           ${NEAR_COLOR}
           #endif
-          ${MEADOW_COLOR}
-          ${BOXEL_COLOR}`);
+          ${MEADOW_COLOR}`}
+          ${ALPINE ? 'diffuseColor.rgb *= 1.0 - groundBoxel.r * 0.24;' : BOXEL_COLOR}`);
     };
     mat.customProgramCacheKey = () => 'rawah-cdlod';
 

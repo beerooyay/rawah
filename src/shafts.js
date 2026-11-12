@@ -103,7 +103,7 @@ void main() {
   }
   lit *= terrainLit(P);               // a ridge between the air and the sun puts it in shadow
   vec2 cp = P.xz + uSunWorld.xz / max(uSunWorld.y, 0.15) * (uCloudAlt - P.y);
-  lit *= 1.0 - uCloudShade * cloudDensity(cp, 2);                       // and the cloud deck's shadow
+  lit *= 1.0 - uCloudShade * cloudDensity(cp);                       // and the cloud deck's shadow
   float cs = dot(rd, uSunWorld);
   float phase = hg(cs, 0.88) * 0.3 + hg(cs, 0.95) * 0.12;                 // a broad forward lobe and a tight glow around the sun itself
   vec3 S = uSunCol * (lit * phase * dens * delta * 1.5 * uGain);

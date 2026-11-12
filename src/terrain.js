@@ -4,6 +4,7 @@ import { SOIL, SOIL_PARS, SOIL_NORMAL, SOIL_COLOR } from './soil.js';
 import { MTN, MTN_PARS, MTN_NORMAL, MTN_COLOR } from './mountain.js';
 import { MEADOW_GLSL } from './meadow.js';
 import { chunkGeometry } from './culling.js';
+import { LOWPOLY, LOWPOLY_PARS, ALPINE_GLSL } from './lowpoly.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
 // and the distant horizon mesh. The near terrain itself is cdlod.js.
@@ -163,7 +164,7 @@ float blocky(vec4 w) {
 export const NEAR_NORMAL = /* glsl */ `
         ${MTN_NORMAL}
         // nothing of this shows through snow cover
-        float nearK = (1.0 - smoothstep(18.0, 60.0, camD)) * (1.0 - uSnow * smoothstep(uSnowLine - 60.0, uSnowLine + 40.0, vWPos.y));
+        float nearK = (1.0 - smoothstep(18.0, 60.0, camD)) * (1.0 - snowAt(vWPos.y));
         float gStone = 0.0, gId = 0.0, gRing = 0.0, gRocky = 0.0, gForest = 0.0;
         if (nearK > 0.0) {
           vec4 gCov = texture2D(uCover, p / uExtent + 0.5);
@@ -236,17 +237,26 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
   const mat = new THREE.MeshLambertMaterial();
   mat.onBeforeCompile = (shader) => {
     albedoUniforms(shader, colorMap, extent, noise, coverMap);
-    withAtmosphere(shader, { weather: 1 });
+    Object.assign(shader.uniforms, LOWPOLY);
+    withAtmosphere(shader, { weather: 1, sharedNoise: true });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNrm = mat3(modelMatrix) * objectNormal;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n${ALBEDO_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n${ALBEDO_UNIFORMS}\n${LOWPOLY_PARS}\n${ALPINE_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float camD = length(vWPos - cameraPosition);
         vec3 wn = normalize(vWNrm);
-        float mtnW = 0.0;
-        ${ALBEDO}
+        // low poly: the horizon mesh's own triangles are the facets
+        if (uLowPoly > 0.5 && uAlpine < 0.5) wn = normalize(cross(dFdx(vWPos), dFdy(vWPos))) * sign(cross(dFdx(vWPos), dFdy(vWPos)).y + 1e-9);
+        if (uAlpine > 0.5) {
+          diffuseColor.rgb = alColor(vWPos, wn, wn.y, camD, vec2(0.0));
+        } else if (uLowPoly > 0.5) {
+          diffuseColor.rgb = lpColor(vWPos.xz, max(240.0, camD * 0.04), wn, uGreen) * (0.78 + 0.34 * max(dot(wn, vec3(0.32, 0.87, 0.37)), 0.0));
+        } else {
+          float mtnW = 0.0;
+          ${ALBEDO}
+        }
         // past the baked map the satellite colour has run out: paint invented ground, rock on the crests
         // and dark timber in the folds, fading in over the first few km
         float outK = smoothstep(0.0, 1500.0, max(abs(vWPos.x), abs(vWPos.z)) - uExtent * 0.5);
@@ -255,7 +265,7 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
           vec3 timber = vec3(0.16, 0.3, 0.14) * (0.8 + n2 * 0.4);
           vec3 rock = texture2D(uRock, vWPos.xz / 700.0).rgb * vec3(1.08, 0.98, 0.86);
           vec3 tone = mix(timber, rock, smoothstep(0.42, 0.62, n1 + (1.0 - wn.y) * 0.6));
-          tone = mix(tone, vec3(0.8, 0.82, 0.86), smoothstep(0.7, 0.85, wn.y) * smoothstep(0.55, 0.75, n1) * uSnow);
+          tone = mix(tone, vec3(0.8, 0.82, 0.86), smoothstep(0.7, 0.85, wn.y) * smoothstep(0.55, 0.75, n1) * snowAt(vWPos.y));
           diffuseColor.rgb = mix(diffuseColor.rgb, tone, outK);
         }
         {
@@ -263,6 +273,11 @@ export function terrainMaterial(colorMap, extent, noise, coverMap = null) {
           ${BOXEL_COLOR}
         }`);
   };
+  mat.onBeforeCompile = ((inner) => (shader) => {
+    inner(shader);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+      if (uLowPoly > 0.5 && uAlpine < 0.5) { normal = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition))); nonPerturbedNormal = normal; }`);
+  })(mat.onBeforeCompile);
   mat.customProgramCacheKey = () => 'rawah-far-terrain';
   return mat;
 }
