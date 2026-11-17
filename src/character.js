@@ -103,6 +103,7 @@ export class Character {
     this.hand = null; this.tool = 'fists'; this.toolObj = null; this.grip = null;
     this.target = null; this.fitted = new Map();
     this.arms = []; this.reachW = 0;
+    this.lookBones = []; this.lookApplied = false;
     this.head = null; this.neck = null; this.lookYaw = 0; this.lookPitch = 0; this.lookW = 0;
     this.#load(CHARACTERS[name] ? name : 'blaize');
   }
@@ -128,6 +129,7 @@ export class Character {
       this.target = this.#measure(model);
       this.mixer = new THREE.AnimationMixer(model);
       this.head = model.getObjectByName('mixamorigHead'); this.neck = model.getObjectByName('mixamorigNeck');
+      this.lookBones = [[this.neck, 0.4], [this.head, 0.6]].filter(([bone]) => bone).map(([bone, share]) => ({ bone, share, base: bone.quaternion.clone() }));
       this.hand = model.getObjectByName('mixamorigRightHand');
       this.hips = model.getObjectByName('mixamorigHips');
       this.arms = [['Left', -1], ['Right', 1]].map(([side, sx]) => ({ sx, bones: ['Arm', 'ForeArm', 'Hand'].map((n) => model.getObjectByName(`mixamorig${side}${n}`)) })).filter((a) => a.bones.every(Boolean));
@@ -254,6 +256,12 @@ export class Character {
 
   update(dt, h) {
     if (!this.ready) { this.fallback?.update(dt, h); return; }
+    // Restore before the mixer: constant/held tracks may skip unchanged writes.
+    // Otherwise yesterday's procedural turn becomes today's animation baseline.
+    if (this.lookApplied) {
+      for (const { bone, base } of this.lookBones) bone.quaternion.copy(base);
+      this.lookApplied = false;
+    }
     const speed = Math.hypot(h.vel.x, h.vel.z);
     this.vs += (speed - this.vs) * Math.min(1, dt * 10);
     // walking backwards: face the way you look instead of turning round
@@ -361,7 +369,7 @@ export class Character {
   }
 
   #look(dt, h) {
-    if (!this.head || !this.neck || !this.cur) return;   // the turn is added on top of a clip's pose; with no clip driving the bones it would pile up every frame
+    if (!this.head || !this.neck || !this.cur) return;
     const t = h.lookAt, busy = h.action || h.mode !== 'walk' || h.stance !== 'stand' || !h.grounded || this.vs > 0.7;
     let yaw = 0, pitch = 0, on = 0;
     if (t && !busy) {
@@ -376,7 +384,9 @@ export class Character {
     const k = Math.min(1, dt * 5);
     this.lookYaw += (yaw - this.lookYaw) * k; this.lookPitch += (pitch - this.lookPitch) * k; this.lookW += (on - this.lookW) * k;
     if (this.lookW < 0.01) return;
-    for (const [bone, share] of [[this.neck, 0.4], [this.head, 0.6]]) {
+    this.lookApplied = true;
+    for (const { bone, share, base } of this.lookBones) {
+      base.copy(bone.quaternion);
       // measured against the rig: turning about the bone's Y needs the opposite sign to the model's own yaw
       _q1.setFromAxisAngle(Y_AXIS, -this.lookYaw * share * this.lookW);
       _q2.setFromAxisAngle(X_AXIS, -this.lookPitch * share * this.lookW);

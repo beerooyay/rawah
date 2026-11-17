@@ -820,3 +820,18 @@ button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 
 .pz-tlbar button { font: 500 var(--t-xs) var(--sans); color: var(--dim); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); border-radius: 8px; padding: 4px 9px; cursor: pointer; }
 .pz-tlbar button:hover { color: var(--ink); }
 .pz-tlbar small { color: var(--faint); margin-left: auto; }
+
+.crew-chat { box-sizing:border-box; width:min(600px,calc(100vw - 24px)); max-height:85dvh; color:#f4f2ec; background:#111b20; border:1px solid #65706b; border-radius:24px; padding:24px; box-shadow:0 20px 90px #0008; font-family:inherit; }
+.crew-chat::backdrop { background:#06101599; }
+.crew-chat header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.crew-chat small { color:#f5d1b8; letter-spacing:.14em; }
+.crew-chat h2 { margin:6px 0 12px; }
+.crew-chat button { cursor:pointer; border:1px solid #ffffff30; border-radius:18px; padding:10px 16px; background:#314b55; color:white; font:inherit; }
+.crew-chat button:disabled { opacity:.5; cursor:wait; }
+.crew-chat-log { min-height:100px; max-height:40dvh; overflow:auto; overflow-wrap:anywhere; line-height:1.5; }
+.crew-chat-log strong { color:#f5d1b8; }
+.crew-chat-status { min-height:1.5em; color:#b8cbd1; font-size:.9em; }
+.crew-chat form label { display:block; margin-bottom:8px; }
+.crew-chat form div { display:flex; gap:8px; }
+.crew-chat input { min-width:0; flex:1; border:1px solid #ffffff40; border-radius:12px; padding:12px; background:#ffffff0c; color:white; font:inherit; }
+.crew-chat :focus-visible { outline:2px solid #f5d1b8; outline-offset:3px; }

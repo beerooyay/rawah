@@ -1,3 +1,5 @@
+import { CrewChat } from './crew-chat.js';
+import { dialogueMessages } from './crew-dialogue.js';
 import * as THREE from 'three';
 import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
@@ -291,6 +293,34 @@ const party = new Party(world, flora, scene, avatar.lib, playerName, settings.pa
 const crewTalk = new CrewTalk(party, settings);   // what they sense, and when it is worth a line (src/crew.js, from Blaize's companions)
 crewTalk.on = settings.crew;
 party.onEvent = (kind, vars) => crewTalk.event(kind, vars);
+const crewChat = new CrewChat({
+  onOpen(a) {
+    party.engage(a); state.paused = true; keys.clear(); pressed.clear();
+    document.body.classList.remove('playing'); document.exitPointerLock?.();
+  },
+  onClose() { party.release(); keys.clear(); pressed.clear(); pause(false); },
+  async reply(a, history, signal) {
+    const name = a.name[0].toUpperCase() + a.name.slice(1);
+    const context = crewTalk.crew.scene().slice(-4000);
+    let content;
+    if (DEV) {
+      const result = await crewTalk.backend.chat(dialogueMessages(name, history, context), { maxTokens: 180, temperature: 0.85 });
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      content = result.content;
+    } else {
+      const response = await fetch('/api/crew', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, history, context }), signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not reach the crew. Try again.');
+      content = result.content;
+    }
+    if (typeof content !== 'string' || !content.trim()) throw new Error('No reply came through. Try again.');
+    content = content.trim().slice(0, 800);
+    crewTalk.crew.playerSays(playerName, history.at(-1).content);
+    crewTalk.crew.event(name + ' replied: ' + content);
+    return content;
+  },
+});
+
 avatar.ground = (x, z) => world.height(x, z);                           // feet meet the slope
 for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
@@ -535,6 +565,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sta
 // a Mac's F keys are brightness and volume unless Fn is held, so the developer tools also answer to Option + a letter
 const ALT_KEYS = { KeyE: 'F2', KeyP: 'F3', KeyF: 'F4' };
 input.onPress = (code) => {
+  if (crewChat.open) { if (code === 'Escape') crewChat.close(); return; }
   if (DEV && (keys.has('AltLeft') || keys.has('AltRight')) && ALT_KEYS[code]) code = ALT_KEYS[code];
   if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { poser?.toggle(false); editor.toggle(); return; }
   if (code === 'F4' && perfhud) { perfhud.toggle(); return; }
@@ -563,6 +594,7 @@ input.onPress = (code) => {
   if (code === 'Escape' && (input.mode !== 'kbm' || state.paused)) pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
+  if (crewChat.open) { if (name === 'B' || name === 'Start') crewChat.close(); else menuPad(crewChat.el, name); return; }
   if (recorder.pad(name)) return;
   if (togetherOpen) {
     if (name === 'B' || name === 'Start') toggleTogether(false);
@@ -582,7 +614,7 @@ input.onPad = (name, stickOnly) => {
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused && !editor?.active && !poser?.active) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !editor?.active && !poser?.active && !state.sleeping && !state.travel && !state.intro) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !editor?.active && !poser?.active && !state.sleeping && !state.travel && !state.intro && !crewChat.open) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -687,11 +719,11 @@ function renderControls(el, mode) {
   const rows = {
     kbm: [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'], [k('X'), 'Crouch, lie down'],
       [t('Click'), 'Punch, swing, lift'], [t('Right click'), 'Hook, sink'], [k('E'), 'Pick up, grab, level'], [k('T'), 'Tool'], [k('V'), 'Camera'],
-      [k('C') + k('F'), 'Tent, campfire (a log feeds it)'], [k('U'), 'Sit, ride, take firewood, pour, eat'], [k('B'), 'Cast a line'], [k('N'), 'Marshmallow'], [k('K'), 'Cook: coffee, then breakfast'], [k('O'), 'Sip coffee'], [k('J'), 'Drop firewood'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('`'), 'Record a clip'], [k('Esc'), 'Pause']],
+      [k('C') + k('F'), 'Tent, campfire (a log feeds it)'], [k('U'), 'Talk, sit, ride, take firewood, pour, eat'], [k('B'), 'Cast a line'], [k('N'), 'Marshmallow'], [k('K'), 'Cook: coffee, then breakfast'], [k('O'), 'Sip coffee'], [k('J'), 'Drop firewood'], [k('M'), 'Map'], [k('H'), 'Call the friends together'], [k('P'), 'Play as the next friend'], [k('`'), 'Record a clip'], [k('Esc'), 'Pause']],
     pad: [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Pick up, grab, level'], [p('↑'), 'Tool'],
-      [p('LB'), 'Together'], [p('Y', 'y'), 'Sit, ride, take firewood, pour, eat'], [p('↓'), 'Cast a line'], [p('←'), 'Marshmallow, or sip coffee'], [p('L3'), 'Cook, or drop firewood'], [p('R3'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Guide'), 'Record a clip'], [p('Menu'), 'Pause']],
+      [p('LB'), 'Together'], [p('Y', 'y'), 'Talk, sit, ride, take firewood, pour, eat'], [p('↓'), 'Cast a line'], [p('←'), 'Marshmallow, or sip coffee'], [p('L3'), 'Cook, or drop firewood'], [p('R3'), 'Camera'], [p('X', 'x'), 'Tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest'], [p('D-pad'), 'Crouch, punch, hook'], [p('View'), 'Map'], [p('Guide'), 'Record a clip'], [p('Menu'), 'Pause']],
     touch: [['Left thumb', 'Walk'], ['Right thumb', 'Look'], [t('Hop') + t('Fast'), 'Hop, hike fast'], [t('Duck'), 'Crouch'], [t('Punch'), 'Punch, swing, lift'], [t('Hook'), 'Hook, sink'],
-      [t('Grab'), 'Pick up, grab, level'], [ t('Ride'), 'Sit, ride, take firewood'], [t('Fish'), 'Cast a line'], [t('Roast'), 'Marshmallow'], [t('Cook') + t('Sip') + t('Drop'), 'Camp cooking, coffee, firewood'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map'], [t('Record'), 'Record a clip (top right)']],
+      [t('Grab'), 'Pick up, grab, level'], [ t('Ride'), 'Talk, sit, ride, take firewood'], [t('Fish'), 'Cast a line'], [t('Roast'), 'Marshmallow'], [t('Cook') + t('Sip') + t('Drop'), 'Camp cooking, coffee, firewood'], [t('Tool'), 'Tool'], [t('Together'), 'Call the friends together'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest'], [t('Map'), 'Map'], [t('Record'), 'Record a clip (top right)']],
   };
   const names = { kbm: 'Keyboard', pad: 'Controller', touch: 'Touch' };
   el.innerHTML = `<div class="seg" role="tablist">${Object.keys(names).map((m) => `<button data-mode="${m}" class="${m === mode ? 'on' : ''}">${names[m]}</button>`).join('')}</div>
@@ -1132,8 +1164,8 @@ function act() {
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { const c = wood.carried; if (wood.interact(p)) { net.event('wood-use', { x: p.x, y: p.y, z: p.z, c }); save(); } }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
-      else if (party.hold) party.release();
-      else if (party.engageable(p, hiker.yaw)) party.engage(party.engageable(p, hiker.yaw));
+      else if (party.hold) crewChat.show(party.hold.a);
+      else if (party.engageable(p, hiker.yaw)) crewChat.show(party.engageable(p, hiker.yaw));
       else if (si >= 0) sitDown(si);
     }
   } else if (state.seat >= 0 && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k))) standUp();
@@ -1966,7 +1998,7 @@ function tick(dt, draw = true) {
   }, (rect) => { shaped(rect); if (Number.isFinite(rect.x0)) net.event('sculpt', world.sculpt.save(rect)); }, sc && sc.aim);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
-  if (state.started) crewTalk.update(live ? dt : 0, { player: hiker.pos, storm: weather.storm, wind: WIND_DIR });
+  if (state.started && !crewChat.open) crewTalk.update(live ? dt : 0, { player: hiker.pos, storm: weather.storm, wind: WIND_DIR });
   if (state.started && !state.paused && !state.travel && !state.sleeping) {
     for (const e of wood.update(dt, { pos: hiker.pos, yaw: hiker.yaw }, { axe: props.tool === 'axe', carryVisible: state.seat < 0 && !atv.riding && !state.cut, heading: avatar.heading, first: rig.mode === 'first' })) {
       if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -2252,7 +2284,7 @@ function tick(dt, draw = true) {
     if (!hint && state.seat < 0 && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[U] sit · [N] roast a marshmallow';
     if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: p, yaw: hiker.yaw, mode: hiker.mode })) hint = '[B] cast a line';
     if (!hint && !atv.riding && atv.near(p)) hint = '[U] ride the quad';
-    if (!hint && party.hold) hint = `[U] let ${cap(party.hold.a.name)} go`;
+    if (!hint && party.hold) hint = `[U] talk to ${cap(party.hold.a.name)}`;
     if (!hint && !atv.riding && hiker.mode === 'walk' && state.seat < 0) { const bud = party.engageable(p, hiker.yaw); if (bud) hint = `[U] talk to ${cap(bud.name)}`; }
     if (!hint && route.on) hint = `Route to ${route.name} · ${route.left < 950 ? `${Math.round(route.left / 10) * 10} m` : `${(route.left / 1000).toFixed(1)} km`}`;
     if (weather.storm > 0.4 && p.y > cv.treeline - 40) hint = 'Lightning on the crest. Get below treeline.';
@@ -2336,7 +2368,7 @@ if (DEV) {
     benchRain(o) { return boxels.benchRain(o); },
     plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, net, get editor() { return editor; }, get poser() { return poser; }, playPose: async (name) => { await avatar.lib.load([`pose/${name}`]); hiker.emote = `pose/${name}`; }, forbs, shrubs, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
-    begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, recorder, together: (o) => toggleTogether(o),
+    begin, tick, save, hiker, rig, avatar, party, crewChat, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, recorder, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); flora.update(hiker.pos, Infinity); },
