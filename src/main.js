@@ -1,6 +1,6 @@
 import { cleanCompanionReply } from './crew.js';
 import { CrewChat } from './crew-chat.js';
-import { dialogueMessages } from './crew-dialogue.js';
+import { dialogueMessages, dialogueTurn } from './crew-dialogue.js';
 import * as THREE from 'three';
 import { World } from './world.js';
 import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTexture, ROCK, BOXEL } from './terrain.js';
@@ -318,7 +318,7 @@ const crewChat = new CrewChat({
     }).slice(0, 4000);
     let content;
     if (DEV) {
-      const result = await crewTalk.backend.chat(dialogueMessages(name, history, context), { maxTokens: 280, temperature: 0.9 });
+      const result = await crewTalk.backend.chat(dialogueMessages(name, history, context), { maxTokens: dialogueTurn(history).maxTokens, temperature: 0.9 });
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       content = result.content;
     } else {

@@ -30,3 +30,15 @@ per-instance burst limit; it is not a durable global quota or authentication sys
 Checks: `node tools/tests/crew-api.mjs`, changed-file syntax checks, and browser checks for U/open,
 typing isolation, send, failure/retry, close, and separate histories. A simulated provider checks plumbing;
 a real deployment response is required to verify live model availability and personality.
+
+Direct dialogue now routes the latest turn before assembling context. Casual conversation gets
+only the small scene snapshot; explicit gameplay questions get destinations and controls.
+Previous dialogue is not repeated as world events. Requests for brevity persist through the
+retained conversation, while serious disclosures suppress roasting. This is a lightweight
+heuristic, not a second classifier call. Output budgets vary with the turn; there are no extra
+rewrite calls. Corey retains his clean-language guard and occasional allusion rule.
+
+Run `node tools/tests/crew-dialogue.mjs` for routing regressions. For a manual multi-turn model
+comparison, run `python3 tools/tests/crew-dialogue-eval.py [model-id ...]`; it prompts for a key
+without echo and saves only test transcripts under `output/playwright/`. Judge continuity,
+repetition, tone changes and useful answers, not just whether a single joke contains profanity.

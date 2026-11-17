@@ -27,7 +27,7 @@ try {
   const response = await request(body);
   assert.equal(response.status, 200); assert.equal(response.body.source, 'nemotron');
   assert.equal(upstream.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
-  assert.equal(upstream.body.max_tokens, 280);
+  assert.equal(upstream.body.max_tokens, 220);
   assert.match(upstream.body.messages[0].content, /You are Trey/);
   assert.match(upstream.body.messages[0].content, /ALL CAPS/);
   assert.equal(upstream.body.messages.at(-1).content, body.history[0].content);
