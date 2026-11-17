@@ -23,7 +23,7 @@ started may still finish. No microphone or speech synthesis is used.
 `src/crew-chat.js` owns the panel; `src/crew-dialogue.js` shares the personality prompt between local
 and hosted inference. Local development uses the existing model backend. Production POSTs to
 `api/crew.mjs`, which requires the encrypted Vercel production variable `NVIDIA_API_KEY` and optionally
-`RAWAH_CREW_MODEL` (default `nvidia/nemotron-3.5-bolt-e4b`). Never put the key in source or public settings.
+`RAWAH_CREW_MODEL` (default `nvidia/nemotron-3.5-super-vl-120b-a12b` for direct chat; ambient/local chatter still uses Bolt unless configured otherwise). Never put the key in source or public settings.
 The endpoint fixes the upstream URL, bounds messages and response tokens, and applies a best-effort
 per-instance burst limit; it is not a durable global quota or authentication system.
 
