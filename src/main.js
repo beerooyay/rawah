@@ -1,3 +1,4 @@
+import { cleanCompanionReply } from './crew.js';
 import { CrewChat } from './crew-chat.js';
 import { dialogueMessages } from './crew-dialogue.js';
 import * as THREE from 'three';
@@ -314,7 +315,7 @@ const crewChat = new CrewChat({
       content = result.content;
     }
     if (typeof content !== 'string' || !content.trim()) throw new Error('No reply came through. Try again.');
-    content = content.trim().slice(0, 800);
+    content = cleanCompanionReply(content.trim().slice(0, 800), name);
     crewTalk.crew.playerSays(playerName, history.at(-1).content);
     crewTalk.crew.event(name + ' replied: ' + content);
     return content;

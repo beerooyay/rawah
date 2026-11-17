@@ -1,3 +1,4 @@
+import { cleanCompanionReply } from '../src/crew.js';
 import { dialogueMessages } from '../src/crew-dialogue.js';
 
 // A bounded companion endpoint, never a general-purpose credentialed proxy.
@@ -36,6 +37,6 @@ export default async function handler(req, res) {
     if (!response.ok) { console.warn('crew upstream status', response.status); return res.status(502).json({ error: 'Nemotron could not answer right now. Try again shortly.' }); }
     const data = await response.json(), content = data.choices?.[0]?.message?.content?.trim();
     if (!content) throw new Error('Empty reply');
-    return res.status(200).json({ content: content.slice(0, 800), source: 'nemotron' });
+    return res.status(200).json({ content: cleanCompanionReply(content.slice(0, 800), b.name), source: 'nemotron' });
   } catch { return res.status(502).json({ error: 'The connection to Nemotron timed out. Try again.' }); }
 }

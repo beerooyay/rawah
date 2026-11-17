@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import handler from '../../api/crew.mjs';
+import { coreyStyle, cleanCompanionReply } from '../../src/crew.js';
 import { dialogueMessages } from '../../src/crew-dialogue.js';
 let upstream;
 const originalFetch = globalThis.fetch;
@@ -36,6 +37,11 @@ try {
   assert.equal((await request(body)).status, 429);
   const messages = dialogueMessages('Corey', Array.from({length:30},()=>({role:'user',content:'hi'})));
   assert.equal(messages.length, 17);
+  assert.equal(cleanCompanionReply('WHAT THE FUCK, asshole. This is bullshit.', 'Corey'), 'WHAT THE FRICK, goober. This is crap.');
+  assert.equal(cleanCompanionReply('fuck', 'Grant'), 'fuck');
+  assert.match(coreyStyle(() => 0.049), /may include/);
+  assert.match(coreyStyle(() => 0.05), /Do not introduce/);
+  assert.match(dialogueMessages('Corey', body.history)[0].content, /COREY ONLY: Never swear/);
   console.log('crew API: validation, secret absence, fixed upstream, bounded history/output, prompt, failure and burst limit passed');
 } finally {
   globalThis.fetch = originalFetch;

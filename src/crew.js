@@ -291,9 +291,9 @@ export const DEFAULT_CREW = [
     voice: "confident and fast, talks like he's selling the plan, loves 'hear me out' and 'trust me'",
     roast: 'buries people in mock-serious logic and fake statistics',
     examples: ['hear me out: the cliff IS the shortcut.', 'statistically Grant falls first, so the rest of us are fine.'] },
-  { name: 'Corey', lean: -0.4, angle: 'the deadpan. watches the chaos like a nature documentary.',
-    voice: 'dry, short, understated, never raises his voice, lets one sentence do the damage',
-    roast: 'flat one-liners delivered like facts',
+  { name: 'Corey', lean: -0.4, angle: 'the clean-mouthed wildcard. goofy, unexpectedly random, and fond of absurd observations.',
+    voice: 'goofy, playful, surprising, never vulgar; says what the frick or crap sometimes, never profanity',
+    roast: 'clean absurd comparisons and affectionate nonsense; can roast without swearing',
     examples: ["cool. I'll be over here, enjoying not dying.", 'Blaize has a plan. so now we have a problem.'] },
   { name: 'Grant', lean: 0.9, angle: 'the send-it guy. sees a ledge, needs to know what\'s under it.',
     voice: 'loud, hyped, competitive, talks in dares and challenges',
@@ -341,6 +341,7 @@ export class Crew {
       `How you talk: ${c.voice}.`,
       `How you roast: ${c.roast}.`,
       stance(c.lean),
+      ...(c.name === 'Corey' ? [coreyStyle()] : []),
       'Tone reference ONLY. Never reuse these lines or their catchphrases; say something new about what\'s actually happening: ' + c.examples.map((e) => `'${e}'`).join(' / '),
     ];
     const mine = (this.recent.get(c.name) || []).slice(-3);
@@ -359,7 +360,7 @@ export class Crew {
   static clean(text, name) {
     let t = (text || '').split(/\s+/).filter(Boolean).join(' ').replace(/^"+|"+$/g, '');
     t = t.replace(new RegExp(`^\\s*${name}\\s*:\\s*`, 'i'), '');
-    return t.trim().replace(/^"+|"+$/g, '').trim();
+    return cleanCompanionReply(t.trim().replace(/^"+|"+$/g, '').trim(), name);
   }
 
   /** Log something that happened in the world. */
@@ -436,3 +437,20 @@ export class SensingCrew extends Crew {
 }
 
 export { pickOne };
+
+
+/** Corey has a deliberately different voice from the rest of the crew. */
+export function coreyStyle(random = Math.random) {
+  return 'COREY ONLY: Never swear or use vulgar or sexual insults, even when the player does. Say what the frick, fricking, crap, dang, or heck instead. Be goofy and delightfully unexpected, not mean or preachy. ' +
+    (random() < 0.05 ? 'This turn may include one short, playful biblical allusion IF it naturally fits the conversation. No sermon, verse citation, moral judgment, or invented quotation.' : 'Do not introduce a biblical allusion on this turn unless the player directly asks about the Bible.');
+}
+
+export function cleanCompanionReply(text, name) {
+  if (name.toLowerCase() !== 'corey') return text;
+  // Keep Corey's clean vocabulary even if the model echoes the player's profanity.
+  return text.replace(/\b(motherfuck\w*|fuck\w*|bullshit|shit\w*|asshole\w*|bitch\w*|bastard\w*|damn\w*|hell|cunt\w*|cock\w*|dick\w*|piss\w*)\b/gi, word => {
+    const w = word.toLowerCase();
+    const replacement = /fuck/.test(w) ? (w.endsWith('ing') ? 'fricking' : 'frick') : /shit|piss/.test(w) ? 'crap' : /damn/.test(w) ? 'dang' : w === 'hell' ? 'heck' : 'goober';
+    return word === word.toUpperCase() ? replacement.toUpperCase() : replacement;
+  });
+}
