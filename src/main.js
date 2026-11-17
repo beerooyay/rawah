@@ -302,10 +302,23 @@ const crewChat = new CrewChat({
   onClose() { party.release(); keys.clear(); pressed.clear(); pause(false); },
   async reply(a, history, signal) {
     const name = a.name[0].toUpperCase() + a.name.slice(1);
-    const context = crewTalk.crew.scene().slice(-4000);
+    const p = hiker.pos;
+    const destinations = [...world.places.filter(q => q.name), ...lakeList.filter(q => q.name).map(q => ({ ...q, kind: 'lake' }))]
+      .map(q => ({ name: q.name, kind: q.kind, metres: Math.round(Math.hypot(q.x - p.x, q.z - p.z)) }))
+      .sort((a, b) => a.metres - b.metres).filter((q, i, all) => all.findIndex(v => v.name === q.name) === i).slice(0, 8);
+    const context = JSON.stringify({
+      player: playerName, companions: party.actors.map(a => a.name),
+      hour: Math.round(state.hour * 10) / 10, weather: weather.label,
+      staminaPercent: Math.round(hiker.stamina), warmthPercent: Math.round(hiker.warmth),
+      mode: hiker.mode, tentPitched: !!camp.tent, campfirePresent: !!camp.fire,
+      currentRoute: route.on ? route.name : null,
+      nearbyNamedPlaces: destinations, distancesAre: 'straight-line metres, not trail lengths',
+      controls: 'M: map and quick travel; B: cast a line at a fishing spot; C: tent; F: campfire; K: cook coffee then breakfast; O: sip coffee; H: gather friends; U: interact/talk. Supplies and a suitable spot may be required.',
+      recentEvents: crewTalk.crew.scene().slice(-1300),
+    }).slice(0, 4000);
     let content;
     if (DEV) {
-      const result = await crewTalk.backend.chat(dialogueMessages(name, history, context), { maxTokens: 180, temperature: 0.85 });
+      const result = await crewTalk.backend.chat(dialogueMessages(name, history, context), { maxTokens: 280, temperature: 0.9 });
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       content = result.content;
     } else {

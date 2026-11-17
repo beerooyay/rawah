@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   try {
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: process.env.RAWAH_CREW_MODEL || 'nvidia/nemotron-3.5-bolt-e4b', messages, max_tokens: 180, temperature: 0.85, top_p: 0.95, stream: false, chat_template_kwargs: { enable_thinking: false } }),
+      body: JSON.stringify({ model: process.env.RAWAH_CREW_MODEL || 'nvidia/nemotron-3.5-bolt-e4b', messages, max_tokens: 280, temperature: 0.9, top_p: 0.95, stream: false, chat_template_kwargs: { enable_thinking: false } }),
       signal: AbortSignal.timeout(25000),
     });
     if (!response.ok) { console.warn('crew upstream status', response.status); return res.status(502).json({ error: 'Nemotron could not answer right now. Try again shortly.' }); }
